@@ -2,12 +2,21 @@
 
 import datetime as dt
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.cumdelta import (
+    SOURCE_AGGRESSOR,
+    SOURCE_MIDPOINT,
+    CumDeltaTracker,
+    FlowRow,
+)
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockQuoteStreamer
@@ -21,7 +30,7 @@ from gexlens_engine.ibkr.scheduler import (
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
-from gexlens_engine.storage.parquet_store import SnapshotWriter
+from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
 
 TS = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
 SPOT = 7600.0
@@ -67,6 +76,8 @@ def runtime(tmp_path: Path) -> tuple[EngineRuntime, RecordingPublisher, Settings
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
     return engine_runtime, publisher, settings
 
@@ -182,6 +193,8 @@ async def test_dopoctene_greeks_jdou_do_vlastni_rady(tmp_path: Path) -> None:
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
 
     await engine_runtime.run_cycle(TS, SPOT, [])
@@ -353,6 +366,9 @@ async def test_one_cycle_produces_full_day_artifacts(
     )
     assert "call_wall_dom" in levels_data and "put_wall_dom" in levels_data
     assert "flow.ES" in channels
+    # Zdroj znaménka i ve WS (ADR-0057 bod 8) — aditivní pole
+    flow_data = next(data for channel, data in publisher.messages if channel == "flow.ES")
+    assert flow_data["source"] == "midpoint"
     assert "levelsfa.ES.20260716" in channels  # ADR-0011, #222
     assert "ladder.ES.20260716" in channels  # #244
     assert "price.ES" in channels
@@ -475,6 +491,8 @@ def build_runtime(
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
     return engine_runtime, publisher, settings
 
@@ -488,11 +506,13 @@ async def test_klasifikovany_tok_zapisuje_netflow_oiest_a_fa_vrstvy(tmp_path: Pa
     day = TS.date().isoformat()
     base = settings.derived_dir / "ES" / "20260716"
     netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
-    assert list(netflow.columns) == ["ts_min", "strike", "right", "net_volume"]
-    # Jen druhá minuta má klasifikovaný přírůstek a jen call strany: 3 × +100
-    assert len(netflow) == 3
-    assert set(netflow["right"]) == {"C"}
-    assert set(netflow["net_volume"]) == {100.0}
+    assert list(netflow.columns) == ["ts_min", "strike", "right", "net_volume", "source"]
+    assert set(netflow["source"]) == {SOURCE_MIDPOINT}  # zdroj trackeru (#1460)
+    # Jen druhá minuta má klasifikovaný přírůstek: call strany 3 × +100, put
+    # strany (last na midu) mají naměřenou nulu a řádek dostanou taky (#1582)
+    assert len(netflow) == 6
+    by_right = netflow.groupby("right")["net_volume"].apply(set).to_dict()
+    assert by_right == {"C": {100.0}, "P": {0.0}}
 
     oiest = pd.read_parquet(base / "oiest" / f"{day}.parquet")
     assert list(oiest.columns) == ["ts_min", "strike", "right", "oi_est"]
@@ -545,40 +565,317 @@ async def test_netflow_seed_navaze_kumulativ_po_restartu(tmp_path: Path) -> None
     assert set(third["oi_est"]) == {1040.0}
 
 
-async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path) -> None:
-    """ADR-0011: α = 0 flow-adjusted vrstvu vypíná — žádná řada, žádný kanál."""
-    settings = Settings(data_dir=tmp_path / "data", flow_oi_alpha=0.0)
-    specs = contracts()
-    repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}"))
-    repository.ensure_schema()
-    repository.upsert_many(
-        [OIRecord("ES", "20260716", s.strike, s.right, TS.date(), 1000.0) for s in specs]
+class ReversingVolumeStreamer(RisingVolumeStreamer):
+    """Jako `RisingVolumeStreamer`, ale od třetího fetch jsou cally pod midem (sell).
+
+    Call strany: druhá minuta +100 buy, třetí +100 sell → net se vrátí na 0.
+    """
+
+    async def fetch_quote(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> QuoteSnapshot | PartialQuote | None:
+        quote = await super().fetch_quote(spec, timeout_s)
+        if isinstance(quote, QuoteSnapshot) and spec.right == "C" and self._fetches[spec] >= 3:
+            return replace(quote, last=10.1)  # pod midem 10.25 = sell
+        return quote
+
+
+async def test_netflow_zapise_navrat_strany_na_nulu(tmp_path: Path) -> None:
+    """#1582: strana s návratem netu na 0 dostane řádek 0, z partice nezmizí."""
+    engine_runtime, _publisher, settings = build_runtime(tmp_path, ReversingVolumeStreamer())
+    for minute in range(3):
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    netflow = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "netflow" / f"{TS.date().isoformat()}.parquet"
     )
-    publisher = RecordingPublisher()
-    engine_runtime = EngineRuntime(
-        settings=settings,
-        scheduler=SubscriptionScheduler(MockQuoteStreamer(), settings),
-        writer=SnapshotWriter(settings),
-        oi_repository=repository,
-        publisher=publisher,
-        symbol="ES",
-        expiry="20260716",
-        multiplier=50.0,
-        contracts=specs,
+    calls = netflow[netflow["right"] == "C"]
+    by_minute = calls.groupby("ts_min")["net_volume"].apply(list).to_dict()
+    assert by_minute == {
+        TS + dt.timedelta(minutes=1): [100.0, 100.0, 100.0],
+        TS + dt.timedelta(minutes=2): [0.0, 0.0, 0.0],
+    }
+
+
+@pytest.mark.parametrize("first_secondary", [False, True], ids=["restart", "roll"])
+async def test_navazani_nevzkrisi_stranu_vracenou_na_nulu(
+    tmp_path: Path, first_secondary: bool
+) -> None:
+    """#1582: restart i roll naváží stranu vrácenou na 0 jako 0, ne s poslední nenulovou hodnotou.
+
+    Roll: partici expirace psal přes den sekundár, po settle ji jako aktivní
+    převezme nový runtime a naváže z ní (`__main__` roll v settle).
+    """
+    first_runtime, _publisher, _settings = build_runtime(tmp_path, ReversingVolumeStreamer())
+    first_runtime.secondary = first_secondary
+    for minute in range(3):
+        await first_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    second_runtime, _publisher, settings = build_runtime(tmp_path, RisingVolumeStreamer())
+    restart = TS + dt.timedelta(minutes=3)
+    await second_runtime.run_cycle(restart, SPOT, [])
+
+    tracker = second_runtime.cum_delta
+    assert tracker is not None
+    # Všech 6 stran pásma navázáno jako naměřená nula (dřív cally se 100)
+    assert len(tracker.net_volumes()) == 6
+    assert set(tracker.net_volumes().values()) == {0.0}
+    netflow = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "netflow" / f"{TS.date().isoformat()}.parquet"
+    )
+    assert set(netflow[netflow["ts_min"] == restart]["net_volume"]) == {0.0}
+
+
+def _seed_runtime(
+    tmp_path: Path, source: str, streamer: MockQuoteStreamer | None = None
+) -> tuple[EngineRuntime, Settings]:
+    """Runtime nad čerstvým data adresářem se zvoleným zdrojem trackeru (v5 / v6 explicitně)."""
+    engine_runtime, _publisher, settings = build_runtime(tmp_path, streamer or MockQuoteStreamer())
+    engine_runtime.cum_delta = CumDeltaTracker(multiplier=50.0, source=source)
+    return engine_runtime, settings
+
+
+def _spec(strike: float, right: str) -> OptionContractSpec:
+    return OptionContractSpec("ES", "FOP", "20260716", strike, right, "CME", "E3D", "50")
+
+
+# Pauza Globexu 16:30 CT (CDT) — ještě seance 16. 7., ve které engine do 16:00 CT psal midpoint
+PAUSE = dt.datetime(2026, 7, 16, 21, 30, tzinfo=dt.UTC)
+
+
+def _write_session_history(settings: Settings) -> None:
+    """Flow a netflow seance 16. 7.: midpoint do 15:59 CT, pak řádky v6 včetně mezery."""
+    writer = SnapshotWriter(settings)
+    before = PAUSE - dt.timedelta(minutes=40)  # 20:50 UTC, midpoint
+    writer.write_flow(
+        "ES",
+        TS.date(),
+        [
+            FlowRow(before, 2.0, 500.0, source=SOURCE_MIDPOINT),
+            FlowRow(before + dt.timedelta(minutes=1), 1.0, 30.0, source=SOURCE_AGGRESSOR),
+            FlowRow(before + dt.timedelta(minutes=2), None, None, source=SOURCE_AGGRESSOR),
+        ],
+    )
+    writer.write_netflow(
+        "ES",
+        "20260716",
+        TS.date(),
+        [
+            NetFlowRow(before, 7600.0, "C", 120.0, source=SOURCE_MIDPOINT),
+            NetFlowRow(before + dt.timedelta(minutes=1), 7600.0, "C", 9.0, source=SOURCE_AGGRESSOR),
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "cum", "net"),
+    [(SOURCE_MIDPOINT, 500.0, 120.0), (SOURCE_AGGRESSOR, 30.0, 9.0)],
+)
+async def test_seed_navaze_posledni_mereny_radek_zdroje_trackeru(
+    tmp_path: Path, source: str, cum: float, net: float
+) -> None:
+    """#1460: restart naváže CumΔ i net z posledního ne-NULL řádku TÉHOŽ zdroje."""
+    engine_runtime, settings = _seed_runtime(tmp_path, source)
+    _write_session_history(settings)
+
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    tracker = engine_runtime.cum_delta
+    assert tracker is not None
+    assert tracker.cum_delta == cum  # mezera (NULL) se přeskočí, jiný zdroj taky
+    assert tracker.net_volumes() == {_spec(7600.0, "C"): net}
+
+
+async def test_nasazeni_v6_v_pauze_nenavaze_midpoint_uroven(tmp_path: Path) -> None:
+    """#1460: v6 nasazená v pauze (seance D trvá do 17:00 CT) začne od nuly, ne od midpointu."""
+    engine_runtime, settings = _seed_runtime(tmp_path, SOURCE_AGGRESSOR)
+    before = PAUSE - dt.timedelta(minutes=40)
+    SnapshotWriter(settings).write_flow(
+        "ES", TS.date(), [FlowRow(before, 2.0, 500.0, source=SOURCE_MIDPOINT)]
+    )
+    # Partice netflow ze starého image: bez sloupce `source` (NULL = midpoint)
+    netflow_dir = settings.derived_dir / "ES" / "20260716" / "netflow"
+    netflow_dir.mkdir(parents=True)
+    pq.write_table(
+        pa.table(
+            {
+                "ts_min": pa.array([before], pa.timestamp("us", tz="UTC")),
+                "strike": [7600.0],
+                "right": ["C"],
+                "net_volume": [120.0],
+            }
+        ),
+        netflow_dir / f"{TS.date().isoformat()}.parquet",
+    )
+
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    tracker = engine_runtime.cum_delta
+    assert tracker is not None
+    assert tracker.cum_delta == 0.0
+    assert tracker.net_volumes() == {}
+
+
+async def test_netflow_seed_obnovi_i_stranu_mimo_pasmo(tmp_path: Path) -> None:
+    """#1460: po rollu má nový aktivní runtime užší pásmo — základ strany mimo něj se neztratí.
+
+    Strana 7620 C se po rozšíření pásma vrátí se základem 30 a tok k němu
+    přibývá; dřív by začala od nuly a řádek netflow by kumulativ přepsal.
+    """
+    engine_runtime, settings = _seed_runtime(tmp_path, SOURCE_MIDPOINT, RisingVolumeStreamer())
+    SnapshotWriter(settings).write_netflow(
+        "ES",
+        "20260716",
+        TS.date(),
+        [
+            NetFlowRow(TS - dt.timedelta(minutes=5), 7600.0, "C", 100.0, SOURCE_MIDPOINT),
+            NetFlowRow(TS - dt.timedelta(minutes=5), 7620.0, "C", 30.0, SOURCE_MIDPOINT),
+        ],
     )
 
     await engine_runtime.run_cycle(TS, SPOT, [])
+    tracker = engine_runtime.cum_delta
+    assert tracker is not None
+    assert tracker.net_volume(_spec(7620.0, "C")) == 30.0
+
+    # Rozšíření pásma o 7620: kontrakt postavený jako z build_contracts je tentýž klíč
+    engine_runtime.contracts = [*engine_runtime.contracts, _spec(7620.0, "C"), _spec(7620.0, "P")]
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [])  # první bar 7620
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=2), SPOT, [])  # +100 buy
+
+    netflow = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "netflow" / f"{TS.date().isoformat()}.parquet"
+    )
+    last = netflow[netflow["ts_min"] == TS + dt.timedelta(minutes=2)]
+    side = last[(last["strike"] == 7620.0) & (last["right"] == "C")]
+    assert list(side["net_volume"]) == [130.0]
+
+
+def _sample(tracker: CumDeltaTracker, *, running: bool, market_closed: bool = False) -> None:
+    """Vzorek orchestrátoru před cyklem: stav trade větve a řez tisků (#1460)."""
+    tracker.observe(running=running, market_closed=market_closed)
+    tracker.seal()
+
+
+def _prints_runtime(
+    tmp_path: Path, *, secondary: bool = False
+) -> tuple[EngineRuntime, RecordingPublisher, Settings, CumDeltaTracker]:
+    """Runtime se zdrojem tisků (v6 explicitním parametrem, #1460) nad konstantním objemem."""
+    engine_runtime, publisher, settings = build_runtime(tmp_path, MockQuoteStreamer())
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    engine_runtime.cum_delta = tracker
+    engine_runtime.secondary = secondary
+    return engine_runtime, publisher, settings, tracker
+
+
+async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
+    """ADR-0057 bod 3–4: minuta s mezerou má ve flow NULL, netflow ani FA vrstvu nepíše."""
+    engine_runtime, publisher, settings, tracker = _prints_runtime(tmp_path)
+    c = _spec(7600.0, "C")
+    tracker.add_dx_trade(c, 3.0, "BUY", 0.5)  # tisk před prvním cyklem: částečná minuta
+    _sample(tracker, running=True)
+    await engine_runtime.run_cycle(TS, SPOT, [])  # restart za otevřeného trhu → mezera
+    tracker.add_dx_trade(c, 2.0, "BUY", 0.5)  # +50
+    _sample(tracker, running=True)
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [])
 
     day = TS.date().isoformat()
-    assert not (settings.derived_dir / "ES" / "20260716" / "levelsfa" / f"{day}.parquet").exists()
+    measured = TS + dt.timedelta(minutes=1)
+    flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{day}.parquet")
+    flow = flow.sort_values("ts_min")
+    assert flow["flow_delta"].isna().tolist() == [True, False]
+    assert flow["cum_delta"].isna().tolist() == [True, False]
+    assert flow["cum_delta"].iloc[1] == 50.0  # tisky mezery do CumΔ nejdou
+    flows = [data for channel, data in publisher.messages if channel == "flow.ES"]
+    assert (flows[0]["flow_delta"], flows[0]["cum_delta"]) == (None, None)
+    base = settings.derived_dir / "ES" / "20260716"
+    netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
+    assert netflow["ts_min"].tolist() == [measured]
+    assert netflow[["strike", "right", "net_volume"]].values.tolist() == [[7600.0, "C", 2.0]]
+    for series in ("levelsfa", "gexprofilefa", "oiest"):
+        assert pd.read_parquet(base / series / f"{day}.parquet")["ts_min"].tolist() == [measured], (
+            series
+        )
     channels = [channel for channel, _ in publisher.messages]
-    assert "levelsfa.ES.20260716" not in channels
-    # #232: α = 0 vypíná CELOU flow-adjusted vrstvu — netflow, oiest i FA Dyn GEX
-    for series in ("netflow", "oiest", "gexprofilefa", "gexfieldfa"):
-        assert not (settings.derived_dir / "ES" / "20260716" / series / f"{day}.parquet").exists()
-    assert "oiest.ES.20260716" not in channels
-    assert "gexprofilefa.ES.20260716" not in channels
-    assert "gexfieldfa.ES.20260716" not in channels
+    assert channels.count("levelsfa.ES.20260716") == 1
+
+
+async def test_v6_zavreny_trh_zapise_nulu_ne_mezeru(tmp_path: Path) -> None:
+    """ADR-0057 bod 3: při zavřeném trhu mezera nevzniká, ani hned po startu enginu."""
+    engine_runtime, _publisher, settings, tracker = _prints_runtime(tmp_path)
+    _sample(tracker, running=False, market_closed=True)  # pauza Globexu, tasty odpojené
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{PAUSE.date()}.parquet")
+    assert flow[["flow_delta", "cum_delta"]].values.tolist() == [[0.0, 0.0]]
+
+
+async def test_v6_sekundar_uzavre_minutu_a_vrati_net_mezery(tmp_path: Path) -> None:
+    """#1460: sekundár (vstup kalibrace α) uzavírá minutu — net mezery se vrátí, flow nepíše."""
+    engine_runtime, _publisher, settings, tracker = _prints_runtime(tmp_path, secondary=True)
+    c = _spec(7600.0, "C")
+    tracker.add_dx_trade(c, 3.0, "BUY", 0.5)
+    _sample(tracker, running=True)
+    await engine_runtime.run_cycle(TS, SPOT, [])  # mezera (start za otevřeného trhu)
+    assert tracker.net_volumes() == {c: 0.0}
+    tracker.add_dx_trade(c, 2.0, "SELL", 0.5)
+    for _minute in range(3):  # cyklus sekundáru po 3 minutách, vzorek každou minutu
+        _sample(tracker, running=True)
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=3), SPOT, [])
+
+    assert tracker.net_volumes() == {c: -2.0}
+    assert tracker.cum_delta == -50.0
+    day = TS.date().isoformat()
+    netflow = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "netflow" / f"{day}.parquet"
+    )
+    assert netflow["ts_min"].tolist() == [TS + dt.timedelta(minutes=3)]
+    assert netflow["net_volume"].tolist() == [-2.0]
+    assert not (settings.derived_dir / "ES" / "flow" / f"{day}.parquet").exists()
+
+
+@pytest.mark.parametrize("mechanics", ["v5", "v6"])
+async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path, mechanics: str) -> None:
+    """ADR-0011: α = 0 vypíná odhad (oiest, levelsfa, FA Dyn GEX) — žádná řada, žádný kanál.
+
+    Netflow je měřené a píše se dál (#1172) — dřív visel pod `alpha > 0`
+    a kalibrace, která α srazila na 0, si zastavila vlastní vstup. Dva cykly
+    s rostoucím objemem, ať je co zapsat: v5 klasifikuje bary midpointem, v6
+    (zdroj tisků explicitně, #1460) nese net jen z tisků měřené minuty.
+    """
+    engine_runtime, publisher, settings = build_runtime(
+        tmp_path, RisingVolumeStreamer(), flow_oi_alpha=0.0
+    )
+    prints: CumDeltaTracker | None = None
+    if mechanics == "v6":
+        prints = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+        engine_runtime.cum_delta = prints
+        prints.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+    for minute in range(2):
+        if prints is not None:
+            if minute == 1:
+                prints.add_dx_trade(_spec(7600.0, "C"), 3.0, "BUY", 0.5)
+            _sample(prints, running=True)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    day = TS.date().isoformat()
+    base = settings.derived_dir / "ES" / "20260716"
+    netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
+    second = TS + dt.timedelta(minutes=1)
+    assert set(netflow["ts_min"]) == {second}
+    rows = netflow[["strike", "right", "net_volume"]].values.tolist()
+    if mechanics == "v5":
+        # Call strany +100 (last nad midem), put strany naměřená nula (#1582)
+        assert sorted(rows) == sorted(
+            [[k, "C", 100.0] for k in (7590.0, 7600.0, 7610.0)]
+            + [[k, "P", 0.0] for k in (7590.0, 7600.0, 7610.0)]
+        )
+    else:
+        assert rows == [[7600.0, "C", 3.0]]
+    channels = [channel for channel, _ in publisher.messages]
+    for series in ("levelsfa", "oiest", "gexprofilefa", "gexfieldfa"):
+        assert not (base / series / f"{day}.parquet").exists(), series
+        assert f"{series}.ES.20260716" not in channels, series
 
 
 async def test_forming_bar_published_and_written_as_provisional(
@@ -709,6 +1006,8 @@ async def test_expired_quote_stays_in_snapshot_but_leaves_computations(tmp_path:
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
     await engine_runtime.run_cycle(TS, SPOT, [])
 
@@ -738,16 +1037,29 @@ async def test_expired_quote_stays_in_snapshot_but_leaves_computations(tmp_path:
     assert stale_gex != pytest.approx(fresh_gex)
 
 
-async def test_fallback_retezu_prebira_kotace_a_zastavuje_cumdelta(
-    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+@pytest.mark.parametrize(
+    ("mechanics", "running"),
+    [("v5", True), ("v6", True), ("v6", False)],
+    ids=["v5", "v6-merena", "v6-mezera"],
+)
+async def test_fallback_retezu_prebira_kotace_cumdelta_podle_mechaniky(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings], mechanics: str, running: bool
 ) -> None:
     """#614 fáze 2b: při výpadku IBKR staví cyklus profil z tasty kotací.
 
-    Zároveň se hlídá druhá polovina zadání — CumΔ a net objem se za fallbacku
-    NEKRMÍ. Tasty denní objem v sémantice IBKR nedodává, takže dosadit nulu by
-    znamenalo skokový záporný přírůstek přes celý řetěz.
+    Druhá polovina zadání podle mechaniky (#1460): pod v5 (midpoint) se CumΔ
+    a net objem za fallbacku NEKRMÍ — tasty denní objem v sémantice IBKR
+    nedodává, takže dosadit nulu by znamenalo skokový záporný přírůstek přes
+    celý řetěz. Od v6 (zdroj tisků explicitně, ADR-0057 bod 3) jdou z tisků
+    dál a chybí jen rozklad objemu (printvol); bez trade větve je minuta mezera.
     """
     engine_runtime, _publisher, settings = runtime
+    if mechanics == "v6":
+        tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+        engine_runtime.cum_delta = tracker
+        tracker.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+        tracker.add_dx_trade(_spec(7600.0, "C"), 4.0, "BUY", 0.5)  # +4 × 0.5 × 50 = +100
+        _sample(tracker, running=running)
     specs = list(engine_runtime.contracts)
     substitute = {
         spec: CachedQuote(
@@ -778,9 +1090,131 @@ async def test_fallback_retezu_prebira_kotace_a_zastavuje_cumdelta(
     # Objem ani poslední cena se nevymýšlejí — díra, kterou je vidět (#465)
     assert snapshots["volume"].isna().all()
     assert snapshots["last"].isna().all()
-    # A CumΔ zůstal netknutý: tracker žádný bar nedostal
-    assert engine_runtime.last_flow is not None
-    assert engine_runtime.last_flow.cum_delta == 0.0
+    flow_row = engine_runtime.last_flow
+    assert flow_row is not None
+    base = settings.derived_dir / "ES" / "20260716"
+    # Bez kumulativního objemu rozklad na tisky nevzniká v žádné mechanice
+    assert not (base / "printvol" / f"{day}.parquet").exists()
+    netflow_path = base / "netflow" / f"{day}.parquet"
+    if mechanics == "v5":
+        # A CumΔ zůstal netknutý: tracker žádný bar nedostal
+        assert flow_row.cum_delta == 0.0
+        assert not netflow_path.exists()
+    elif running:
+        # Tisky tastytrade nesou CumΔ i net objem dál (výpadek IBKR tok nezastaví)
+        assert (flow_row.flow_delta, flow_row.cum_delta) == (100.0, 100.0)
+        netflow = pd.read_parquet(netflow_path)
+        assert netflow[["strike", "right", "net_volume"]].values.tolist() == [[7600.0, "C", 4.0]]
+    else:
+        # Trade větev neběžela: mezera, ne nula ani poslední hodnota
+        assert (flow_row.flow_delta, flow_row.cum_delta) == (None, None)
+        assert not netflow_path.exists()
+
+
+class DyingVolumeStreamer(RisingVolumeStreamer):
+    """`RisingVolumeStreamer` se „zabitými" striky: objem burzy roste dál, kotace nepřijde."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dead: set[float] = set()
+
+    async def fetch_quote(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> QuoteSnapshot | PartialQuote | None:
+        quote = await super().fetch_quote(spec, timeout_s)
+        return None if spec.strike in self.dead else quote
+
+
+@pytest.mark.parametrize("cause", ["fallback", "stara-kotace"])
+async def test_v6_bar_po_mezere_v_baru_jen_zalozi_stav(tmp_path: Path, cause: str) -> None:
+    """#1460 AC: cyklus bez baru (fallback řetězu `volume=None`, kotace nad
+    `quote_max_age_s`) za běžící trade větve. Tok za mezeru nesou tisky, návratový
+    bar s objemem celé mezery do printvol ani pokrytí nejde — jen založí stav.
+    """
+    streamer = DyingVolumeStreamer()
+    engine_runtime, _publisher, settings = build_runtime(tmp_path, streamer)
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    engine_runtime.cum_delta = tracker
+    tracker.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+    c = _spec(7600.0, "C")
+    for minute in range(2):  # založení stavu, pak běžný přírůstek +100
+        _sample(tracker, running=True)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    if cause == "fallback":
+        tasty = QuoteSnapshot(bid=10.0, ask=10.5, last=None, volume=None, iv=0.15,
+                              delta=0.5, gamma=0.01, theta=-0.5, vega=1.2)  # fmt: skip
+        engine_runtime.chain_fallback = lambda specs: {
+            spec: CachedQuote(snapshot=tasty, updated_at=time.monotonic(), feed=FEED_TASTY)
+            for spec in specs
+        }
+    else:
+        streamer.dead = {7600.0}  # TWS strike nedodává, cache stárne nad práh
+        for dead in (s for s in engine_runtime.contracts if s.strike == 7600.0):
+            cached = engine_runtime.scheduler.quote(dead)
+            assert cached is not None
+            cached.updated_at -= 3600.0
+    tracker.add_dx_trade(c, 3.0, "BUY", 0.5)  # tisk v mezeře baru: +75
+    _sample(tracker, running=True)
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=2), SPOT, [])
+
+    engine_runtime.chain_fallback = None
+    streamer.dead = set()
+    engine_runtime.scheduler.reset_repair_state()  # návrat strike bez backoffu
+    for minute in (3, 4):  # návrat s přírůstkem celé mezery, pak zase běžný +100
+        _sample(tracker, running=True)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    day = TS.date().isoformat()
+    printvol = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "printvol" / f"{day}.parquet"
+    )
+    side = printvol[(printvol["strike"] == 7600.0) & (printvol["right"] == "C")]
+    assert side["ts_min"].tolist() == [TS + dt.timedelta(minutes=m) for m in (1, 4)]
+    assert side["volume_delta"].tolist() == [100.0, 100.0]
+    flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{day}.parquet")
+    flow = flow.set_index("ts_min")
+    assert flow.loc[TS + dt.timedelta(minutes=2), "flow_delta"] == 75.0
+    back = flow.loc[TS + dt.timedelta(minutes=3)]
+    assert back["structured_volume"] == 0.0
+    # Jen strany krmené i v mezeře (stará kotace jen u 7600) mají běžný bar bez tisku
+    assert back["fallback_volume"] == (0.0 if cause == "fallback" else 400.0)
+    assert tracker.net_volumes() == {c: 3.0}
+
+
+async def test_v6_kridlo_z_cache_rozlozi_tisky_vsech_minut(tmp_path: Path) -> None:
+    """#1460: křídlo sweepované každý 3. cyklus dostává mezi sweepy bar z cache
+    s přírůstkem 0 — tisky těch minut rozloží až čerstvý bar s objemem všech tří
+    minut (dřív printed 10, structured 90: tisky dřívějších minut připsané struktuře).
+    """
+    engine_runtime, _publisher, settings = build_runtime(
+        tmp_path, RisingVolumeStreamer(), wings_sweep_every=3, atm_sweep_width=1
+    )
+    engine_runtime.contracts = [
+        _spec(strike, right)
+        for strike in (7580.0, 7590.0, 7600.0, 7610.0, 7620.0)
+        for right in ("C", "P")
+    ]
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    engine_runtime.cum_delta = tracker
+    tracker.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+    wing = _spec(7620.0, "C")
+    for minute in range(7):
+        if minute:
+            tracker.add_dx_trade(wing, 10.0, "BUY", 0.05)  # tisk každou minutu
+        _sample(tracker, running=True)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    day = TS.date().isoformat()
+    printvol = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "printvol" / f"{day}.parquet"
+    )
+    side = printvol[(printvol["strike"] == 7620.0) & (printvol["right"] == "C")]
+    assert side["ts_min"].tolist() == [TS + dt.timedelta(minutes=m) for m in (3, 6)]
+    assert side[["volume_delta", "printed", "structured"]].values.tolist() == [
+        [100.0, 30.0, 70.0],
+        [100.0, 30.0, 70.0],
+    ]
 
 
 async def test_po_navratu_na_ibkr_cyklus_zase_cte_sweep(
@@ -839,6 +1273,8 @@ async def test_bs_fallback_hlidka_jen_pri_otevrenem_trhu(
         expiry="20260930",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
     # Epizoda běží už dvakrát déle, než je práh alertu (např. od pátku)
     watcher = BsFallbackWatcher(symbol="ES")

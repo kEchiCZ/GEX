@@ -1,8 +1,9 @@
 """Stínové CumΔ z dxFeed TimeAndSale (#615 fáze 3, shadow — rozhodnutí 27. 8.).
 
-Živé CumΔ (SPEC 4.5) se NEMĚNÍ a detektory z téhle řady nečtou nic. Modul
-počítá paralelní minutovou řadu z TimeAndSale eventů (aggressorSide přímo od
-burzy) nad aktivním řetězem, rozdělenou po zónách vlastnictví (ADR-0025):
+Živé detektory z téhle řady nečtou; od v6 je vstupem replaye a brány parity
+stín ↔ živá 1A (ADR-0057 bod 7). Modul počítá paralelní minutovou řadu
+z TimeAndSale eventů (aggressorSide přímo od burzy) nad aktivním řetězem,
+původně rozdělenou po zónách vlastnictví (ADR-0025):
 
 - **hot zóna ATM±1**: vlastní IBKR tick-by-tick — tady se měří jen pro
   srovnání obou zdrojů nad týmž tokem,
@@ -10,14 +11,16 @@ burzy) nad aktivním řetězem, rozdělenou po zónách vlastnictví (ADR-0025):
   midpoint testu — hlavní řada,
 - **mimo ±15**: ignoruje se (vlastnictví se nemění).
 
+Od doplňku ADR-0032 (4. 9. 2026) zóny neplatí: prstenec je celý sbíraný
+řetěz a hot zóna zůstává ve schématu nulová (viz níže).
+
 Spread legy se NEROZLIŠUJÍ (rozhodnutí 3. 9. 2026, ADR-0027 doplněk):
 CME Market Data příznak `spreadLeg` pro futures opce nenese, dxFeed ho posílá
 konstantně false a alternativní pole neexistuje (potvrzeno podporou
 tastytrade). Řada „bez spreadů" i podíl spread legů byly proto výstupem
 mrtvého čidla a jsou pryč — nohy spreadů jsou v toku stejně jako v dnešní
-IBKR tick-by-tick řadě. Trady bez určené strany se do toku nezapočítávají
-a počítají se zvlášť — pokrytí aggressorSide rozhoduje, jestli midpoint
-fallback zůstává.
+IBKR tick-by-tick řadě. Trady bez určené strany jdou mimo tok (ADR-0057 bod 2)
+a počítají se zvlášť jako pokrytí.
 """
 
 import datetime as dt
@@ -38,7 +41,15 @@ _AGGRESSOR_SIGN = {"BUY": 1, "SELL": -1}
 
 @dataclass(frozen=True)
 class DxFlowRow:
-    """Minutový bod stínové řady — podklad pro srovnání dxFeed vs. IBKR."""
+    """Minutový bod stínové řady — podklad pro srovnání dxFeed vs. IBKR.
+
+    Štítek `ts_min` = N je „stav k N“: řádek nese tisky od minulé uzávěrky
+    do uzávěrky N. Pod tisky (v6, #1586) se uzavírá na hranici minuty
+    (`plan_dx_flush`), obsah je [N−1, N) jako u štítku živého flow. Pod v5
+    perioda driftuje: obsah je [N−1+φ, N+φ) s fází φ 0–60 s a co 2–5 h jeden
+    štítek chybí — tok se neztrácí, nesou ho sousední řádky, takže chybějící
+    štítek = poslední kumulativ (ADR-0057 bod 7).
+    """
 
     ts_min: dt.datetime
     #: Prstenec ATM±15 mimo hot zónu — tok, který by fáze 3 převzala
@@ -127,7 +138,10 @@ class DxCumDeltaShadow:
         self._seeded_from = state.ts_min
 
     def day_stats(self) -> dict[str, object]:
-        """Denní souhrn pro /status: pokrytí strany rozhoduje o midpoint fallbacku."""
+        """Denní souhrn pro /status: pokrytí tisků stranou (aggressorSide).
+
+        Tisky bez strany jdou mimo tok.
+        """
         return {
             "cum_ring": self._cum_ring,
             "cum_hot": self._cum_hot,
@@ -201,3 +215,45 @@ class DxCumDeltaShadow:
         self._volume = 0.0
         self._dropped = 0
         return row
+
+
+_MINUTE = dt.timedelta(minutes=1)
+
+
+@dataclass(frozen=True)
+class DxFlushPlan:
+    """Příští uzávěrka stínu pod tisky (#1586)."""
+
+    #: Štítek řádku = cílová hranice minuty, spočtená PŘED čekáním
+    minute: dt.datetime
+    #: Kolik sekund čekat na hranici podle nástěnných hodin (≥ 0)
+    wait_s: float
+    #: Hranice mezi minulou uzávěrkou a touto, které zůstanou bez řádku
+    skipped: int
+
+
+def plan_dx_flush(now: dt.datetime, last: dt.datetime | None) -> DxFlushPlan:
+    """Rozvrh uzávěrky stínu pod tisky (#1586): nejbližší celá minuta ≥ `now`, vždy po `last`.
+
+    Smyčka pod v5 čeká 60 s po práci, takže perioda je 60 s + doba zápisu:
+    obsah řádku driftuje proti štítku o 0–60 s a co 2–5 h štítek přeskočí.
+    Tady se čeká do hranice podle nástěnných hodin a štítkem je ta hranice,
+    ne `floor(now)` po probuzení — probuzení o pár ms dřív by dalo předchozí
+    minutu a upsert podle `ts_min` by její řádek přepsal. Proto i cíl leží
+    vždy po `last` (štítek minulé uzávěrky). Probuzení pozdě (zmrazený
+    kontejner, přetížená smyčka) štítek neposune: řádek nese, co engine
+    do té chvíle přijal, a hranice, na které nedošlo, vrátí příští rozvrh
+    jako `skipped`. Přetečení práce přes hranici dá tutéž stopu.
+    """
+    if now.tzinfo is None:
+        raise ValueError(f"now musí nést časovou zónu: {now!r}")
+    floor = now.replace(second=0, microsecond=0)
+    target = floor if floor == now else floor + _MINUTE
+    if last is not None and target <= last:
+        target = last + _MINUTE
+    skipped = 0 if last is None else max(0, (target - last) // _MINUTE - 1)
+    return DxFlushPlan(
+        minute=target,
+        wait_s=max(0.0, (target - now).total_seconds()),
+        skipped=skipped,
+    )

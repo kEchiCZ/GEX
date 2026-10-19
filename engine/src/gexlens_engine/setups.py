@@ -43,6 +43,7 @@ from gexlens_engine.compute.risk import (
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setup_library import cell_evidence
 from gexlens_engine.compute.setups import (
+    CUMDELTA_PRINTS,
     PATH_GAP_WAIT,
     SETUP_MECHANICS_VERSION,
     TRADING_CLASS_KEY,
@@ -202,6 +203,11 @@ class SetupEngine:
     # i spot), takže re-backfill po návratu streamu nepřijde — o doplnění si
     # proto říká ten, kdo díru potřebuje. None = jen čekání a čtení partic.
     request_bars: BarRequester | None = None
+    # CumΔ jen z tisků (ADR-0057, mechanika v6): reset CumΔ v 17:00 CT se
+    # značí do `cum_gap_before`, takže T1, T4, T5 ani kontra-režim nesrovnávají
+    # CumΔ přes hranici seance (#1581). Pole, ne čtení globálu, ať jde v testech
+    # přepnout; pod v5 zůstává srovnání přes reset jako dosud.
+    cumdelta_prints: bool = CUMDELTA_PRINTS
 
     def apply_params(self, params: SetupParams, version: int | None) -> bool:
         """Přepne prahy za běhu (nová verze ve store). Vrací True při změně.
@@ -222,6 +228,9 @@ class SetupEngine:
         self._calibration: ConfidenceTable | None = None
         self._calibration_ts: dt.datetime | None = None
         self._history: deque[MinuteInputs] = deque(maxlen=HISTORY_MINUTES)
+        # Mezera CumΔ v minutě bez baru (ADR-0057 bod 3) — řádek historie
+        # nevznikne, příznak `cum_gap_before` dostane další přidaný řádek
+        self._cum_gap_pending = False
         self._prev_volumes: dict[object, float] = {}
         self._open: list[_OpenSetup] = []
         self._last_created: dict[str, dt.datetime] = {}
@@ -340,10 +349,25 @@ class SetupEngine:
             # téže agregované minutě. Na doplnění z partic se nečeká: setup je
             # živé upozornění, vstup za cenu několik minut starou nejde zadat.
             # Otevřené setupy se vyhodnocují dál (díry řeší #1320).
+            # Mezera CumΔ té minuty (NULL řádek toku) se ale ztratit nesmí:
+            # rozdíl CumΔ přes ni je neúplný, nese ho další řádek historie.
+            flow = runtime.last_flow
+            if flow is None or flow.cum_delta is None:
+                self._cum_gap_pending = True
             await self._evaluate_open(now, bars)
             return
         levels = runtime.last_levels
         flow = runtime.last_flow
+        # Hranice seance (#1581): CumΔ se v 17:00 CT nuluje (#638) v témž cyklu
+        # (`trading_session_date(ts_min)` v run_cycle), rozdíl přes ni je
+        # „≈0 − CumΔ minulé seance". Jen pod CumΔ z tisků (mechanika v6, ADR-0034 §6).
+        previous = self._history[-1] if self._history else None
+        cum_gap_before = self._cum_gap_pending or (
+            self.cumdelta_prints
+            and previous is not None
+            and trading_session_date(previous.ts) != trading_session_date(now)
+        )
+        self._cum_gap_pending = False
         self._refresh_max_pain(runtime.expiry, now.date())
         call_flow, put_flow, raw_flow = self._flows(runtime)
 
@@ -368,7 +392,10 @@ class SetupEngine:
             call_wall=levels.call_wall if levels else None,
             put_wall=levels.put_wall if levels else None,
             max_pain=self._max_pain,
-            cum_delta=flow.cum_delta if flow else 0.0,
+            # Bez řádku toku (před prvním cyklem) CumΔ neznáme: 0,0 by byla
+            # vymyšlená hodnota, kterou by T4 brala jako potvrzení. NULL řádek
+            # (mezera, ADR-0057 bod 3) jde dál jako None.
+            cum_delta=flow.cum_delta if flow is not None else None,
             call_flow=call_flow,
             put_flow=put_flow,
             opt_vol=raw_flow,
@@ -379,6 +406,7 @@ class SetupEngine:
             gex_regime=(gex_regime(bar_close, levels.flip, levels.total_gex) if levels else None),
             gamma_edge_up=edges.up if edges else None,
             gamma_edge_dn=edges.dn if edges else None,
+            cum_gap_before=cum_gap_before,
         )
         self._history.append(inputs)
         if self.feature_writer is not None:

@@ -15,7 +15,6 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-import pyarrow.parquet as pq
 from sqlalchemy import Column, Date, DateTime, Float, Integer, MetaData, String, Table, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -32,6 +31,7 @@ from gexlens_engine.compute.facalibration import (
 from gexlens_engine.compute.settle import is_trading_session
 from gexlens_engine.storage.fa_validation import CUTOFF_HOUR_UTC, PublicationUtc, measured_oi_pair
 from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.parquet_store import read_netflow_latest
 
 logger = logging.getLogger(__name__)
 
@@ -195,21 +195,13 @@ def netflow_at_cutoff(path: Path, day: dt.date) -> dict[Key, float]:
 
     Stejný řez jako FA validace: po 21:00 UTC začíná další seance a kumulativ
     už patří novému trade date (counter volume IBKR se resetuje ve 22:00 UTC).
+    Řádek přesně v 21:00 nese tok do 21:00, proto se počítá (`end` je řez
+    + 1 min, okno `read_netflow_latest` je zprava otevřené). Čte se přes
+    `schema=` (#1460), staré partice bez sloupce `source` projdou. Bez filtru
+    zdroje: body α podle zdroje odděluje reset α při bumpu v6 (ADR-0057 bod 6).
     """
     cutoff = dt.datetime.combine(day, dt.time(CUTOFF_HOUR_UTC), tzinfo=dt.UTC)
-    table = pq.read_table(path, columns=["ts_min", "strike", "right", "net_volume"])
-    latest: dict[Key, tuple[dt.datetime, float]] = {}
-    columns = [
-        table.column(name).to_pylist() for name in ("ts_min", "strike", "right", "net_volume")
-    ]
-    for ts, strike, right, net in zip(*columns, strict=True):
-        if ts is None or ts > cutoff:
-            continue
-        key = (float(strike), str(right))
-        current = latest.get(key)
-        if current is None or ts >= current[0]:
-            latest[key] = (ts, float(net) if net is not None else 0.0)
-    return {key: net for key, (_, net) in latest.items()}
+    return read_netflow_latest(path, end=cutoff + dt.timedelta(minutes=1), sources=None)
 
 
 def collect_alpha_calibration(

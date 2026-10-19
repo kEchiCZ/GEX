@@ -9,14 +9,17 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, SOURCE_MIDPOINT, stored_sources
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.parquet_store import (
     LEVELS_SCHEMA,
     SNAPSHOT_SCHEMA,
+    NetFlowRow,
     PrintVolRow,
     SnapshotRow,
     SnapshotWriter,
+    read_netflow_latest,
 )
 
 DAY = dt.date(2026, 7, 16)
@@ -139,6 +142,7 @@ def test_read_last_cum_delta_okno_seance(tmp_path: Path) -> None:
     from gexlens_engine.compute.cumdelta import FlowRow
     from gexlens_engine.storage.parquet_store import read_last_cum_delta
 
+    midpoint = stored_sources(SOURCE_MIDPOINT)  # FlowRow bez zdroje = NULL = midpoint
     writer = SnapshotWriter(Settings(data_dir=tmp_path))
     sunday = dt.date(2026, 7, 19)
     monday = dt.date(2026, 7, 20)
@@ -165,20 +169,139 @@ def test_read_last_cum_delta_okno_seance(tmp_path: Path) -> None:
     ]
     start = dt.datetime(2026, 7, 19, 22, 0, tzinfo=dt.UTC)
     end = dt.datetime(2026, 7, 20, 22, 0, tzinfo=dt.UTC)
-    assert read_last_cum_delta(paths, start=start, end=end) == 8.0
+    assert read_last_cum_delta(paths, start=start, end=end, sources=midpoint) == 8.0
     # Jen večerní část (restart v neděli v noci)
-    assert read_last_cum_delta(paths[:1], start=start, end=end) == 5.0
+    assert read_last_cum_delta(paths[:1], start=start, end=end, sources=midpoint) == 5.0
     # Řádek 21:30 (před openem) patří PŘEDCHOZÍ seanci — do pondělního okna nesmí
     prev_start = dt.datetime(2026, 7, 18, 22, 0, tzinfo=dt.UTC)
-    assert read_last_cum_delta(paths, start=prev_start, end=start) == 999.0
+    assert read_last_cum_delta(paths, start=prev_start, end=start, sources=midpoint) == 999.0
     # Okno bez jediného řádku → None
     empty_end = dt.datetime(2026, 7, 18, 22, 0, tzinfo=dt.UTC)
     assert (
         read_last_cum_delta(
-            paths, start=dt.datetime(2026, 7, 17, 22, 0, tzinfo=dt.UTC), end=empty_end
+            paths,
+            start=dt.datetime(2026, 7, 17, 22, 0, tzinfo=dt.UTC),
+            end=empty_end,
+            sources=midpoint,
         )
         is None
-    )  # noqa: E501
+    )
+
+
+SEED_START = dt.datetime(2026, 7, 15, 22, 0, tzinfo=dt.UTC)  # open seance 16. 7. (CDT)
+SEED_END = dt.datetime(2026, 7, 16, 22, 0, tzinfo=dt.UTC)
+
+
+def _minute(hour: int, minute: int) -> dt.datetime:
+    return dt.datetime(2026, 7, 16, hour, minute, tzinfo=dt.UTC)
+
+
+def test_read_last_cum_delta_bere_posledni_mereny_radek_zdroje(writer: SnapshotWriter) -> None:
+    """#1460: seed CumΔ přeskočí NULL (mezeru) i jiný zdroj; hybrid `dxfeed` nebere nikdo."""
+    from gexlens_engine.compute.cumdelta import FlowRow
+    from gexlens_engine.storage.parquet_store import read_last_cum_delta
+
+    path = writer.write_flow(
+        "ES",
+        DAY,
+        [
+            FlowRow(_minute(14, 0), 1.0, 40.0, source=SOURCE_MIDPOINT),
+            FlowRow(_minute(14, 1), 1.0, 7.0, source=SOURCE_AGGRESSOR),
+            FlowRow(_minute(14, 2), None, None, source=SOURCE_AGGRESSOR),  # mezera trade větve
+            FlowRow(_minute(14, 3), None, None, source=SOURCE_MIDPOINT),
+            FlowRow(_minute(14, 4), 1.0, 999.0, source="dxfeed"),  # hybrid do #1460
+        ],
+    )
+
+    def last(source: str) -> float | None:
+        return read_last_cum_delta(
+            [path], start=SEED_START, end=SEED_END, sources=stored_sources(source)
+        )
+
+    assert last(SOURCE_MIDPOINT) == 40.0
+    assert last(SOURCE_AGGRESSOR) == 7.0
+
+
+def test_read_last_cum_delta_stara_partice_bez_zdroje(tmp_path: Path) -> None:
+    """#1460: flow partice před #615 (bez sloupce `source`) se čte jako midpoint a nespadne."""
+    from gexlens_engine.storage.parquet_store import read_last_cum_delta
+
+    path = tmp_path / "flow.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "ts_min": pa.array([_minute(14, 0)], pa.timestamp("us", tz="UTC")),
+                "flow_delta": [2.0],
+                "cum_delta": [12.0],
+            }
+        ),
+        path,
+    )
+
+    def last(source: str) -> float | None:
+        return read_last_cum_delta(
+            [path], start=SEED_START, end=SEED_END, sources=stored_sources(source)
+        )
+
+    assert last(SOURCE_MIDPOINT) == 12.0
+    assert last(SOURCE_AGGRESSOR) is None
+
+
+def test_netflow_nese_zdroj_a_seed_ho_filtruje(writer: SnapshotWriter) -> None:
+    """#1460: řada netflow nese `source`; seed bere poslední ne-NULL řádek strany téhož zdroje."""
+    path = writer.write_netflow(
+        "ES",
+        "20260716",
+        DAY,
+        [
+            NetFlowRow(_minute(14, 0), 7600.0, "C", 40.0, source=SOURCE_MIDPOINT),
+            NetFlowRow(_minute(14, 0), 7600.0, "P", -5.0, source=SOURCE_MIDPOINT),
+            NetFlowRow(_minute(14, 1), 7600.0, "C", 6.0, source=SOURCE_AGGRESSOR),
+            NetFlowRow(_minute(14, 2), 7600.0, "C", 999.0, source="dxfeed"),
+        ],
+    )
+    assert path is not None
+    assert list(pd.read_parquet(path).columns) == [
+        "ts_min",
+        "strike",
+        "right",
+        "net_volume",
+        "source",
+    ]
+
+    def latest(sources: frozenset[str | None] | None) -> dict[tuple[float, str], float]:
+        return read_netflow_latest(path, start=SEED_START, end=SEED_END, sources=sources)
+
+    assert latest(stored_sources(SOURCE_MIDPOINT)) == {(7600.0, "C"): 40.0, (7600.0, "P"): -5.0}
+    assert latest(stored_sources(SOURCE_AGGRESSOR)) == {(7600.0, "C"): 6.0}
+    assert latest(None) == {(7600.0, "C"): 999.0, (7600.0, "P"): -5.0}  # bez filtru zdroje
+
+
+def test_read_netflow_latest_stara_partice_a_null_net(tmp_path: Path) -> None:
+    """#1460: partice netflow bez sloupce `source` = midpoint; NULL net není nula, přeskočí se."""
+    path = tmp_path / "netflow.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "ts_min": pa.array(
+                    [_minute(14, 0), _minute(14, 0), _minute(14, 1)],
+                    pa.timestamp("us", tz="UTC"),
+                ),
+                "strike": [7600.0, 7610.0, 7600.0],
+                "right": ["C", "C", "C"],
+                "net_volume": pa.array([30.0, 8.0, None], pa.float64()),
+            }
+        ),
+        path,
+    )
+
+    def latest(source: str) -> dict[tuple[float, str], float]:
+        return read_netflow_latest(
+            path, start=SEED_START, end=SEED_END, sources=stored_sources(source)
+        )
+
+    assert latest(SOURCE_MIDPOINT) == {(7600.0, "C"): 30.0, (7610.0, "C"): 8.0}
+    assert latest(SOURCE_AGGRESSOR) == {}
 
 
 def test_printvol_partition_roundtrip(writer: SnapshotWriter, tmp_path: Path) -> None:

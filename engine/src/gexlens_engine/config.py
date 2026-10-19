@@ -163,12 +163,6 @@ class Settings(BaseSettings):
     # Stínové CumΔ z TimeAndSale (#615 fáze 3, shadow): paralelní měřicí řada,
     # živé CumΔ ani detektory se nemění — vypnutí zastaví jen sběr měření
     tasty_dx_cumdelta: bool = True
-    # Zdroj znaménka živého CumΔ (ADR-0032, #615 fáze 3): "midpoint" = dnešní
-    # minutový test pro celý řetěz; "dxfeed" = tisky TimeAndSale se stranou od
-    # burzy, midpoint jen jako fallback per kontrakt a minutu. Default zůstává
-    # midpoint do vyhodnocení paralelního běhu (≥ 5 seancí) a rozhodnutí
-    # uživatele — přepnutí mění hodnoty CumΔ i vstup detektorů.
-    cumdelta_source: str = Field(default="midpoint", pattern="^(midpoint|dxfeed)$")
     # Vysvětlení zprávy na vyžádání (#1126 bod 3d, API): tlačítko u karty
     # zprávy zavolá Gemini (free tier, týž klíč jako zakonzervovaná
     # klasifikace #281 — rozhodnutí uživatele 15. 9.: žádný placený model)

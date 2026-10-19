@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from typing import Any
 
 from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
@@ -27,12 +27,12 @@ from gexlens_engine.adapters import (
 )
 from gexlens_engine.background import BackgroundJob
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
-from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.cumdelta import LIVE_SOURCE, SOURCE_AGGRESSOR, CumDeltaTracker
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
-from gexlens_engine.compute.setups import SetupParams
+from gexlens_engine.compute.setups import CUMDELTA_PRINTS, SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
 from gexlens_engine.discovery_cache import (
@@ -147,9 +147,13 @@ from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.adhoc import AdhocViewer
 from gexlens_engine.tasty.budget import DistanceGroup, order_by_distance, plan_subscriptions
 from gexlens_engine.tasty.candles import CandleBar, CandleFetcher, backfill_gaps, partition_days
-from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
+from gexlens_engine.tasty.chain_fallback import (
+    ChainFallback,
+    fallback_alert_message,
+    tasty_chain_quotes,
+)
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
-from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow
+from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow, plan_dx_flush
 from gexlens_engine.tasty.devrun import run_tasty_only
 from gexlens_engine.tasty.extended import (
     build_snapshot_rows,
@@ -166,8 +170,15 @@ from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
+from gexlens_engine.tasty.trade_branch import (
+    TradeBranchMonitor,
+    TradeRoutes,
+    build_routes,
+    observe_without_branch,
+    route_trade,
+)
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
-from gexlens_engine.tasty.watchdog import SilentStreamWatchdog
+from gexlens_engine.tasty.watchdog import SilentStreamWatchdog, silent_alert_message
 from gexlens_engine.tasty.wideoi import wide_oi_pass, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.ticker import parse_ticker
@@ -1214,7 +1225,7 @@ async def create_pipeline(
             contracts=next_contracts,
             # Stejná klasifikace toku jako aktivní řetěz (#1182) — netflow sekundáru
             # je vstup kalibrace α
-            cum_delta=CumDeltaTracker(multiplier=multiplier, source=settings.cumdelta_source),
+            cum_delta=CumDeltaTracker(multiplier=multiplier, source=LIVE_SOURCE),
             push_status=False,
             secondary=True,
             oi_fallback=oi_fallback,
@@ -1239,7 +1250,7 @@ async def create_pipeline(
         expiry=info.expiry,
         multiplier=multiplier,
         contracts=contracts,
-        cum_delta=CumDeltaTracker(multiplier=multiplier, source=settings.cumdelta_source),
+        cum_delta=CumDeltaTracker(multiplier=multiplier, source=LIVE_SOURCE),
         futures_cvd=futures_cvd,  # CVD podkladu (#829) — jen primární runtime
         push_status=False,  # agregovaný status pushuje orchestrátor
         oi_fallback=oi_fallback,
@@ -2001,6 +2012,16 @@ async def main() -> None:
         return False
 
     dx_print_active: Callable[[str], bool] = _dx_print_inactive
+    # Vzorek trade větve pro trackery CumΔ obou řetězů (ADR-0057 bod 3, #1460)
+    # a stav do /status; bez tasty větve neběží nikdy (stav „off")
+    trade_branch_sample: Callable[
+        [dt.datetime, Mapping[str, InstrumentPipeline]], dict[str, str]
+    ] = observe_without_branch
+    # Probuzení plánu subskripcí po založení pipeline (#1460): trasy tisků nového
+    # řetězu (roll v settle, restart) se přestaví do sekund, ne až za minutu.
+    # None bez tasty větve; volá se jen pod zdrojem tisků — pod midpointem by
+    # dřívější obnova univerza změnila stín `cumdelta_dx`
+    on_pipeline_created: Callable[[], None] | None = None
     # Křížová kontrola (#517 A) — None, dokud neběží shadow větev; status ji
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
     crosscheck: CrossCheckDetector | None = None
@@ -2023,12 +2044,14 @@ async def main() -> None:
         # nenávratně mizí. Fan-out callbacku — cache i recorder vidí tytéž eventy.
         trades_recorder = TradesRecorder() if settings.tasty_trades_record else None
         # Stínové CumΔ z TimeAndSale (#615 fáze 3, varianta B — rozhodnutí
-        # uživatele 27. 8.): měřicí řada per symbol, živé CumΔ se nemění
+        # uživatele 27. 8.): samostatná měřicí řada per symbol vedle živého
+        # CumΔ; od v6 vstup replaye a brány parity (ADR-0057 bod 7)
         dx_shadows: dict[str, DxCumDeltaShadow] = {}
-        # Živá trade větev (ADR-0032, #615 fáze 3): streamer symbol → spec
-        # aktivního řetězu per instrument; tisky jdou do CumDeltaTrackeru
-        # pipeline. V režimu midpoint tracker jen měří pokrytí.
-        dx_universe: dict[str, dict[str, OptionContractSpec]] = {}
+        # Živá trade větev (ADR-0057 body 3 a 6, #1460): trasy streamer symbol
+        # → spec aktivního i sekundárního řetězu per instrument; tisky jdou do
+        # CumDeltaTrackeru řetězu. Pod midpointem tracker tisky jen měří (pokrytí).
+        trade_routes: dict[str, TradeRoutes] = {}
+        trade_monitor = TradeBranchMonitor()
         # Ad-hoc pohled přes tasty (#521, varianta C): žádné IBKR linky
         # Probuzení reconcileru subskripce (#206): ad-hoc pohled vznikne do
         # sekund, ale jeho striky posílá do DXLinku až `shadow_symbols_loop`.
@@ -2050,7 +2073,7 @@ async def main() -> None:
             tasty_cache.on_event(event_type, values)
             if trades_recorder is not None:
                 trades_recorder.on_event(event_type, values)
-            if (dx_shadows or dx_universe) and event_type == "TimeAndSale" and values:
+            if (dx_shadows or trade_routes) and event_type == "TimeAndSale" and values:
                 streamer = str(values[0])
                 state = tasty_cache.state(streamer)
                 trade_size = _number(values[3]) if len(values) > 3 else None
@@ -2062,15 +2085,26 @@ async def main() -> None:
                     dx_shadow.on_trade(
                         streamer, size=trade_size, aggressor=trade_side, delta=trade_delta
                     )
-                # Živé CumΔ (ADR-0032): tisk patří kontraktu jednoho instrumentu
-                for dx_symbol, universe in dx_universe.items():
-                    dx_spec = universe.get(streamer)
-                    if dx_spec is None:
-                        continue
+                # Živé CumΔ (ADR-0057 bod 6): tisk patří kontraktu jednoho řetězu
+                # jednoho instrumentu — aktivního, nebo pod tisky sekundárního (vstup α);
+                # midpoint (v5) jen aktivní část jako dřív, pravidla v `route_trade`.
+                # Seance podle času příjmu (jako vzorek trade větve): roll trackeru
+                # v `run_cycle` přijde až po sweepu a tisky od openu do té doby
+                # čekají stranou, místo aby je reset smazal (#1460)
+                trade_session = trading_session_date(dt.datetime.now(dt.UTC))
+                for dx_symbol, routes in trade_routes.items():
                     dx_pipe = pipelines.get(dx_symbol)
-                    if dx_pipe is not None and dx_pipe.runtime.cum_delta is not None:
-                        dx_pipe.runtime.cum_delta.add_dx_trade(
-                            dx_spec, size=trade_size, aggressor=trade_side, delta=trade_delta
+                    if dx_pipe is None:
+                        continue
+                    target = route_trade(routes, dx_pipe, streamer)
+                    if target is not None:
+                        dx_tracker, dx_spec = target
+                        dx_tracker.add_dx_trade(
+                            dx_spec,
+                            size=trade_size,
+                            aggressor=trade_side,
+                            delta=trade_delta,
+                            session_date=trade_session,
                         )
             # CVD podkladu (#829): tracker si sám vybere jen printy
             # registrovaných front futures, opční projdou bez práce
@@ -2085,9 +2119,26 @@ async def main() -> None:
         )
 
         def _dx_print_active(active_symbol: str) -> bool:
-            return bool(tasty_stream.connected) and active_symbol in dx_universe
+            # Okamžitý stav pro rozklad objemu pod midpointem (#1007, v5 beze
+            # změny); zdroj tisků čte verdikt minuty z `trade_monitor`
+            return bool(tasty_stream.connected) and active_symbol in trade_routes
 
         dx_print_active = _dx_print_active
+
+        def _trade_branch_sample(
+            now: dt.datetime, pipes: Mapping[str, InstrumentPipeline]
+        ) -> dict[str, str]:
+            return trade_monitor.sample(
+                now,
+                pipes,
+                trade_routes,
+                connected=tasty_stream.connected,
+                reconnects=tasty_stream.reconnects,
+                last_event_among=tasty_cache.last_event_among,
+            )
+
+        trade_branch_sample = _trade_branch_sample
+        on_pipeline_created = plan_wakeup.set
 
         stream_kpi = StreamKpi(
             report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl",
@@ -2115,10 +2166,9 @@ async def main() -> None:
                         {
                             "kind": "feed_silent",
                             "symbol": "*",
-                            "message": (
-                                f"Tastytrade stream mlčel {action.silence_s / 60:.0f} min "
-                                "při otevřeném trhu — engine ho přepojil sám. Pokud "
-                                "kotace nenaběhnou do 2 min, zkontroluj stav v Settings."
+                            # Dopad na CumΔ jen pod tisky (v6, ADR-0057 bod 3)
+                            "message": silent_alert_message(
+                                action.silence_s, cumdelta_prints=CUMDELTA_PRINTS
                             ),
                             "ts": dt.datetime.now(dt.UTC).timestamp(),
                         },
@@ -2162,7 +2212,7 @@ async def main() -> None:
                 # Vždy, i prázdný seznam: API status slévá jen poslané klíče, takže
                 # vynechaný klíč nechal v UI chip „ad-hoc" i po úklidu pohledu (4. 9.)
                 "tasty_adhoc": adhoc_viewer.active(),
-                # Stínové CumΔ (#615): pokrytí aggressorSide rozhoduje o midpoint fallbacku
+                # Stínové CumΔ (#615): denní pokrytí tisků stranou (aggressorSide)
                 **(
                     {
                         "tasty_dx_shadow": {
@@ -2274,6 +2324,8 @@ async def main() -> None:
                 minutes_threshold=settings.crosscheck_minutes,
                 cooldown_minutes=settings.crosscheck_cooldown_minutes,
                 change_threshold=settings.crosscheck_change_threshold,
+                # Text mrtvé zálohy nese dopad na CumΔ jen pod tisky (v6, ADR-0057)
+                cumdelta_prints=CUMDELTA_PRINTS,
             )
             probe_spawner = _setup_farm_probe(ib, manager, settings, publisher, pipelines)
 
@@ -2349,12 +2401,9 @@ async def main() -> None:
                     {
                         "kind": "chain_fallback",
                         "symbol": "*",
-                        "message": decision.message
-                        + (
-                            ". Řady CumΔ a net objem po dobu fallbacku stojí — "
-                            "tastytrade denní objem v sémantice IBKR nedodává."
-                            if decision.source == "tasty"
-                            else "."
+                        # Dopad na CumΔ a net objem podle mechaniky (v6 tisky, ADR-0057)
+                        "message": fallback_alert_message(
+                            decision, cumdelta_prints=CUMDELTA_PRINTS
                         ),
                         "ts": dt.datetime.now(dt.UTC).timestamp(),
                     },
@@ -2535,18 +2584,17 @@ async def main() -> None:
                             )
                             purpose["wide"] |= wide_syms
                             symbols |= wide_syms
-                        # Univerzum trade větve (ADR-0032) = aktivní řetěz
-                        # pipeline: streamer symbol → spec. Živé CumΔ ho čte
-                        # v `_tasty_event`; stín (#615 měření) nad týmž.
+                        # Trasy trade větve (ADR-0057 bod 6) = aktivní
+                        # i sekundární řetěz pipeline: streamer symbol → spec.
+                        # Živé CumΔ je čte v `_tasty_event`; stín (#615 měření,
+                        # vstup replaye — bod 7) jen aktivní část. Trasy se
+                        # obnovují jen s neprázdnou aktivní částí, jako dřív.
                         if pipe is not None:
                             active_specs = list(pipe.runtime.contracts)
-                            universe = {}
-                            for active_spec in active_specs:
-                                streamer_sym = chain.streamer_symbol(active_spec)
-                                if streamer_sym is not None:
-                                    universe[streamer_sym] = active_spec
+                            routes = build_routes(pipe, chain.streamer_symbol)
+                            universe = routes.active
                             if universe:
-                                dx_universe[symbol] = universe
+                                trade_routes[symbol] = routes
                             if universe and settings.tasty_dx_cumdelta:
                                 dx_shadow = dx_shadows.get(symbol)
                                 if dx_shadow is None:
@@ -2824,17 +2872,38 @@ async def main() -> None:
             Spot se obnovuje každou minutu (zóny sledují ATM); roll seance
             resetuje kumulativy stejně jako živé CumΔ. Poslední uzávěrka
             proběhne i po stopu, ať se rozdělaná minuta neztratí.
+
+            Pod tisky (v6, #1586) se uzavírá na hranici minuty podle nástěnných
+            hodin a štítkem je cílová hranice (`plan_dx_flush`, „stav k N“).
+            Pod v5 zůstává perioda 60 s po práci a štítek z času po čekání:
+            stín je vstup replaye (ADR-0057 bod 7), konvence se mění až s bumpem.
             """
+            aligned = LIVE_SOURCE == SOURCE_AGGRESSOR
+            last_minute: dt.datetime | None = None
             while True:
                 stopped = shadow_stop.is_set()
+                plan = plan_dx_flush(dt.datetime.now(dt.UTC), last_minute) if aligned else None
+                if plan is not None and plan.skipped:
+                    logger.warning(
+                        "Stín CumΔ: %d min bez řádku (%s až %s) — uzávěrka nestihla hranici"
+                        " minuty; tok nesou sousední řádky",
+                        plan.skipped,
+                        (plan.minute - dt.timedelta(minutes=plan.skipped)).isoformat(),
+                        (plan.minute - dt.timedelta(minutes=1)).isoformat(),
+                    )
                 if not stopped:
                     with contextlib.suppress(TimeoutError):
-                        await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
+                        await asyncio.wait_for(
+                            shadow_stop.wait(), timeout=60.0 if plan is None else plan.wait_s
+                        )
                         stopped = True
                 try:
                     now = dt.datetime.now(dt.UTC)
-                    session = trading_session_date(now)
-                    minute = now.replace(second=0, microsecond=0)
+                    minute = now.replace(second=0, microsecond=0) if plan is None else plan.minute
+                    last_minute = minute
+                    # Hranice seance leží na celé minutě, takže pod v5 je to totéž
+                    # jako seance `now`; pod v6 rozhoduje štítek, ne zpoždění probuzení
+                    session = trading_session_date(minute)
                     for dx_symbol, dx_shadow in list(dx_shadows.items()):
                         spot_price, spot_fresh = _tasty_spot(dx_symbol)
                         dx_shadow.set_spot(spot_price if spot_fresh else None)
@@ -2843,7 +2912,7 @@ async def main() -> None:
                             # stínu je per seance, takže její poslední řádek je
                             # přesně stav, ve kterém předchozí běh skončil
                             seed = await asyncio.to_thread(writer.dx_flow_seed, dx_symbol, session)
-                            if seed is not None and seed.ts_min < minute:
+                            if seed is not None and (aligned or seed.ts_min < minute):
                                 dx_shadow.seed(seed)
                                 logger.info(
                                     "Stín CumΔ %s navázán z partice %s (cum_ring %.0f, %d tradů)"
@@ -2853,6 +2922,12 @@ async def main() -> None:
                                     seed.cum_ring,
                                     seed.trades,
                                 )
+                                if seed.ts_min >= minute:
+                                    # Jen v6: restart v téže minutě, ve které stop zapsal
+                                    # řádek N s obsahem [N−1, stop). Uzávěrka N by ho
+                                    # upsertem přepsala jen novou částí minuty, proto
+                                    # minuta pokračuje do příští hranice (#1586)
+                                    continue
                         row = dx_shadow.close_minute(minute)
                         await asyncio.to_thread(writer.write_dx_flow, dx_symbol, session, [row])
                 except Exception:
@@ -2900,7 +2975,8 @@ async def main() -> None:
             shadow_tasks.append(asyncio.create_task(dx_cum_flush_loop()))
             logger.info(
                 "Stínové CumΔ z TimeAndSale ZAPNUTO (#615 fáze 3, shadow) → "
-                "derived/cumdelta_dx/ — živé CumΔ se nemění"
+                "derived/cumdelta_dx/ — samostatná řada, živé CumΔ jde ze zdroje %s",
+                LIVE_SOURCE,
             )
         if settings.tasty_extended_enabled:
             shadow_tasks.append(asyncio.create_task(extended_snapshot_loop()))
@@ -3115,6 +3191,15 @@ async def main() -> None:
                     discovery_cache=discovery_cache,
                 )
                 setup_cooldown.succeeded(symbol)
+                # Trasy tisků nového řetězu hned (#1460): po rollu drží trasy
+                # vypršelý řetěz a zdroj tisků do jejich obnovy píše mezeru
+                created_tracker = pipelines[symbol].runtime.cum_delta
+                if (
+                    on_pipeline_created is not None
+                    and created_tracker is not None
+                    and created_tracker.prints
+                ):
+                    on_pipeline_created()
             except ConnectionError as exc:
                 # Spojení se rozpadlo uprostřed setupu (odhlášená TWS, restart
                 # Gateway). O symbolu to nevypovídá nic — cooldown by jen držel
@@ -3146,11 +3231,23 @@ async def main() -> None:
             last_full_minute = now
         else:
             run_list = [pipelines[symbol] for symbol in plan.start if symbol in pipelines]
-        # Rozklad objemu na tisky (#1007) smí říkat „struktura" jen když trade
-        # větev pro instrument opravdu běžela — jinak NULL
+        # Rozklad objemu na tisky (#1007) smí pod midpointem říkat „struktura"
+        # jen když trade větev pro instrument opravdu běžela — jinak NULL.
         for run_pipe in run_list:
             if run_pipe.runtime.cum_delta is not None:
                 run_pipe.runtime.cum_delta.dx_active = dx_print_active(run_pipe.runtime.symbol)
+        # Vzorek trade větve (ADR-0057 bod 3, #1460) pro trackery aktivního
+        # i sekundárního řetězu všech pipeline, ne jen těch v cyklu: tracker
+        # drží AND přes okno do svého `begin_cycle`, další vzorek ho jen zpřesní.
+        # V témž okamžiku se řežou tisky (`seal`) — řádek minuty nese tisky mezi
+        # dvěma vzorky, ne do uzávěrky po sweepu, kterou žádný vzorek nepokrývá
+        try:
+            trade_branch_states = trade_branch_sample(dt.datetime.now(dt.UTC), pipelines)
+        except Exception:
+            # Bez vzorku a řezu `begin_cycle` minutu nepotvrdí → zdroj tisků zapíše
+            # mezeru a zahodí i tisky od posledního řezu
+            logger.exception("Vzorek trade větve selhal — minuta bez vzorku je mezera (#1460)")
+            trade_branch_states = {}
         results = await gather_metrics(run_list, now)
         # Roll expirace v jejím settle (#1331, ADR-0039 bod 2): pipeline, jejíž
         # expirace v `now` vypršela, právě proběhla posledním cyklem — prvním po
@@ -3279,10 +3376,15 @@ async def main() -> None:
                 partition_buffer_mb=round(writer.buffer_stats()["bytes"] / 1e6, 1),
                 # Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615
                 # krok 5) — UI ukazuje podíl objemu se stranou od burzy,
-                # ne smyšlenou šířku zóny
-                cumdelta_source=settings.cumdelta_source,
+                # ne smyšlenou šířku zóny; zdroj určuje mechanika (ADR-0057).
+                # Stav trade větve aktivního řetězu per symbol (ADR-0057 bod 10,
+                # jen API): running | gap | closed | off
+                cumdelta_source=LIVE_SOURCE,
                 cumdelta_coverage={
-                    pipe_symbol: pipe.runtime.cum_delta.day_stats()
+                    pipe_symbol: {
+                        **pipe.runtime.cum_delta.day_stats(),
+                        "trade_branch": trade_branch_states.get(pipe_symbol),
+                    }
                     for pipe_symbol, pipe in sorted(pipelines.items())
                     if pipe.runtime.cum_delta is not None
                 },

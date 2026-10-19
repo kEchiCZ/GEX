@@ -9,7 +9,7 @@ se nemění, nic se nepublikuje).
 
 import datetime as dt
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -113,6 +113,21 @@ class TastyChainCache:
             if state is None or state.last_event_at is None or state.last_event_at < threshold:
                 silent.add(symbol)
         return silent
+
+    def last_event_among(self, streamers: Iterable[str]) -> dt.datetime | None:
+        """Nejnovější event jakéhokoli typu z množiny streamerů; None = žádný.
+
+        Čerstvost univerza trade větve CumΔ (ADR-0057 bod 3, #1460): mezera
+        vzniká, až když mlčí celé univerzum řetězu, ne jeden kontrakt.
+        """
+        latest: dt.datetime | None = None
+        for symbol in streamers:
+            state = self._states.get(symbol)
+            if state is None or state.last_event_at is None:
+                continue
+            if latest is None or state.last_event_at > latest:
+                latest = state.last_event_at
+        return latest
 
     def on_event(self, event_type: str, values: list[object]) -> None:
         """EventCallback pro DxLinkStream — pořadí polí dle stream.EVENT_FIELDS."""

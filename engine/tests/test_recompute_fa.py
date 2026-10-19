@@ -17,6 +17,7 @@ import pyarrow.parquet as pq
 import pytest
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT
 from gexlens_engine.compute.facalibration import AlphaCalibrationPoint
 from gexlens_engine.compute.favalidation import FaValidationPoint
 from gexlens_engine.config import Settings
@@ -64,7 +65,10 @@ def _seed(tmp_path: Path) -> tuple[str, Settings]:
         "ES",
         EXPIRY,
         PREV,
-        [NetFlowRow(ts_min=ts, strike=s, right="C", net_volume=100.0) for s in STRIKES],
+        [
+            NetFlowRow(ts_min=ts, strike=s, right="C", net_volume=100.0, source=SOURCE_MIDPOINT)
+            for s in STRIKES
+        ],
     )
     path = settings.snapshots_dir / "ES" / EXPIRY / f"{PREV.isoformat()}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)

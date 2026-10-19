@@ -331,6 +331,25 @@ def test_mrtva_zaloha_alertuje_kdyz_se_trh_hybe() -> None:
     assert "fallback" in third.message.lower()  # praktický důsledek, ne jen stav
 
 
+@pytest.mark.parametrize("cumdelta_prints", [False, True], ids=["v5", "v6"])
+def test_mrtva_zaloha_text_podle_mechaniky(cumdelta_prints: bool) -> None:
+    """#1460: pod v5 text doslova beze změny, od v6 i dopad na CumΔ z tisků (ADR-0057)."""
+    detector = CrossCheckDetector(
+        share_threshold=0.7, minutes_threshold=3, cumdelta_prints=cumdelta_prints
+    )
+    dead = tally(tasty_dead=80, ok=20, comparable=100, changed=90)
+    verdicts = [detector.observe(dead) for _ in range(3)]
+
+    v5_text = (
+        "Mrtvá tastytrade záloha: tasty mlčí na 80 % kontraktů už 3 min, zatímco se "
+        "IBKR hodnoty mění (90 % kontraktů) — fallback na tastytrade teď NENÍ "
+        "k dispozici; při výpadku IBKR graf zamrzne"
+    )
+    suffix = "; CumΔ z tisků je po tu dobu neúplná" if cumdelta_prints else ""
+    assert verdicts[-1].backup_dead is True
+    assert verdicts[-1].message == v5_text + suffix
+
+
 def test_tichy_trh_mlcici_tasty_nealertuje() -> None:
     """Pauza CME: tasty mlčí, ale IBKR hodnoty stojí — žádný alert, jen stav.
 

@@ -166,12 +166,16 @@ class CrossCheckDetector:
         min_contracts: int = DEFAULT_MIN_CONTRACTS,
         cooldown_minutes: int = DEFAULT_COOLDOWN_MINUTES,
         change_threshold: float = DEFAULT_CHANGE_THRESHOLD,
+        cumdelta_prints: bool = False,
     ) -> None:
         self._share_threshold = share_threshold
         self._minutes_threshold = max(1, minutes_threshold)
         self._min_contracts = min_contracts
         self._cooldown_minutes = cooldown_minutes
         self._change_threshold = change_threshold
+        #: CumΔ ze strany agresora tisků (v6, ADR-0057) — mrtvá záloha pak
+        #: nese i dopad na CumΔ; orchestrátor předá přepínač mechaniky
+        self._cumdelta_prints = cumdelta_prints
         self._ibkr_streak = 0
         self._tasty_streak = 0
         #: Minuty v řadě, kdy tasty mlčí A trh se přitom hýbe (#764)
@@ -317,6 +321,10 @@ class CrossCheckDetector:
                     f"({tally.ibkr_changed_share * 100:.0f} % kontraktů) — fallback na "
                     f"tastytrade teď NENÍ k dispozici; při výpadku IBKR graf zamrzne"
                 )
+                if self._cumdelta_prints:
+                    # Mlčící část univerza = podhodnocený tok, mezera až při
+                    # tichu celého univerza nad práh hlídače (ADR-0057 bod 3)
+                    message += "; CumΔ z tisků je po tu dobu neúplná"
                 return self._finish(
                     "tasty_suspect",
                     tally,

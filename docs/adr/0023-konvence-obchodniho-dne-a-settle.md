@@ -67,7 +67,11 @@ CumΔ i čistý klasifikovaný objem (FA odhad) jsou kotvené na **open Globex
 seance**: `CumDeltaTracker.roll_session` resetuje na hranici (tentýž okamžik,
 kdy se překlápí osa dne z #512), restart uprostřed seance kumulativy NEnuluje —
 navazují se z partic (`read_last_cum_delta` pro flow, session-aware
-`read_netflow_latest` pro netflow, obě přes okno `session_bounds`). Sdílená
+`read_netflow_latest` pro netflow, obě přes okno `session_bounds`; *od #1460
+navíc jen řádky zdroje běžícího trackeru (`cumdelta.stored_sources`, NULL =
+midpoint) a bez NULL hodnot — pauza 16:00–17:00 CT patří ještě seanci D, takže
+engine nasazený s v6 v pauze by bez filtru navázal na midpointovou úroveň,
+a kumulativ po mezeře pokračuje od poslední měřené*). Sdílená
 definice hranic přesunuta do `compute/settle.py` (`session_bounds`,
 `trading_session_date`); API je re-exportuje. Kotva net objemu je správně
 tatáž: ranní OI archiv odráží pozice k předchozímu settle, takže tok od open

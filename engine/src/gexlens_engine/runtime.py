@@ -5,7 +5,8 @@ API, writer) — runtime je tak testovatelný nad mocky (CLAUDE.md pravidlo 4)
 a produkční adaptéry nad ib_async dodává `gexlens_engine.adapters`.
 
 Jeden minutový cyklus: sweep řetězce → Parquet snapshot → GEX/levels →
-CumΔ (bar větev) → flow → bary podkladu → push stavu a live kanálů do API.
+CumΔ (verdikt minuty, bar větev objemu + tisky se stranou podle zdroje) →
+flow (jen aktivní řetěz) → bary podkladu → push stavu a live kanálů do API.
 """
 
 import asyncio
@@ -17,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 
 from gexlens_engine.compute.bsfallback import BsFallbackWatcher
-from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.cumdelta import LIVE_SOURCE, CumDeltaTracker, stored_sources
 from gexlens_engine.compute.flowoi import oi_estimate
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.gex import GexEngine, GexInput
@@ -135,7 +136,9 @@ class EngineRuntime:
     push_status: bool = True
     # Sekundární řetěz (následující expirace): snapshots + levels + netflow
     # (#1182, vstup kalibrace α) — flow/CumΔ, printvol, FA vrstva a bary
-    # podkladu patří výhradně aktivní expiraci (per-symbol soubory)
+    # podkladu patří výhradně aktivní expiraci (per-symbol soubory). Jeho
+    # tracker dostává tisky taky; od v6 z nich jde net (ADR-0057 bod 6) a
+    # minutu uzavírá kvůli mezeře, řádek flow zahodí.
     secondary: bool = False
     # Per-symbol α flow-adjusted odhadu (#232): None = default z konfigurace
     # (flow_oi_alpha); ranní kalibrace fáze 2 ho nastavuje za běhu
@@ -216,9 +219,7 @@ class EngineRuntime:
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
-            self.cum_delta = CumDeltaTracker(
-                multiplier=self.multiplier, source=self.settings.cumdelta_source
-            )
+            self.cum_delta = CumDeltaTracker(multiplier=self.multiplier, source=LIVE_SOURCE)
 
     async def _oi_walls(self, day: dt.date, spot: float) -> OiWalls | None:
         """OI zdi z denního archivu; None = archiv pro den nic nemá (#851).
@@ -259,22 +260,30 @@ class EngineRuntime:
         teď se základ přečte z posledního zapsaného řádku AKTUÁLNÍ seance
         (večer D−1 + D, okno session_bounds). Bez řádku v okně (start nové
         seance) se nenavazuje nic — nula je správný základ.
+        Od #1460 jen poslední měřený řádek (ne NULL) zdroje běžícího trackeru:
+        řádky jiného zdroje nesou jinou veličinu (ADR-0057 bod 8).
         """
         if not self._flow_seed_pending:
             return
         self._flow_seed_pending = False
+        tracker = self.cum_delta
+        assert tracker is not None  # nastaven v __post_init__
         start, end = session_bounds(session_day)
         paths = [
             self.settings.derived_dir / self.symbol / "flow" / f"{day.isoformat()}.parquet"
             for day in self._session_partition_days(session_day)
         ]
         base = await asyncio.to_thread(
-            functools.partial(read_last_cum_delta, paths, start=start, end=end)
+            functools.partial(
+                read_last_cum_delta,
+                paths,
+                start=start,
+                end=end,
+                sources=stored_sources(tracker.source),
+            )
         )
         if base is None or base == 0.0:
             return
-        tracker = self.cum_delta
-        assert tracker is not None  # nastaven v __post_init__
         tracker.restore_cum(base)
         logger.info(
             "%s %s: CumΔ navázán z flow partice (%.0f) — restart uprostřed seance %s",
@@ -289,14 +298,29 @@ class EngineRuntime:
 
         Restart enginu uprostřed dne dřív vynuloval FA odhad — tok naměřený
         dopoledne existoval jen v paměti. Partice netflow ho drží, takže se
-        odhad po startu naváže tam, kde předchozí proces skončil. Klíče už
-        naměřené po restartu mají přednost (restore_net_volume je setdefault).
+        odhad po startu naváže tam, kde předchozí proces skončil. Uložený
+        základ se přičítá k toku naměřenému po restartu (#1460).
         Od #638 jen řádky AKTUÁLNÍ seance — kumulativ předchozí seance ležící
-        v téže UTC partici se přenést nesmí.
+        v téže UTC partici se přenést nesmí; od #1460 jen řádky zdroje
+        běžícího trackeru (`stored_sources`).
+
+        Obnovují se všechny uložené strany, i mimo dnešní pásmo (#1460): pásmo
+        je grow-only, takže nový runtime začne užší než ten, kdo stranu přes den
+        měřil — po rollu expirace v settle (sekundár) i po restartu uprostřed
+        seance (reconnect IBKR, pád, restart kontejneru). Zahozený základ by po
+        rozšíření pásma začal znovu od nuly a další řádek netflow by uložený
+        kumulativ strany přepsal. Platí i pod v5: strany mimo pásmo dostávají
+        konstantní řádky netflow a po rozšíření pásma pokračují net, FA vrstvy
+        i `netflow_at_cutoff` od uloženého základu. Spec mimo pásmo vzniká
+        z šablony řetězu (`OptionContractSpec` je čistě hodnotový, conId
+        nenese) — rovná se tomu, co pásmo postaví při rozšíření.
         """
         if not self._netflow_seed_pending:
             return
         self._netflow_seed_pending = False
+        tracker = self.cum_delta
+        assert tracker is not None  # nastaven v __post_init__
+        sources = stored_sources(tracker.source)
         start, end = session_bounds(session_day)
         stored: dict[tuple[float, str], float] = {}
         for day in self._session_partition_days(session_day):
@@ -308,16 +332,18 @@ class EngineRuntime:
                 / f"{day.isoformat()}.parquet"
             )
             partial = await asyncio.to_thread(
-                functools.partial(read_netflow_latest, path, start=start, end=end)
+                functools.partial(read_netflow_latest, path, start=start, end=end, sources=sources)
             )
             # Pozdější partice (vyšší UTC den) přepíše starší stav téhož klíče
             stored.update(partial)
-        if not stored:
+        if not stored or not self.contracts:
             return
-        tracker = self.cum_delta
-        assert tracker is not None  # nastaven v __post_init__
         by_key = {(spec.strike, spec.right): spec for spec in self.contracts}
-        restored = {by_key[key]: net for key, net in stored.items() if key in by_key}
+        template = self.contracts[0]
+        restored = {
+            by_key[key] if key in by_key else replace(template, strike=key[0], right=key[1]): net
+            for key, net in stored.items()
+        }
         tracker.restore_net_volume(restored)
         logger.info(
             "%s %s: kumulativní net objem obnoven z partice netflow (%d stran)",
@@ -378,6 +404,12 @@ class EngineRuntime:
             # Restart uprostřed seance: navázat CumΔ z flow partice (flow
             # zapisuje jen aktivní řetěz, sekundární kumulativ nepoužívá)
             await self._seed_cum_delta(session_day)
+        # Verdikt minuty (ADR-0057 bod 3, #1460) jednou za cyklus: rozklad barů,
+        # netflow, FA i uzávěrka minuty čtou týž, i když tisky chodí mezi
+        # awaity. Tisky řeže už vzorek orchestrátoru (`seal`) — co přijde během
+        # cyklu, patří dalšímu řádku. Zdroj midpoint mezeru nezná
+        # (`minute_measured` vždy True).
+        tracker.begin_cycle()
         now_mono = time.monotonic()
         max_age = self.settings.quote_max_age_s
         expired = 0
@@ -464,15 +496,20 @@ class EngineRuntime:
                     oi=oi,
                 )
             )
-            # CumΔ bar větev (hot zóna má vlastní tick větev přes on_trade).
+            # CumΔ bar větev (tisky dxFeed jdou do trackeru zvlášť přes add_dx_trade).
             # Bez kumulativního objemu se tracker NEKRMÍ (#614 fáze 2b): tasty
             # ho v sémantice IBKR nedodá a dosadit nulu by znamenalo skokový
-            # záporný přírůstek přes celý řetěz. Řady CumΔ a net objem během
-            # fallbacku stojí — díra, kterou je vidět, místo vymyšleného čísla.
+            # záporný přírůstek přes celý řetěz. Pod midpointem (v5) proto řady
+            # CumΔ a net objem během fallbacku stojí — díra, kterou je vidět,
+            # místo vymyšleného čísla; od v6 jdou z tisků dál a chybí jen
+            # rozklad objemu (printvol, pokrytí).
             # Sekundární řetěz krmí tracker taky (#1182): jeho net objem je
             # jediný vstup kalibrace α, který má ΔOI do dalšího dne — aktivní
             # řetěz ES/NQ je každý den 0DTE (#1172). CumΔ/flow z něj se nepíší.
-            if snapshot.volume is not None and snapshot.last is not None:
+            # Pod zdrojem tisků (ADR-0057) bar znaménko nedává, `last` nepotřebuje.
+            if snapshot.volume is not None and tracker.prints:
+                tracker.add_volume(spec, cumulative_volume=snapshot.volume)
+            elif snapshot.volume is not None and snapshot.last is not None:
                 tracker.add_bar(
                     spec,
                     cumulative_volume=snapshot.volume,
@@ -733,10 +770,11 @@ class EngineRuntime:
         )
 
         # Flow-adjusted vrstva (ADR-0011, #222/#232): OI odhad = ranní OI +
-        # α·čistý klasifikovaný objem (buy − sell z midpoint testu / Lee–Ready).
-        # Jen aktivní řetěz — tok se měří jen tam; α = 0 vrstvu vypíná. Jediný
-        # odhad (compute/flowoi.oi_estimate) sdílí FA levels, FA Dyn GEX
-        # profil/pole i řady netflow/oiest — všechno je TENTÝŽ model.
+        # α·čistý objem (buy − sell v kontraktech; v5 z midpoint testu barů, od
+        # v6 jen z tisků se stranou agresora, ADR-0057 bod 1). FA vrstva jen
+        # aktivní řetěz, net měří i sekundár (vstup kalibrace α, #1182);
+        # α = 0 odhad vypíná. Jediný odhad (compute/flowoi.oi_estimate) sdílí
+        # FA levels, FA Dyn GEX profil/pole i řadu oiest — TENTÝŽ model.
         alpha = self.flow_alpha if self.flow_alpha is not None else self.settings.flow_oi_alpha
         fa_oi: dict[OptionContractSpec, float] = {}
         # Po restartu uprostřed dne naváže kumulativ z partice netflow —
@@ -749,15 +787,29 @@ class EngineRuntime:
         # Persistence netflow (#232): kumulativ dne per strana — vstup ranní
         # kalibrace α a zpětné validace směru (znaménko net vs. ΔOI). Píše
         # i sekundární řetěz (#1182) — teprve jeho netflow má ΔOI do D+1.
+        # Píše se každá sledovaná strana, i s netem 0 (#1582): explicitní 0 je
+        # naměřená nula, chybějící řádek strana, která se nesleduje (restart,
+        # jiný řetěz, posun pásma). Dřív strana s návratem na 0 z partice
+        # zmizela a kalibrace α i navázání v rollu a po restartu vzaly její
+        # poslední nenulovou hodnotu.
+        # V minutě s mezerou trade větve (zdroj tisků, ADR-0057 bod 3) se
+        # netflow nepíše: net ještě nese tisky částečné minuty (do řezu), které
+        # vrátí až `close_minute`. Čtenáři vezmou poslední měřený řádek strany
+        # a NULL číst nemusí.
         netflow_rows = [
-            NetFlowRow(ts_min=ts_min, strike=spec.strike, right=spec.right, net_volume=net)
+            NetFlowRow(
+                ts_min=ts_min,
+                strike=spec.strike,
+                right=spec.right,
+                net_volume=net,
+                source=tracker.source,
+            )
             for spec, net in sorted(
                 tracker.net_volumes().items(),
                 key=lambda item: (item[0].strike, item[0].right),
             )
-            if net != 0.0
         ]
-        if netflow_rows:
+        if netflow_rows and tracker.minute_measured:
             await asyncio.to_thread(
                 self.writer.write_netflow, self.symbol, self.expiry, day, netflow_rows
             )
@@ -799,7 +851,9 @@ class EngineRuntime:
                         ],
                     },
                 )
-        if not self.secondary and alpha > 0.0:
+        # FA vrstva (oiest, levelsfa, gexprofilefa, gexfieldfa) se v minutě
+        # s mezerou nepíše (ADR-0057 bod 4) — net by nesl cenzurovanou minutu
+        if not self.secondary and alpha > 0.0 and tracker.minute_measured:
             fa_oi = {
                 spec: oi_estimate(inp.oi, tracker.net_volume(spec), alpha)
                 for inp, spec in zip(gex_inputs, gex_specs, strict=True)
@@ -1037,6 +1091,10 @@ class EngineRuntime:
         # 3) FlowΔ/CumΔ minuta + 4) bary podkladu — jen aktivní expirace
         # (soubory jsou per symbol; sekundární řetěz by je duplikoval)
         if self.secondary:
+            # Uzávěrka minuty i u sekundáru (#1460), řádek se zahodí: pod tisky
+            # potvrdí tok a při mezeře vrátí net částečné minuty (vstup
+            # kalibrace α); bez ní by tisky mezery v netu zůstaly
+            tracker.close_minute(ts_min)
             await self.publisher.publish(
                 f"levels.{self.symbol}.{self.expiry}", _levels_message(ts_min, levels)
             )
@@ -1095,6 +1153,8 @@ class EngineRuntime:
                 # CVD podkladu (#829) — aditivní pole, starší klienti ignorují
                 "futures_cvd_delta": flow_row.futures_cvd_delta,
                 "futures_cvd": flow_row.futures_cvd,
+                # Zdroj znaménka (ADR-0057 bod 8) — aditivní pole, zlom nesou řádky
+                "source": flow_row.source,
             },
         )
 

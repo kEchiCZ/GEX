@@ -365,3 +365,20 @@ def test_last_event_at_sleduje_cerstvost_vetve() -> None:
     cache.on_event("Quote", ["sym", 1.0, 2.0, 3, 4])
 
     assert cache.last_event_at == TS
+
+
+def test_last_event_among_bere_nejnovejsi_event_z_mnoziny() -> None:
+    """#1460: čerstvost univerza trade větve — nejnovější event jen ze zadaných streamerů."""
+    now = [TS]
+    cache = TastyChainCache(clock=lambda: now[0])
+    assert cache.last_event_among({"a", "b"}) is None  # nic nepřišlo
+
+    cache.on_event("Quote", ["a", 1.0, 2.0, 3, 4])
+    now[0] = TS + dt.timedelta(seconds=30)
+    cache.on_event("Greeks", ["b", 0.2, 0.5, 0.01, -0.1, 0.2, 10.0])
+    now[0] = TS + dt.timedelta(seconds=90)
+    cache.on_event("Quote", ["mimo", 1.0, 2.0, 3, 4])  # jiný řetěz se nepočítá
+
+    assert cache.last_event_among({"a", "b", "neznamy"}) == TS + dt.timedelta(seconds=30)
+    assert cache.last_event_among(["a"]) == TS
+    assert cache.last_event_among(set()) is None

@@ -4,9 +4,12 @@ import datetime as dt
 import logging
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT
 from gexlens_engine.compute.facalibration import (
     AlphaCalibrationPoint,
     calibrate_alpha,
@@ -112,11 +115,65 @@ def test_netflow_at_cutoff_rez_21_utc(tmp_path: Path) -> None:
         EXPIRY,
         PREV,
         [
-            NetFlowRow(ts_min=before, strike=7500.0, right="C", net_volume=80.0),
-            NetFlowRow(ts_min=after, strike=7500.0, right="C", net_volume=999.0),
+            NetFlowRow(
+                ts_min=before, strike=7500.0, right="C", net_volume=80.0, source=SOURCE_MIDPOINT
+            ),
+            NetFlowRow(
+                ts_min=after, strike=7500.0, right="C", net_volume=999.0, source=SOURCE_MIDPOINT
+            ),
         ],
     )
     assert path is not None
+    assert netflow_at_cutoff(path, PREV) == {(7500.0, "C"): 80.0}
+
+
+def test_netflow_at_cutoff_strana_vracena_na_nulu(tmp_path: Path) -> None:
+    """#1582: strana s návratem na 0 před řezem vstoupí do kalibrace s 0, ne s 80."""
+    settings = Settings(data_dir=tmp_path)
+    earlier = dt.datetime.combine(PREV, dt.time(20, 24), tzinfo=dt.UTC)
+    path = SnapshotWriter(settings).write_netflow(
+        "ES",
+        EXPIRY,
+        PREV,
+        [
+            NetFlowRow(
+                ts_min=earlier, strike=7500.0, right="P", net_volume=80.0, source=SOURCE_MIDPOINT
+            ),
+            NetFlowRow(
+                ts_min=earlier + dt.timedelta(minutes=3),
+                strike=7500.0,
+                right="P",
+                net_volume=0.0,
+                source=SOURCE_MIDPOINT,
+            ),
+        ],
+    )
+    assert path is not None
+    assert netflow_at_cutoff(path, PREV) == {(7500.0, "P"): 0.0}
+
+
+def test_netflow_at_cutoff_stara_partice_a_radek_presne_v_rezu(tmp_path: Path) -> None:
+    """#1460: partice bez sloupce `source` se čte přes `schema=`; řádek 21:00 do řezu patří."""
+    path = tmp_path / "netflow.parquet"
+    at_cutoff = dt.datetime.combine(PREV, dt.time(21, 0), tzinfo=dt.UTC)
+    pq.write_table(
+        pa.table(
+            {
+                "ts_min": pa.array(
+                    [
+                        at_cutoff - dt.timedelta(minutes=1),
+                        at_cutoff,
+                        at_cutoff + dt.timedelta(minutes=1),
+                    ],
+                    pa.timestamp("us", tz="UTC"),
+                ),
+                "strike": [7500.0, 7500.0, 7500.0],
+                "right": ["C", "C", "C"],
+                "net_volume": [70.0, 80.0, 999.0],
+            }
+        ),
+        path,
+    )
     assert netflow_at_cutoff(path, PREV) == {(7500.0, "C"): 80.0}
 
 
@@ -141,7 +198,10 @@ def _seed_day(
         "ES",
         expiry,
         PREV,
-        [NetFlowRow(ts_min=ts, strike=strike, right="C", net_volume=net) for strike in strikes],
+        [
+            NetFlowRow(ts_min=ts, strike=strike, right="C", net_volume=net, source=SOURCE_MIDPOINT)
+            for strike in strikes
+        ],
     )
     oi_repo.upsert_many(
         [OIRecord("ES", expiry, strike, "C", PREV, 1000.0) for strike in strikes],
@@ -285,7 +345,12 @@ def test_collect_vikend_nic_pondeli_proti_patku(tmp_path: Path) -> None:
         "ES",
         expiry,
         friday,
-        [NetFlowRow(ts_min=ts, strike=strike, right="C", net_volume=100.0) for strike in strikes],
+        [
+            NetFlowRow(
+                ts_min=ts, strike=strike, right="C", net_volume=100.0, source=SOURCE_MIDPOINT
+            )
+            for strike in strikes
+        ],
     )
     for day in (friday, saturday, sunday):  # víkendové klíče = kopie pátku
         oi_repo.upsert_many(
@@ -316,7 +381,10 @@ def _write_netflow(settings: Settings, strikes: list[float], net: float = 100.0)
         "ES",
         EXPIRY,
         PREV,
-        [NetFlowRow(ts_min=ts, strike=strike, right="C", net_volume=net) for strike in strikes],
+        [
+            NetFlowRow(ts_min=ts, strike=strike, right="C", net_volume=net, source=SOURCE_MIDPOINT)
+            for strike in strikes
+        ],
     )
 
 

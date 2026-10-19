@@ -265,7 +265,7 @@ FLOW_SCHEMA = pa.schema(
         # podkladu (běh bez tasty větve) nebo partice vznikla před #829.
         ("futures_cvd_delta", pa.float64()),
         ("futures_cvd", pa.float64()),
-        # Zdroj znaménka toku (ADR-0032): "midpoint" / "dxfeed"; NULL = partice
+        # Zdroj znaménka toku (ADR-0057): "midpoint" / "aggressor"; NULL = partice
         # před #615 fází 3 (= midpoint). Srovnání řad před/po stojí na něm.
         ("source", pa.string()),
         # Pokrytí trade větví za minutu (#1071): do teď jen v živém /status
@@ -380,15 +380,21 @@ CATCHUP_SCHEMA = pa.schema(
 
 # Čistý klasifikovaný objem per strana (#232, ADR-0011 fáze 2) — KUMULATIV dne
 # k dané minutě (buy − sell v kontraktech, znaménko z klasifikace agresora).
-# Zapisují se jen strany s nenulovým netem: řada je vstup ranní kalibrace α
-# a zpětné validace směru (znaménko net vs. znaménko ΔOI); nulové řádky by ji
-# jen nafukovaly. Vlastní řada, ne sloupec ve SNAPSHOT_SCHEMA (ADR-0005/0008).
+# Řada je vstup ranní kalibrace α, zpětné validace směru (znaménko net vs.
+# znaménko ΔOI) a navázání kumulativu po restartu a v rollu. Zapisuje se každá
+# sledovaná strana, i s netem 0 (#1582): explicitní 0 = naměřená nula, chybějící
+# řádek = strana se nesleduje. Vlastní řada, ne sloupec ve SNAPSHOT_SCHEMA
+# (ADR-0005/0008).
 NETFLOW_SCHEMA = pa.schema(
     [
         ("ts_min", pa.timestamp("us", tz="UTC")),
         ("strike", pa.float64()),
         ("right", pa.string()),
         ("net_volume", pa.float64()),
+        # Zdroj znaménka netu (ADR-0057 bod 8, hodnoty jako `flow.source`);
+        # NULL = partice před #1460 (= midpoint). Navázání po restartu i čtenáři
+        # rozliší řádky podle zdroje, ne podle data.
+        ("source", pa.string()),
     ]
 )
 
@@ -505,10 +511,10 @@ class FlowRowLike(Protocol):
     def ts_min(self) -> dt.datetime: ...
 
     @property
-    def flow_delta(self) -> float: ...
+    def flow_delta(self) -> float | None: ...
 
     @property
-    def cum_delta(self) -> float: ...
+    def cum_delta(self) -> float | None: ...
 
     @property
     def futures_cvd_delta(self) -> float | None: ...
@@ -607,12 +613,17 @@ class PrintVolRow:
 
 @dataclass(frozen=True)
 class NetFlowRow:
-    """Kumulativní čistý klasifikovaný objem strany k minutě (#232, ADR-0011)."""
+    """Kumulativní čistý klasifikovaný objem strany k minutě (#232, ADR-0011).
+
+    `source` je povinný (#1460): zapomenutý zdroj by se při čtení tiše vydával
+    za midpoint (NULL).
+    """
 
     ts_min: dt.datetime
     strike: float
     right: str
     net_volume: float
+    source: str
 
 
 @dataclass(frozen=True)
@@ -715,7 +726,7 @@ class FeatureRow:
     call_wall: float | None
     put_wall: float | None
     max_pain: float | None
-    cum_delta: float
+    cum_delta: float | None  # None = mezera měření CumΔ (ADR-0057 bod 3)
     call_flow: float
     put_flow: float
     opt_vol: float
@@ -1323,9 +1334,10 @@ class SnapshotWriter:
     def write_dx_flow(self, symbol: str, day: dt.date, rows: Sequence[object]) -> Path:
         """Stínové CumΔ minuty (#615) do derived/{sym}/cumdelta_dx/{date}.parquet.
 
-        Retence derived/ (14 dní) tu stačí: řada slouží ~10sekčnímu měření
-        pro spread_leg ADR a vyčíslení rozdílu vs. živé CumΔ. Upsert podle
-        `ts_min` (#1070): restart uprostřed minuty by jinak zapsal minutu dvakrát.
+        `derived/` je věčný archiv (ADR-0029): řada je vstup replaye
+        a walk-forwardu v6 pro seance před nasazením (ADR-0057 bod 7). Upsert
+        podle `ts_min` (#1070): restart uprostřed minuty by jinak zapsal minutu
+        dvakrát. Konvence štítku viz `DxFlowRow` (#1586).
         """
         buffer = self._buffer(self.dx_flow_path(symbol, day), DX_FLOW_SCHEMA)
         return buffer.append_and_write(
@@ -1439,6 +1451,7 @@ def read_netflow_latest(
     *,
     start: dt.datetime | None = None,
     end: dt.datetime | None = None,
+    sources: frozenset[str | None] | None,
 ) -> dict[tuple[float, str], float]:
     """Poslední kumulativní net per strana z partice netflow (#232).
 
@@ -1449,23 +1462,31 @@ def read_netflow_latest(
     `start`/`end` (#638): jen řádky v okně [start, end) — kumulativ je od #638
     kotvený na Globex seanci, takže seed nesmí přenést stav PŘEDCHOZÍ seance
     ležící v téže UTC partici (engine spadlý před 17:00 CT).
+
+    `sources` (#1460): jen řádky s hodnotou `source` z množiny (NULL = partice
+    před #1460, viz `compute/cumdelta.stored_sources`); None = bez filtru zdroje.
+    Řádek s NULL netem se přeskakuje — není to měření, ne nula. Čte se přes
+    `schema=`, takže staré partice bez sloupce `source` nespadnou.
     """
     if not path.exists():
         return {}
     table = pq.read_table(path, schema=NETFLOW_SCHEMA)
     latest: dict[tuple[float, str], tuple[dt.datetime, float]] = {}
     columns = [
-        table.column(name).to_pylist() for name in ("ts_min", "strike", "right", "net_volume")
-    ]  # noqa: E501
-    for ts, strike, right, net in zip(*columns, strict=True):
-        if ts is None:
+        table.column(name).to_pylist()
+        for name in ("ts_min", "strike", "right", "net_volume", "source")
+    ]
+    for ts, strike, right, net, source in zip(*columns, strict=True):
+        if ts is None or net is None:
             continue
         if (start is not None and ts < start) or (end is not None and ts >= end):
+            continue
+        if sources is not None and source not in sources:
             continue
         key = (float(strike), str(right))
         current = latest.get(key)
         if current is None or ts >= current[0]:
-            latest[key] = (ts, float(net) if net is not None else 0.0)
+            latest[key] = (ts, float(net))
     return {key: net for key, (_, net) in latest.items()}
 
 
@@ -1530,25 +1551,34 @@ def read_last_cum_delta(
     *,
     start: dt.datetime,
     end: dt.datetime,
+    sources: frozenset[str | None],
 ) -> float | None:
-    """Poslední `cum_delta` z flow partic v okně seance [start, end) (#638).
+    """Poslední měřená `cum_delta` zdroje z flow partic v okně seance [start, end) (#638).
 
     Navázání CumΔ po restartu uprostřed seance — seance může ležet ve dvou
     UTC particích (večer D−1 + D), proto seznam cest. Bez řádku v okně None.
     Blokující čtení — volat přes to_thread.
+
+    `sources` (#1460): jen řádky s hodnotou `source` z množiny (viz
+    `compute/cumdelta.stored_sources`). Řádek s NULL CumΔ (mezera trade
+    větve, ADR-0057 bod 3) se přeskakuje: kumulativ po mezeře pokračuje
+    od poslední měřené úrovně, ne od nuly.
     """
     best: tuple[dt.datetime, float] | None = None
     for path in paths:
         if not path.exists():
             continue
         table = pq.read_table(path, schema=FLOW_SCHEMA)
-        for ts, cum in zip(
+        for ts, cum, source in zip(
             table.column("ts_min").to_pylist(),
             table.column("cum_delta").to_pylist(),
+            table.column("source").to_pylist(),
             strict=True,
         ):
-            if ts is None or ts < start or ts >= end:
+            if ts is None or cum is None or ts < start or ts >= end:
+                continue
+            if source not in sources:
                 continue
             if best is None or ts >= best[0]:
-                best = (ts, float(cum) if cum is not None else 0.0)
+                best = (ts, float(cum))
     return best[1] if best is not None else None

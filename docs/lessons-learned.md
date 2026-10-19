@@ -291,6 +291,56 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-18 — netflow vynechával strany s netem 0, α ES vyšla o ~9 % nižší (#1582).**
+  Filtr `if net != 0.0` (od #232, bez ADR) slil „naměřená nula“ a „strana se nesleduje“ do
+  chybějícího řádku. Strana s návratem na 0 z partice zmizela a čtenáři „poslední řádek ≤ T“
+  (kalibrace α v řezu 21:00, navázání po restartu i v denním rollu) vzali její starou
+  nenulovou hodnotu. ES 7. 10. tím změnil znaménko mediánu bodu α. → Kumulativní řada, kterou
+  se čte „poslední hodnota“, zapisuje i nulu; chybějící řádek smí znamenat jen „neměří se“.
+  Test: návrat strany na 0 a navázání nového runtime (restart i roll ze sekundáru).
+
+- **2026-10-18 — navázání kumulativů po restartu nerozlišovalo zdroj ani mezeru (#1460).**
+  Seed CumΔ a netu bral poslední řádek seance bez ohledu na `source` a NULL četl jako 0.
+  `restore_net_volume` (`setdefault`) zahodil uložený základ strany, kterou tracker už měl.
+  Seed netu vynechal strany mimo pásmo a po rollu je dostane nový aktivní řetěz užší.
+  Pod v5 se neprojevil filtr zdroje, NULL ani přičítání (jeden zdroj, žádné NULL, mapa při
+  seedu prázdná). Vynechané strany mimo pásmo ano: pásmo je grow-only, takže nový runtime po
+  restartu uprostřed seance nebo po rollu v settle začne užší. Strana se po rozšíření pásma
+  vrátila od nuly a řádek netflow přepsal uložený kumulativ (FA, bod α).
+  Pod v6 by ale engine nasazený v pauze 16:00–17:00 CT, která ještě patří seanci D, navázal
+  na midpointovou úroveň. Mezera by vynulovala CumΔ a tisky před prvním cyklem by se ztratily.
+  Odhalila to mapa čtenářů a zapisovačů pro ADR-0057. → Kumulativ navazovaný z partic se filtruje
+  podle zdroje, který ho vyrobil (`cumdelta.stored_sources`, NULL = starší konvence), a NULL
+  přeskakuje. Uložený základ se přičítá jako `restore_cum`. Test: restart v pauze po změně zdroje
+  nad particí ze starého image (`pq.write_table` bez nového sloupce); strana mimo pásmo po
+  restartu/rollu.
+
+- **2026-10-18 — verdikt minuty a obsah řádku pokrývaly různé intervaly (#1460, review 1a).**
+  Vzorek trade větve se bral na začátku iterace, tisky řádku se ale uzavíraly až po sweepu
+  (ES +20–35 s, NQ +40–55 s). Výpadek mezi vzorkem a uzávěrkou skončil v řádku označeném
+  za měřený a řádek po něm, úplný, dostal NULL. Roll seance po sweepu stejně tiše smazal tisky
+  od openu 17:00 CT v řádku, který vzorky označily za měřený. → Interval dat, o kterém rozhoduje
+  verdikt, se řeže v okamžiku vzorku (`CumDeltaTracker.seal`), ne v okamžiku zápisu; data jiné
+  periody, než ve které je stav, čekají stranou na její začátek, místo aby je reset smazal.
+  Test: pád streamu po vzorku a před uzávěrkou; tisk nové seance před rollem.
+
+- **2026-10-18 — přírůstek kumulativu přes mezeru v krmení připsán jedné minutě (#1460).**
+  `_last_volume` mazal jen roll seance, takže stav objemu kontraktu přežil cykly bez baru
+  (fallback řetězu s `volume=None`, kotace nad `quote_max_age_s`) a návratový bar připsal
+  přírůstek celé mezery jedné minutě. 2. 10. tak pod midpointem daly dvě minuty −948 455 CumΔ
+  a `printvol` 41 468 v jedné minutě (medián 81); příčinu našla až analýza dat (#1460, nález
+  16. 10.). Opačná strana téhož vzorce: bar s přírůstkem 0 z kotace v cache (křídla po 3
+  cyklech) vyprázdnil počítadla tisků a další bar připsal tisky dřívějších minut struktuře.
+  → Přírůstek kumulativu platí jen mezi dvěma pozorováními, mezi nimiž nic nechybí: stav pod
+  tisky drží jen z minulého cyklu (`_fed`, `begin_cycle`) a bar bez přírůstku interval tisků
+  neuzavírá. Počítadla vyprázdní bar s přírůstkem (rozklad), bar s poklesem kumulativu a bar,
+  který stav objemu zakládá (oba bez rozkladu); mezera v minutě baru nebo baru bez přírůstku
+  mezi tím = NULL. Výpadek mezi vzorkem a barem téže minuty to nepozná — bar po sweepu bere
+  i tisky po řezu vzorku, rozklad a pokrytí jsou proto jen metrika (ADR-0057 doplněk). Podíl
+  počítat jen z čitatele a jmenovatele téhož intervalu, bez jmenovatele `null`, ne 0.
+  Test: 30 cyklů bez baru a návrat +3000; fallback a stará kotace přes `run_cycle`; 2 bary
+  s přírůstkem 0 a pak +30 → rozklad (30, 30, 0), pod midpointem (v5) beze změny (30, 10, 20).
+
 - **2026-10-18 — široký OI z tasty se po prvním zápisu dne neobnovil, α NQ dostávala ΔOI = 0 (#1605), podruhé po #1314.**
   `wide_oi_once` měl psát jen striky mimo IBKR obálku a „co je pokryté" zjišťoval dotazem
   `values_for` na archiv dne. Ten vracel všechny řádky, i ty, které zapsal tasty sám: první běh

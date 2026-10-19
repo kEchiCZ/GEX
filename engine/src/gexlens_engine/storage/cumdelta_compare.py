@@ -43,7 +43,7 @@ Metriky (vše jen nad minutami, které mají OBĚ řady):
 - Shoda s cenou (`align_session`, verdikt #1018): korelace přírůstků obou
   řad s pohybem ceny futures a s CVD futures (agresor od burzy) v oknech
   1/5/15 min — která řada čte stranu agresora ve směru trhu.
-- Hybrid dnešního režimu `dxfeed` (`load_hybrid_parts`, #1459): stín tisků +
+- Zrušený hybrid `dxfeed` (do #1460; `load_hybrid_parts`, #1459): stín tisků +
   midpoint tok kontrakt-minut bez jediného tisku, složený z `printvol`,
   přírůstků `netflow` a delty ze `snapshots`; metoda se ověřuje rekonstrukcí
   celé živé midpoint řady proti uložené `flow_delta` (`HybridCheck`).
@@ -561,7 +561,7 @@ class PriceAlignment:
     cvd_vs_price: float | None
     dx_vs_cvd: float | None
     live_vs_cvd: float | None
-    #: Hybrid režimu `dxfeed` (#1459): stín + midpoint fallback; samotný
+    #: Hybrid režimu `dxfeed` (do #1460, #1459): stín + midpoint fallback; samotný
     #: fallback (kontrakt-minuty bez tisku). None = hybrid se nesložil.
     hybrid_vs_price: float | None = None
     hybrid_vs_cvd: float | None = None
@@ -608,7 +608,7 @@ def price_alignment(
 ) -> PriceAlignment:
     """Korelace minutových přírůstků (sečtených do oken) obou řad s cenou a CVD.
 
-    S `fallback_flow` (#1459) navíc hybrid režimu `dxfeed` = stín + fallback
+    S `fallback_flow` (#1459) navíc hybrid režimu `dxfeed` (do #1460) = stín + fallback
     a samotný fallback."""
     dx, live, price, flow = (window_sums(s, window) for s in (dx_flow, live_flow, returns, cvd))
     hybrid_vs_price = hybrid_vs_cvd = fallback_vs_price = None
@@ -667,7 +667,7 @@ def align_session(
 ) -> tuple[PriceAlignment, ...]:
     """Shoda s cenou pro všechna okna `ALIGNMENT_WINDOWS` jedné seance.
 
-    S `hybrid` (#1459) i hybrid režimu `dxfeed` a jeho fallback."""
+    S `hybrid` (#1459) i hybrid režimu `dxfeed` (do #1460) a jeho fallback."""
     dx, _, _ = load_dx_series(derived_dir, symbol, session)
     live, _ = load_live_series(derived_dir, symbol, session)
     returns = minute_returns(load_closes(derived_dir, symbol, session))
@@ -681,7 +681,7 @@ def align_session(
     )
 
 
-# ── Hybrid dnešního režimu `dxfeed` (#1459) ───────────────────────────────
+# ── Zrušený hybrid `dxfeed` (do #1460, #1459) ─────────────────────────────
 
 #: Kontrakt-minuta aktivního řetězu: (expirace, ts_min, strike, right)
 ContractMinute = tuple[str, dt.datetime, float, str]
@@ -698,9 +698,9 @@ MAX_RECON_REL_ERROR = 1e-3
 
 @dataclass(frozen=True)
 class HybridParts:
-    """Midpoint složky dnešního režimu `dxfeed` z uložených partic (#1459).
+    """Midpoint složky zrušeného hybridu `dxfeed` (do #1460) z uložených partic (#1459).
 
-    Režim `dxfeed` (`compute/cumdelta.add_bar`) dá midpoint znaménko celému
+    Režim `dxfeed` (`compute/cumdelta.add_bar` do #1460) dával midpoint znaménko celému
     přírůstku objemu kontrakt-minuty bez jediného tisku — `printvol.printed`
     0, nebo NULL, když trade větev neběžela (výpadek tasty). To je
     ``fallback_flow``; tisky se stranou nese stín `cumdelta_dx`, hybrid je
@@ -710,7 +710,7 @@ class HybridParts:
 
     Mimo: midpoint pro tisky bez strany. `printvol.printed` je zahrnuje,
     takže kontrakt-minuta jen s tisky bez strany tu není fallback, přestože
-    jí režim `dxfeed` dá midpoint celému přírůstku; u kontraktu s tisky se
+    jí režim `dxfeed` dával midpoint celému přírůstku; u kontraktu s tisky se
     stranou chybí midpoint jejich objemu. Počtem je to ~0,05 % tisků,
     objemem ES 1–15 % objemu tisků za den (medián ~6 %, bloky ≥ 100 lotů),
     NQ < 1 % (#1459). Podíl midpointu v hybridu je proto dolní mez proti
@@ -732,8 +732,9 @@ def net_increments(
 ) -> dict[ContractMinute, float]:
     """Minutové přírůstky kumulativního čistého objemu (`netflow`) per kontrakt.
 
-    `netflow` drží kumulativ seance per kontrakt a píše jen nenulové strany —
-    chybějící kontrakt v minutě, která v partici je, má nulu. `rows` jsou
+    `netflow` drží kumulativ seance per kontrakt; do #1582 psal jen nenulové
+    strany, od #1582 píše i 0 — chybějící kontrakt v minutě, která v partici
+    je, se proto čte jako nula (stará partice: návrat na 0). `rows` jsou
     řádky jedné seance (kumulativ začíná od nuly, `roll_session`). Partici
     jedné expirace plní v téže seanci jako sekundární řetěz do settle a jako
     aktivní po něm (#1182, `runtime.py`) — týž kumulativ pokračuje, proto
@@ -796,10 +797,10 @@ def hybrid_parts(
 def hybrid_flow(
     dx_flow: Mapping[dt.datetime, float], fallback_flow: Mapping[dt.datetime, float]
 ) -> dict[dt.datetime, float]:
-    """Minutový tok režimu `dxfeed`: tisky se stranou + midpoint fallback.
+    """Minutový tok režimu `dxfeed` (do #1460): tisky se stranou + midpoint fallback.
 
     Minuta bez stínu (tasty neběželo) nese jen fallback — v režimu `dxfeed`
-    tehdy midpoint klasifikuje celý přírůstek (`printvol.printed` NULL)."""
+    tehdy midpoint klasifikoval celý přírůstek (`printvol.printed` NULL)."""
     return {
         ts: dx_flow.get(ts, 0.0) + fallback_flow.get(ts, 0.0)
         for ts in set(dx_flow) | set(fallback_flow)
@@ -888,7 +889,7 @@ def load_snapshot_deltas(
 
 @dataclass(frozen=True)
 class HybridCheck:
-    """Hybrid režimu `dxfeed` za seanci (#1459): kontrola rekonstrukce a měřítko."""
+    """Hybrid režimu `dxfeed` (do #1460) za seanci (#1459): kontrola rekonstrukce a měřítko."""
 
     symbol: str
     session: dt.date

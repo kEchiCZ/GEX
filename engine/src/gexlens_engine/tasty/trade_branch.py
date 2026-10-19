@@ -1,0 +1,244 @@
+"""Trade větev CumΔ (ADR-0057 body 3 a 6, #1460) — trasy tisků a stav běhu.
+
+Tisk dxFeed `TimeAndSale` patří kontraktu aktivního nebo sekundárního řetězu
+jednoho instrumentu. Trasy (streamer symbol → spec) staví smyčka plánu
+subskripcí z kontraktů obou runtime; tisk jde do trackeru toho řetězu.
+
+Trade větev řetězu „běží" = připojený stream ∧ trasy patří běžícímu řetězu
+(expirace sedí — po rollu v settle až po obnově plánu) ∧ univerzum nemlčí déle
+než práh hlídače ticha (`SILENT_RTH_S` / `SILENT_GLOBEX_S`, bez nové konstanty).
+Orchestrátor z toho každou minutu dává trackerům vzorek (`observe`) a v témž
+okamžiku řeže jejich tisky (`seal`): interval řádku leží mezi dvěma vzorky,
+takže oba jeho konce pokrývá vzorek. Verdikt minuty ze vzorků zafixuje
+`begin_cycle` v `run_cycle` (`compute/cumdelta.py`).
+
+Zdroj `midpoint` (mechanika v5) verdikt nečte a tisky jen měří pokrytí:
+trasy aktivní části doručují jako dřív i po rollu, sekundární část tisky
+nedoručuje (jako před #1460 — net sekundáru dává bar větev).
+"""
+
+import datetime as dt
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Protocol
+
+from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
+from gexlens_engine.compute.settle import session_bounds, trading_session_date
+from gexlens_engine.ibkr.discovery import OptionContractSpec
+from gexlens_engine.tasty.watchdog import SILENT_GLOBEX_S, SILENT_RTH_S
+
+#: Stav trade větve aktivního řetězu v `/status` (ADR-0057 bod 10, jen API):
+#: běží · mezera (otevřený trh, větev neběží) · trh zavřený · bez tasty větve.
+#: Pod midpointem (v5) CumΔ neovlivňuje, jen ukazuje, co by v6 měřila.
+BRANCH_RUNNING = "running"
+BRANCH_GAP = "gap"
+BRANCH_CLOSED = "closed"
+BRANCH_OFF = "off"
+
+
+class RuntimeLike(Protocol):
+    @property
+    def expiry(self) -> str: ...
+
+    @property
+    def contracts(self) -> Sequence[OptionContractSpec]: ...
+
+    @property
+    def cum_delta(self) -> CumDeltaTracker | None: ...
+
+
+class PipelineLike(Protocol):
+    @property
+    def runtime(self) -> RuntimeLike: ...
+
+    @property
+    def next_runtime(self) -> RuntimeLike | None: ...
+
+
+@dataclass(frozen=True)
+class TradeRoutes:
+    """Trasy tisků jednoho instrumentu: streamer symbol → spec, zvlášť podle řetězu.
+
+    Expirace u každé části říká, kterému řetězu trasy patří — po rollu je aktivní
+    část vypršelá a sekundární patří novému aktivnímu řetězu, dokud smyčka plánu
+    trasy nepřestaví. Stín `cumdelta_dx` dostává jen aktivní část (ADR-0057 bod 7).
+    """
+
+    active_expiry: str
+    active: dict[str, OptionContractSpec]
+    next_expiry: str | None = None
+    next: dict[str, OptionContractSpec] = field(default_factory=dict)
+
+
+def build_routes(
+    pipe: PipelineLike, streamer_of: Callable[[OptionContractSpec], str | None]
+) -> TradeRoutes:
+    """Trasy z kontraktů aktivního i sekundárního runtime; kontrakt bez streameru vypadne."""
+
+    def part(runtime: RuntimeLike | None) -> dict[str, OptionContractSpec]:
+        routes: dict[str, OptionContractSpec] = {}
+        if runtime is None:
+            return routes
+        for spec in runtime.contracts:
+            streamer = streamer_of(spec)
+            if streamer is not None:
+                routes[streamer] = spec
+        return routes
+
+    secondary = pipe.next_runtime
+    return TradeRoutes(
+        active_expiry=pipe.runtime.expiry,
+        active=part(pipe.runtime),
+        next_expiry=secondary.expiry if secondary is not None else None,
+        next=part(secondary),
+    )
+
+
+def route_trade(
+    routes: TradeRoutes, pipe: PipelineLike, streamer: str
+) -> tuple[CumDeltaTracker, OptionContractSpec] | None:
+    """Tracker a kontrakt, kam patří tisk streameru (ADR-0057 bod 6), nebo None.
+
+    Řetěz se určuje podle části tras, nikdy podle expirace kontraktu v okamžiku
+    tisku. Zdroj tisků bere jen trasy, které patří běžícímu řetězu: po rollu by
+    zastaralá část doručila tisky do trackeru jiné expirace (tisky D z aktivní
+    části do nového aktivního D+1, tisky D+1 ze sekundární do nového
+    sekundárního D+2) a změnila jeho pokrytí. Ten minutu stejně nepotvrdí
+    (`owned` v `TradeBranchMonitor`), dokud se trasy nepřestaví.
+
+    Midpoint (v5) doručuje jako před #1460: jen aktivní část do aktivního
+    trackeru, i nad zastaralými trasami; sekundární část nedoručuje nikam.
+    """
+    spec = routes.active.get(streamer)
+    secondary = spec is None
+    runtime: RuntimeLike | None
+    expiry: str | None
+    if spec is not None:
+        runtime, expiry = pipe.runtime, routes.active_expiry
+    else:
+        spec = routes.next.get(streamer)
+        if spec is None:
+            return None
+        runtime, expiry = pipe.next_runtime, routes.next_expiry
+    if runtime is None or runtime.cum_delta is None:
+        return None
+    tracker = runtime.cum_delta
+    if tracker.prints:
+        if runtime.expiry != expiry:
+            return None
+    elif secondary:
+        return None
+    return tracker, spec
+
+
+def trade_branch_running(
+    now: dt.datetime,
+    *,
+    connected: bool,
+    owned: bool,
+    last_event_at: dt.datetime | None,
+) -> bool:
+    """Běží trade větev řetězu v okamžiku `now` (ADR-0057 bod 3)?
+
+    Připojený stream ∧ trasy patří běžícímu řetězu ∧ poslední event univerza
+    (jakýkoli typ, mezera až když mlčí celé univerzum) není starší než práh
+    hlídače ticha — 180 s v US RTH, 600 s v Globexu. Ticho se počítá nejdřív od
+    openu seance: v 17:00 CT, v nedělním openu i po svátku by poslední event
+    z pauzy, pátku nebo svátku jinak dal mezeru hned v první minutě. Zavřený
+    trh řeší volající (`observe(market_closed=…)`), tady se nerozhoduje.
+    Vědomý limit (ADR): mlčící stream je do prahu „běžící", minuty jsou tok 0.
+    """
+    if not (connected and owned):
+        return False
+    session_open = session_bounds(trading_session_date(now))[0]
+    reference = session_open if last_event_at is None else max(last_event_at, session_open)
+    limit = SILENT_GLOBEX_S if outside_us_rth(now) else SILENT_RTH_S
+    return (now - reference).total_seconds() < limit
+
+
+class TradeBranchMonitor:
+    """Minutové vzorky trade větve pro trackery aktivního i sekundárního řetězu.
+
+    Vzorkuje se každý tracker každou iterací hlavní smyčky (i sekundár s cyklem
+    po N minutách — tracker drží AND přes celé své okno) a hned po vzorku se
+    jeho tisky řežou (`seal`): řádek M nese tisky (vzorek M−1, vzorek M]. Pád
+    spojení mezi vzorky pozná z počítadla reconnectů (roste s každým pádem
+    streamu): tisky z té doby chybí, i když stream teď zase běží — okno dostane
+    vzorek „neběží" a teprve pak stav v okamžiku vzorku. Řez leží v témž
+    okamžiku jako vzorek, takže mezerou je jen řádek s výpadkem, ne i ten
+    následující. Globální počítadlo stačí: všechny trackery se řežou najednou.
+    """
+
+    def __init__(self) -> None:
+        self._reconnects: int | None = None
+
+    def sample(
+        self,
+        now: dt.datetime,
+        pipes: Mapping[str, PipelineLike],
+        routes: Mapping[str, TradeRoutes],
+        *,
+        connected: bool,
+        reconnects: int,
+        last_event_among: Callable[[Iterable[str]], dt.datetime | None],
+    ) -> dict[str, str]:
+        """Dá vzorek všem trackerům a vrátí stav trade větve aktivního řetězu per symbol."""
+        dropped = self._reconnects is not None and reconnects != self._reconnects
+        self._reconnects = reconnects
+        market_closed = is_market_closed(now)
+        states: dict[str, str] = {}
+        for symbol, pipe in pipes.items():
+            symbol_routes = routes.get(symbol)
+            parts: list[tuple[RuntimeLike | None, str | None, dict[str, OptionContractSpec]]] = [
+                (
+                    pipe.runtime,
+                    symbol_routes.active_expiry if symbol_routes else None,
+                    symbol_routes.active if symbol_routes else {},
+                ),
+                (
+                    pipe.next_runtime,
+                    symbol_routes.next_expiry if symbol_routes else None,
+                    symbol_routes.next if symbol_routes else {},
+                ),
+            ]
+            primary_running = False
+            for index, (runtime, expiry, universe) in enumerate(parts):
+                if runtime is None:
+                    continue
+                owned = bool(universe) and runtime.expiry == expiry
+                running = trade_branch_running(
+                    now,
+                    connected=connected,
+                    owned=owned,
+                    last_event_at=last_event_among(universe) if owned else None,
+                )
+                if index == 0:
+                    primary_running = running and not dropped
+                tracker = runtime.cum_delta
+                if tracker is None:
+                    continue
+                if dropped:
+                    tracker.observe(running=False, market_closed=market_closed)
+                tracker.observe(running=running, market_closed=market_closed)
+                tracker.seal()
+            if market_closed:
+                states[symbol] = BRANCH_CLOSED
+            else:
+                states[symbol] = BRANCH_RUNNING if primary_running else BRANCH_GAP
+        return states
+
+
+def observe_without_branch(now: dt.datetime, pipes: Mapping[str, PipelineLike]) -> dict[str, str]:
+    """Bez tasty větve trade větev neběží: za otevřeného trhu mezera, za zavřeného nula.
+
+    Řez (`seal`) i tady: bez něj by `begin_cycle` minutu nepotvrdil ani za
+    zavřeného trhu.
+    """
+    market_closed = is_market_closed(now)
+    for pipe in pipes.values():
+        for runtime in (pipe.runtime, pipe.next_runtime):
+            if runtime is not None and runtime.cum_delta is not None:
+                runtime.cum_delta.observe(running=False, market_closed=market_closed)
+                runtime.cum_delta.seal()
+    return dict.fromkeys(pipes, BRANCH_OFF)
