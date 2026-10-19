@@ -756,6 +756,43 @@ def week_of(day: dt.date) -> dt.date:
 # ----------------------------------------------------------------- analýzy
 
 
+def regime_weeks(bars: pd.DataFrame, start: dt.date, end: dt.date) -> list[dict[str, Any]]:
+    """Režimový průřez okna (#1113 bod 1, metodika 13. 9.): výnos a rozpětí týdne.
+
+    Výnos = close posledního baru před settle pátku proti close před settle předchozí
+    obchodní seance; rozpětí = (max high − min low) mezi nimi / referenční close.
+    Když bary před oknem chybí, referencí je open první seance týdne (`ref` = open).
+    """
+    minute = pd.Timedelta(minutes=1)
+    days = [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]
+    sessions = [day for day in days if is_trading_session(day)]
+    out: list[dict[str, Any]] = []
+    for week in sorted({week_of(day) for day in sessions}):
+        in_week = [day for day in sessions if week_of(day) == week]
+        prev = in_week[0] - dt.timedelta(days=1)
+        while not is_trading_session(prev):
+            prev -= dt.timedelta(days=1)
+        prev_settle = settle_ts(prev)
+        settle = settle_ts(in_week[-1])
+        part = bars.loc[prev_settle : settle - minute]
+        before = bars.loc[: prev_settle - minute, "close"]
+        if len(before) and before.index[-1] >= prev_settle - pd.Timedelta(minutes=5):
+            ref, ref_kind = float(before.iloc[-1]), "settle"
+        else:
+            part = bars.loc[session_bounds(in_week[0])[0] : settle - minute]
+            ref, ref_kind = float(part["open"].iloc[0]), "open"
+        out.append(
+            {
+                "week": week,
+                "sessions": len(in_week),
+                "ref": ref_kind,
+                "return": float(part["close"].iloc[-1]) / ref - 1,
+                "range": float(part["high"].max() - part["low"].min()) / ref,
+            }
+        )
+    return out
+
+
 def coverage(rows: pd.DataFrame, sl: Slice) -> list[dict[str, Any]]:
     """Kap. 1: seance, minuty tendence v RTH, minuty s výnosem, díry per týden."""
     out: list[dict[str, Any]] = []
@@ -1317,6 +1354,36 @@ def render(results: dict[str, Any]) -> str:
             )
         )
         add("")
+    add("**Režim týdnů** (z barů, metodika 13. 9.)")
+    add("")
+    add(
+        "Výnos = close před settle pátku proti close před settle předchozí obchodní seance; "
+        "rozpětí = (max high − min low) v týdnu / referenční close. „od open“ = bary před "
+        "oknem chybí, referencí je open první seance týdne."
+    )
+    add("")
+    regime_rows = [
+        [
+            day_label(row["week"]),
+            row["sessions"],
+            *[
+                f"{fmt_num(100 * item['return'], 2)} % / {fmt_pct(item['range'], 2)}"
+                + (" (od open)" if item["ref"] == "open" else "")
+                for item in (
+                    next(r for r in results[symbol]["regime"] if r["week"] == row["week"])
+                    for symbol in SYMBOLS
+                )
+            ],
+        ]
+        for row in results[SYMBOLS[0]]["regime"]
+    ]
+    add(
+        md_table(
+            ["týden", "seancí", *[f"{symbol} výnos / rozpětí" for symbol in SYMBOLS]],
+            regime_rows,
+        )
+    )
+    add("")
 
     # 2. dostupnost
     add("## 2. Dostupnost hlasů")
@@ -2207,7 +2274,11 @@ def analyze_symbol(
         "spot": spot_check(rows[in_rth]),
     }
     slices = make_slices(rows, symbol, reps, seed)
-    out: dict[str, Any] = {"checks": checks, "slices": {}}
+    out: dict[str, Any] = {
+        "checks": checks,
+        "regime": regime_weeks(bars, start, end),
+        "slices": {},
+    }
     for key, sl in slices.items():
         print(f"  {symbol} {sl.label}: {len(sl.frame)} minut, {len(sl.boot.sessions)} seancí")
         entry: dict[str, Any] = {
