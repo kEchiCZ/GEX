@@ -49,7 +49,7 @@ from gexlens_engine.compute.facalibration import (
     update_alpha,
 )
 from gexlens_engine.compute.marketclock import daily_close_utc
-from gexlens_engine.compute.settle import is_trading_session, session_bounds
+from gexlens_engine.compute.settle import is_trading_session, session_bounds, settle_ts
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS
 from gexlens_engine.storage.fa_validation import PublicationUtc, measured_oi_pair
 from gexlens_engine.storage.oi_archive import OIEodRepository
@@ -99,6 +99,10 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
 #: Den pod tisky je dokončený, má-li netflow řádek nejvýš tolik minut před řezem
 #: (po rollu v settle je řetěz aktivní a píše každou minutu)
 DAY_END_TOLERANCE_MIN = 5
+#: Mezera rollu v settle: souvislá řada minut mezery, která začne nejpozději
+#: tolik minut po settle seance. Roll zastaví pipeline a nová nad týmž řetězem
+#: měří až po obnově tras (ADR-0057 bod 3), jinak by roll zablokoval α každý den
+ROLL_GAP_START_MIN = 5
 
 
 @dataclass(frozen=True)
@@ -318,11 +322,39 @@ def _session_gaps(exp_dir: Path, session: dt.date) -> list[dt.datetime]:
     """
     start = session_bounds(session)[0]
     cutoff = daily_close_utc(session)
-    gaps: list[dt.datetime] = []
+    gaps: set[dt.datetime] = set()
     for day in sorted({start.date(), session}):
         path = exp_dir / "netgap" / f"{day.isoformat()}.parquet"
-        gaps.extend(ts for ts in read_netgap_minutes(path) if start <= ts <= cutoff)
+        gaps.update(ts for ts in read_netgap_minutes(path) if start <= ts <= cutoff)
     return sorted(gaps)
+
+
+def _roll_gap(gaps: list[dt.datetime], session: dt.date) -> list[dt.datetime]:
+    """Minuty mezery rollu v settle seance: souvislá řada od začátku do `ROLL_GAP_START_MIN`.
+
+    Vědomý limit (#1460, k potvrzení vlastníkem v PR): tisky kalibrovaného
+    řetězu od jeho posledního zápisu jako sekundáru (každý N-tý cyklus) do
+    první měřené minuty nové pipeline (2–5 min) v netu chybí. Řada, která
+    začala před settle, je výpadek, ne roll.
+    """
+    settle = settle_ts(session)
+    present = set(gaps)
+    minute = dt.timedelta(minutes=1)
+    first = next(
+        (
+            ts
+            for ts in gaps
+            if settle <= ts <= settle + dt.timedelta(minutes=ROLL_GAP_START_MIN)
+            and ts - minute not in present
+        ),
+        None,
+    )
+    if first is None:
+        return []
+    run = [first]
+    while run[-1] + minute in present:
+        run.append(run[-1] + minute)
+    return run
 
 
 def netflow_at_cutoff(
@@ -355,8 +387,10 @@ def collect_alpha_calibration(
 ) -> AlphaCalibrationResult | None:
     """Spočítá a uloží chybějící kalibrační bod symbolu k dnešnímu OI archivu.
 
-    Netflow píše aktivní i sekundární řetěz (#1182); den má typicky dvě expirace
-    s daty a projde jen ta, která v den netflow ještě neexpirovala.
+    Netflow píše aktivní i sekundární řetěz (#1182). Pod v5 vyhrává
+    nejvzdálenější expirace s platným bodem: od rollu v settle (#1331, 7. 10.)
+    píše netflow dne D i D+2 (od ~20:05 UTC) a její bod 55 minut toku přebije
+    celodenní sekundár D+1 (#1580, past zůstává do bumpu v6).
     Bere se poslední archivní OBCHODNÍ den < today, který má netflow partici
     a OI v obou dnech; hotové dny přeskakuje (idempotentní dedup v historii).
     Víkendový `today` se nekalibruje (#1309): archiv soboty je kopie pátku,
@@ -541,6 +575,19 @@ def _day_complete(
     řada netflow musí končit nejvýš `DAY_END_TOLERANCE_MIN` před řezem.
     """
     gaps = _session_gaps(exp_dir, session)
+    roll = _roll_gap(gaps, session)
+    if roll:
+        logger.info(
+            "Kalibrace α %s %s %s: mezera rollu v settle %s–%s UTC (%d min) — vědomý limit",
+            symbol,
+            expiry,
+            session,
+            roll[0].strftime("%H:%M"),
+            roll[-1].strftime("%H:%M"),
+            len(roll),
+        )
+        rolled = set(roll)
+        gaps = [ts for ts in gaps if ts not in rolled]
     if gaps:
         logger.info(
             "Kalibrace α %s %s %s: mezera trade větve v %d minutách (první %s UTC) "

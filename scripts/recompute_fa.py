@@ -335,7 +335,12 @@ def apply(results: Sequence[SymbolReplay], prod: Engine) -> int:
             )
             written += 1
             if last and item.new_alpha is not None:
-                alpha_prod.set_state(item.symbol, item.new_alpha, item.new_days)
+                alpha_prod.set_state(
+                    item.symbol,
+                    item.new_alpha,
+                    item.new_days,
+                    source=row.source or SOURCE_MIDPOINT,
+                )
     return written
 
 

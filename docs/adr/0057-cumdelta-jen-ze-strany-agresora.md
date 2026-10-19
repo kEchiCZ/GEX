@@ -309,13 +309,19 @@ s vahou 0 (varianta 1).
     od běžné kadence neodliší.
   - Den bez bodu je i takový, jehož řada netflow končí víc než 5 min před řezem. Engine
     spadlý přes konec dne totiž značku do seance D nezapíše.
+  - **Výjimka: mezera rollu v settle.** Roll zastaví pipeline a nová nad kalibrovaným
+    řetězem měří až po obnově tras (bod 3), takže mezera vzniká každý den. Souvislá řada,
+    která začne do 5 min po settle (`ROLL_GAP_START_MIN`), bod neblokuje. V netu tak
+    chybí 2–5 min tisků (poslední zápis sekundáru → první měřená minuta). Bez výjimky
+    by kalibrace pod tisky nedala bod nikdy. Varianta čeká na potvrzení vlastníka v PR.
 - **Reset α při bumpu je automatický.** `fa_alpha` i `fa_alpha_history` nesou `source`
   (aditivní sloupec, NULL = midpoint).
   - Pod tisky se stav jiného zdroje bere jako nekalibrovaný a první bod jde přímo.
     Ruční `set_state(symbol, 0.0, 0)` z plánu 1a tím odpadá a nemůže se zapomenout.
   - FA vrstva dostane α až po 5 dnech kalibrace z tisků (`FA_MIN_DAYS`), do té doby
-    0, i bez stavu. Výchozí α z konfigurace se pod tisky nečte, takže „výchozí α 0“
-    z bodu 6 plní tato brána.
+    0, i bez stavu. Výchozí α z konfigurace se pod tisky nečte ani bez nastavené α
+    (start, chyba DB; `EngineRuntime.fa_alpha`), takže „výchozí α 0“ z bodu 6 plní
+    tato brána.
 - **Řez dne kalibrace α a FA validace** je 16:00 CT dne D (`marketclock.daily_close_utc`),
   bez přepínače. Pevných 21:00 UTC by od konce US letního času řízlo v 15:00 CT.
 - **Mimo část 1b** zůstávají dva podklady z dat: číselný práh parity stín ↔ 1A (bod 7)

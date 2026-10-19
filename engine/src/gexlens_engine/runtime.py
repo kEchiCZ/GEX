@@ -222,6 +222,19 @@ class EngineRuntime:
         if self.cum_delta is None:
             self.cum_delta = CumDeltaTracker(multiplier=self.multiplier, source=LIVE_SOURCE)
 
+    def fa_alpha(self) -> float:
+        """α FA odhadu: kalibrovaná (`flow_alpha`), jinak pod v5 konfigurace.
+
+        Pod tisky (ADR-0057 bod 6) bez nastavené α platí 0 = FA vypnutá — po
+        startu před prvním obnovením α, bez repozitáře i při chybě čtení DB.
+        Výchozí α z konfigurace by FA pustila nekalibrovanou.
+        """
+        if self.flow_alpha is not None:
+            return self.flow_alpha
+        tracker = self.cum_delta
+        assert tracker is not None  # nastaven v __post_init__
+        return 0.0 if tracker.prints else self.settings.flow_oi_alpha
+
     async def _oi_walls(self, day: dt.date, spot: float) -> OiWalls | None:
         """OI zdi z denního archivu; None = archiv pro den nic nemá (#851).
 
@@ -776,7 +789,7 @@ class EngineRuntime:
         # aktivní řetěz, net měří i sekundár (vstup kalibrace α, #1182);
         # α = 0 odhad vypíná. Jediný odhad (compute/flowoi.oi_estimate) sdílí
         # FA levels, FA Dyn GEX profil/pole i řadu oiest — TENTÝŽ model.
-        alpha = self.flow_alpha if self.flow_alpha is not None else self.settings.flow_oi_alpha
+        alpha = self.fa_alpha()
         fa_oi: dict[OptionContractSpec, float] = {}
         # Po restartu uprostřed dne naváže kumulativ z partice netflow —
         # jinak by odhad začínal od nuly a zahodil celý dopolední tok

@@ -771,6 +771,7 @@ def _prints_runtime(
 async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
     """ADR-0057 bod 3–4: minuta s mezerou má ve flow NULL, netflow ani FA vrstvu nepíše."""
     engine_runtime, publisher, settings, tracker = _prints_runtime(tmp_path)
+    engine_runtime.flow_alpha = 0.4  # kalibrovaná α z tisků — bez ní FA pod v6 nejede
     c = _spec(7600.0, "C")
     tracker.add_dx_trade(c, 3.0, "BUY", 0.5)  # tisk před prvním cyklem: částečná minuta
     _sample(tracker, running=True)
@@ -883,6 +884,31 @@ async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path, mechanics: str)
     for series in ("levelsfa", "oiest", "gexprofilefa", "gexfieldfa"):
         assert not (base / series / f"{day}.parquet").exists(), series
         assert f"{series}.ES.20260716" not in channels, series
+
+
+async def test_v6_bez_kalibrace_fa_nejede_ani_s_vychozi_alfou(tmp_path: Path) -> None:
+    """Nález kontroly 1b: pod tisky bez `flow_alpha` (start, chyba DB) platí α 0, ne 0,4."""
+    engine_runtime, publisher, settings = build_runtime(tmp_path, RisingVolumeStreamer())
+    assert settings.flow_oi_alpha > 0
+    prints = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    engine_runtime.cum_delta = prints
+    assert engine_runtime.flow_alpha is None and engine_runtime.fa_alpha() == 0.0
+    prints.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+    for minute in range(2):
+        if minute == 1:
+            prints.add_dx_trade(_spec(7600.0, "C"), 3.0, "BUY", 0.5)
+        _sample(prints, running=True)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    day = TS.date().isoformat()
+    base = settings.derived_dir / "ES" / "20260716"
+    assert (base / "netflow" / f"{day}.parquet").exists()  # měřená data se píší dál
+    for series in ("levelsfa", "oiest", "gexprofilefa", "gexfieldfa"):
+        assert not (base / series / f"{day}.parquet").exists(), series
+    # Pod v5 zůstává výchozí α z konfigurace
+    (tmp_path / "v5").mkdir()
+    v5_runtime, _publisher, v5_settings = build_runtime(tmp_path / "v5", RisingVolumeStreamer())
+    assert v5_runtime.fa_alpha() == v5_settings.flow_oi_alpha
 
 
 async def test_forming_bar_published_and_written_as_provisional(

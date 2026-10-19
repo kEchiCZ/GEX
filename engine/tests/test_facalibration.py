@@ -726,3 +726,87 @@ def test_ensure_schema_doplni_sloupec_source_do_stare_tabulky(tmp_path: Path) ->
     state = repo.get("ES")
     assert state is not None and state.alpha == 0.505 and state.source is None
     assert live_alpha(state, prints=True) == 0.0
+
+
+def _gaps(settings: Settings, expiry: str, day: dt.date, *times: dt.time) -> None:
+    SnapshotWriter(settings).write_netgap(
+        "ES",
+        expiry,
+        day,
+        [NetGapRow(ts_min=dt.datetime.combine(day, at, tzinfo=dt.UTC)) for at in times],
+    )
+
+
+@pytest.mark.parametrize(
+    ("times", "point"),
+    [
+        # Roll v settle 16:00 ET = 20:00 UTC: nová pipeline nad D+1 měří až po obnově tras
+        ((dt.time(20, 1), dt.time(20, 2)), True),
+        # Za rollem další mezera v poslední hodině Globexu = výpadek
+        ((dt.time(20, 1), dt.time(20, 30)), False),
+        # Řada začala před settle — výpadek, který roll jen prodloužil
+        ((dt.time(19, 58), dt.time(19, 59), dt.time(20, 0), dt.time(20, 1)), False),
+        # Řada začne až 6 min po settle — mimo okno rollu
+        ((dt.time(20, 6),), False),
+    ],
+)
+def test_v6_mezera_rollu_v_settle_je_vedomy_limit(
+    tmp_path: Path, times: tuple[dt.time, ...], point: bool
+) -> None:
+    """Nález kontroly 1b: roll zastaví pipeline, nová nad D+1 začíná mezerou — každý den.
+
+    Bez výjimky by kalibrace pod tisky nedala bod nikdy. Výjimka platí jen pro
+    souvislou řadu, která začne do ROLL_GAP_START_MIN po settle.
+    """
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_v6(settings, oi_repo, EXPIRY_D1)
+    _gaps(settings, EXPIRY_D1, PREV, *times)
+    result = _collect_v6(settings, oi_repo, alpha_repo)
+    assert (result is not None) is point
+
+
+def test_v6_pondeli_proti_patku_a_vikend(tmp_path: Path) -> None:
+    """Obchodní den (#1309): pondělí kalibruje pátek nad pondělním řetězem, víkend nic."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    friday, saturday, monday = dt.date(2026, 8, 7), dt.date(2026, 8, 8), dt.date(2026, 8, 10)
+    expiry = "20260810"  # sekundár celou páteční seanci = první expirace po pátku
+    strikes = [7500.0 + 10 * i for i in range(5)]
+    writer = SnapshotWriter(settings)
+    for at in (dt.time(14, 0), dt.time(20, 58)):
+        writer.write_netflow(
+            "ES",
+            expiry,
+            friday,
+            [
+                NetFlowRow(
+                    ts_min=dt.datetime.combine(friday, at, tzinfo=dt.UTC),
+                    strike=strike,
+                    right="C",
+                    net_volume=100.0,
+                    source=SOURCE_AGGRESSOR,
+                )
+                for strike in strikes
+            ],
+        )
+    for day, oi in ((friday, 1000.0), (saturday, 1000.0), (monday, 1040.0)):
+        oi_repo.upsert_many(
+            [OIRecord("ES", expiry, strike, "C", day, oi) for strike in strikes],
+            _after_pub(settings, day),
+        )
+
+    def collect(today: dt.date) -> AlphaCalibrationResult | None:
+        return collect_alpha_calibration(
+            "ES",
+            settings.derived_dir,
+            oi_repo,
+            alpha_repo,
+            today,
+            publication_utc=settings.oi_publication_utc,
+            cumdelta_prints=True,
+        )
+
+    assert collect(saturday) is None
+    assert collect(dt.date(2026, 8, 9)) is None  # neděle
+    result = collect(monday)
+    assert result is not None and result.day == friday and result.expiry == expiry
+    assert result.point.ratio_median == pytest.approx(0.4)

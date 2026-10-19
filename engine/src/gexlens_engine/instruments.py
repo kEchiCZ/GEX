@@ -954,10 +954,8 @@ class InstrumentPipeline:
             )
 
     def _current_alpha(self) -> float:
-        """Aktuálně platná α symbolu: kalibrovaná z runtime, jinak konfigurace."""
-        if self.runtime.flow_alpha is not None:
-            return self.runtime.flow_alpha
-        return self.settings.flow_oi_alpha
+        """Aktuálně platná α symbolu: kalibrovaná z runtime, jinak konfigurace (v6: 0)."""
+        return self.runtime.fa_alpha()
 
     async def _run_alpha_calibration(self, today: dt.date) -> None:
         """Ranní kalibrace α (#232 fáze 2): včerejší netflow vs. skutečné ΔOI.

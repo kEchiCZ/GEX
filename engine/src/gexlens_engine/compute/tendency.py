@@ -69,10 +69,11 @@ WEIGHTS: dict[str, float] = {
     "charm_flow": 1.0,
     "vanna_flow": 1.0,
 }
-#: v5 (E-0.12 varianta C, Rozhodnuto 19. 10. v #1385): poloha mezi zdmi nemá
-#: na RTH 14. 9.–16. 10. žádný edge (ES r30 −0,055*, NQ −0,011) a ve v4 ředila
-#: skóre i jako nulový hlas. Hlas se dál počítá a ukládá s vahou 0 — rozpad ho
-#: ukáže a další revize ho přepočítá offline (#394 issuecomment-6266877618)
+#: v5 (E-0.12 varianta C, Rozhodnuto 19. 10. v #1385): poloha mezi zdmi šla
+#: na RTH 14. 9.–16. 10. proti pohybu (r30 ES −0,106*, NQ −0,084; #394
+#: issuecomment-6257078018) a ve v4 ředila skóre i jako nulový hlas. Hlas se dál
+#: počítá a ukládá s vahou 0 — rozpad ho ukáže a další revize ho přepočítá
+#: offline (#394 issuecomment-6266877618)
 WEIGHTS_V5: dict[str, float] = {**WEIGHTS, "walls_distance": 0.0}
 
 
