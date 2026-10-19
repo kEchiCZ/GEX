@@ -2,15 +2,22 @@
 
 import datetime as dt
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.cumdelta import FlowRow
 from gexlens_engine.compute.gexfield import GexProfile, gamma_at_price
+from gexlens_engine.compute.setups import CUMDELTA_PRINTS
 from gexlens_engine.compute.tendency import (
     COMPONENT_CAP,
+    TENDENCY_RULES_V4,
+    TENDENCY_RULES_V5,
     TENDENCY_WEIGHTS_VERSION,
+    WEIGHTS,
+    WEIGHTS_V5,
     BandHysteresis,
     TendencyInputs,
     TendencyResult,
@@ -19,6 +26,7 @@ from gexlens_engine.compute.tendency import (
     evaluate_tendency,
 )
 from gexlens_engine.storage.tendency_store import TendencyRepository
+from gexlens_engine.tendency import TendencyEngine
 
 NOW = dt.datetime(2026, 7, 30, 14, 0, tzinfo=dt.UTC)
 
@@ -57,8 +65,7 @@ def test_component_votes_follow_legend_rules() -> None:
             put_wall_dom=0.3,  # silnější put zeď → long
             max_pain=7460.0,  # cena pod Max Pain → long
             centroid=7445.0,  # cena nad těžištěm → short
-            cum_delta_now=500.0,
-            cum_delta_then=300.0,  # roste → long
+            cum_delta_slope=200.0,  # roste → long
             price_then=7460.0,  # cena klesla a CumΔ roste → rozchod long
             call_flow=300.0,
             put_flow=100.0,  # převaha call → long (0,5)
@@ -173,9 +180,11 @@ def test_vanna_flow_needs_iv_trend() -> None:
     assert missing is None or "vanna_flow" not in {v.name for v in missing.votes}
 
 
-def test_weights_version_bumped_for_v4() -> None:
-    """v3 (#394): hystereze pásem; v4 (#1241): poloha mezi zdmi a Max Pain hlasují podmíněně."""
-    assert TENDENCY_WEIGHTS_VERSION == 4
+def test_weights_version_follows_mechanics() -> None:
+    """v4 (#1241) pod mechanikou v5; v5 (#1460) zapíná až bump mechaniky v6 (#1403)."""
+    assert TENDENCY_RULES_V4 == 4 and TENDENCY_RULES_V5 == 5
+    live = TENDENCY_RULES_V5 if CUMDELTA_PRINTS else TENDENCY_RULES_V4
+    assert live == TENDENCY_WEIGHTS_VERSION
 
 
 def test_trendovy_den_poloha_a_max_pain_nehlasuji_proti_pohybu() -> None:
@@ -321,7 +330,7 @@ def test_sentiment_reads_per_symbol_partition_and_warns_when_missing(
     engine = TendencyEngine.__new__(TendencyEngine)
     engine.symbol = "ES"
     engine.data_dir = tmp_path
-    engine._sent_cache = None
+    engine._sent_cache = {}
     engine._sent_missing_warned_at = None
     current, then = engine._sentiment(now)
     assert current == pytest.approx(0.25)
@@ -329,10 +338,213 @@ def test_sentiment_reads_per_symbol_partition_and_warns_when_missing(
 
     # NQ partici nemá → (None, None) + jeden warning, druhé volání v okně mlčí
     engine.symbol = "NQ"
-    engine._sent_cache = None
+    engine._sent_cache = {}
     with caplog.at_level(logging.WARNING, logger="gexlens_engine.tendency"):
         assert engine._sentiment(now) == (None, None)
         assert engine._sentiment(now + dt.timedelta(minutes=5)) == (None, None)
     warnings = [r for r in caplog.records if "SentIndex partice" in r.getMessage()]
     assert len(warnings) == 1
     assert "NQ" in warnings[0].getMessage()
+
+
+# ── Tendence v5 (#1460, mechanika v6) ─────────────────────────────────
+
+
+def test_v5_poloha_mezi_zdmi_hlasuje_s_vahou_nula() -> None:
+    """E-0.12 C (#1113): hlas se ukládá s vahou 0 a do skóre nevstupuje."""
+    assert WEIGHTS_V5["walls_distance"] == 0.0
+    assert {k: v for k, v in WEIGHTS_V5.items() if k != "walls_distance"} == {
+        k: v for k, v in WEIGHTS.items() if k != "walls_distance"
+    }
+    base = dict(flip=7440.0, centroid=7445.0)  # long 3 a short 1
+    walls = dict(call_wall=7500.0, put_wall=7400.0, spot=7410.0)  # u put zdi → +0,8
+    v5 = evaluate_tendency(inputs(**base, **walls), version=TENDENCY_RULES_V5)
+    v5_bez_zdi = evaluate_tendency(inputs(**base, spot=7410.0), version=TENDENCY_RULES_V5)
+    v4 = evaluate_tendency(inputs(**base, **walls), version=TENDENCY_RULES_V4)
+    assert v5 is not None and v5_bez_zdi is not None and v4 is not None
+    walls_vote = next(vote for vote in v5.votes if vote.name == "walls_distance")
+    assert walls_vote.vote == pytest.approx(0.8) and walls_vote.weight == 0.0
+    assert v5.score == pytest.approx(v5_bez_zdi.score)  # nulová váha skóre nemění
+    assert v5.weights_version == TENDENCY_RULES_V5
+    # v4: táž poloha skóre posouvá a nese váhu 1
+    assert v4.score > v5.score
+    assert next(vote for vote in v4.votes if vote.name == "walls_distance").weight == 1.0
+    assert v4.weights_version == TENDENCY_RULES_V4
+
+
+def test_v5_minuta_jen_s_nulovou_vahou_nema_skore() -> None:
+    """Stráž: hlasuje-li jen poloha mezi zdmi (v5 váha 0), výsledek je None, ne 0 / dělení nulou."""
+    only_walls = inputs(call_wall=7500.0, put_wall=7400.0, spot=7410.0)
+    assert evaluate_tendency(only_walls, version=TENDENCY_RULES_V5) is None
+    v4 = evaluate_tendency(only_walls, version=TENDENCY_RULES_V4)
+    assert v4 is not None and v4.score == pytest.approx(COMPONENT_CAP)
+
+
+@pytest.mark.parametrize(
+    ("minutes", "v4_votes", "v5_votes"),
+    [
+        (90.0, True, True),  # okraj okna T3
+        (0.0, True, True),  # settle
+        (-30.0, True, False),  # 30 min po settle: v4 hlasovala až do půlnoci UTC (#1584)
+        (1200.0, False, False),  # 00:01 UTC nového dne: ~20 h do settle
+    ],
+)
+def test_v5_max_pain_jen_0_az_90_min_do_settle(
+    minutes: float, v4_votes: bool, v5_votes: bool
+) -> None:
+    case = inputs(max_pain=7460.0, minutes_to_close=minutes)
+    names_v4 = {vote.name for vote in _collect_votes(case, TENDENCY_RULES_V4)}
+    names_v5 = {vote.name for vote in _collect_votes(case, TENDENCY_RULES_V5)}
+    assert ("max_pain" in names_v4) is v4_votes
+    assert ("max_pain" in names_v5) is v5_votes
+
+
+def _engine(prints: bool, tmp_path: Path | None = None) -> TendencyEngine:
+    return TendencyEngine(
+        symbol="ES",
+        repository=None,  # type: ignore[arg-type]
+        oi_repository=None,  # type: ignore[arg-type]
+        publisher=None,  # type: ignore[arg-type]
+        data_dir=tmp_path,
+        cumdelta_prints=prints,
+    )
+
+
+def _feed(
+    engine: TendencyEngine,
+    start: dt.datetime,
+    end: dt.datetime,
+    flow: Mapping[dt.datetime, float | None] | None = None,
+) -> tuple[float | None, float | None]:
+    """Minuty [start, end] s flowΔ 5 (nebo z `flow`) a cenou 7400 + index; vrátí poslední."""
+    result: tuple[float | None, float | None] = (None, None)
+    ts = start
+    index = 0
+    while ts <= end:
+        delta = (flow or {}).get(ts, 5.0)
+        row = FlowRow(ts_min=ts, flow_delta=delta, cum_delta=None if delta is None else 0.0)
+        result = engine._slope_inputs(ts, 7400.0 + index, row)
+        ts += dt.timedelta(minutes=1)
+        index += 1
+    return result
+
+
+@pytest.mark.parametrize(
+    ("label", "open_utc"),
+    [
+        ("všední open, letní čas", dt.datetime(2026, 10, 14, 22, 0, tzinfo=dt.UTC)),
+        ("všední open, zimní čas", dt.datetime(2026, 11, 4, 23, 0, tzinfo=dt.UTC)),
+        ("nedělní open", dt.datetime(2026, 10, 18, 22, 0, tzinfo=dt.UTC)),
+    ],
+)
+def test_v5_sklon_nepresahuje_zacatek_seance(label: str, open_utc: dt.datetime) -> None:
+    """#1581, ADR-0057 bod 4: okno přes reset v 17:00 CT nehlasuje; první plné končí open + 9."""
+    engine = _engine(prints=True)
+    minute = dt.timedelta(minutes=1)
+    slope, _ = _feed(engine, open_utc - 15 * minute, open_utc + 8 * minute)
+    assert slope is None, label
+    slope, price_then = engine._slope_inputs(
+        open_utc + 9 * minute,
+        7500.0,
+        FlowRow(ts_min=open_utc + 9 * minute, flow_delta=5.0, cum_delta=0.0),
+    )
+    # (open − 1, open + 9]: 10 řádků nové seance po 5,0; cena hranice okna = open − 1
+    assert slope == pytest.approx(50.0), label
+    assert price_then == pytest.approx(7400.0 + 14), label
+
+
+def test_v5_sklon_mezera_a_stary_radek_flow() -> None:
+    """NULL v okně (mezera trade větve) i řádek z minulé minuty (pád cyklu) = sklon None."""
+    start = dt.datetime(2026, 10, 15, 14, 0, tzinfo=dt.UTC)
+    minute = dt.timedelta(minutes=1)
+    engine = _engine(prints=True)
+    slope, price_then = _feed(engine, start, start + 12 * minute, {start + 8 * minute: None})
+    assert slope is None
+    assert price_then == pytest.approx(7400.0 + 2)  # cena hranice okna rozchodu zůstává
+    # Okno bez mezery dá součet; řádek s ts minulé minuty se nepřidá
+    slope, _ = _feed(engine, start + 13 * minute, start + 19 * minute)
+    assert slope == pytest.approx(50.0)
+    stale = FlowRow(ts_min=start + 19 * minute, flow_delta=5.0, cum_delta=0.0)
+    slope, _ = engine._slope_inputs(start + 20 * minute, 7500.0, stale)
+    assert slope is None
+
+
+def test_v5_pauza_dava_sklon_nula() -> None:
+    """Za zavřeného trhu nese řada nuly: sklon 0 = měřený klid, ne None (ADR-0057 bod 2)."""
+    start = dt.datetime(2026, 10, 15, 21, 0, tzinfo=dt.UTC)  # pauza 16:00–17:00 CT
+    engine = _engine(prints=True)
+    zeros = {start + dt.timedelta(minutes=i): 0.0 for i in range(15)}
+    slope, _ = _feed(engine, start, start + dt.timedelta(minutes=14), zeros)
+    assert slope == 0.0
+
+
+def test_v4_sklon_beze_zmeny_rozdil_cum_delta() -> None:
+    """Pod mechanikou v5 zůstává rozdíl CumΔ přes 10 min, i přes reset seance (#1581, v4)."""
+    engine = _engine(prints=False)
+    start = dt.datetime(2026, 10, 14, 21, 55, tzinfo=dt.UTC)
+    result: tuple[float | None, float | None] = (None, None)
+    for index in range(11):
+        ts = start + dt.timedelta(minutes=index)
+        cum = 1000.0 if ts < dt.datetime(2026, 10, 14, 22, 0, tzinfo=dt.UTC) else 10.0 * index
+        result = engine._slope_inputs(
+            ts, 7400.0 + index, FlowRow(ts_min=ts, flow_delta=0.0, cum_delta=cum)
+        )
+    slope, price_then = result
+    assert slope == pytest.approx(100.0 - 1000.0)
+    assert price_then == pytest.approx(7400.0)
+
+
+def test_v5_hystereze_se_resetuje_otevrenim_seance() -> None:
+    """#1584 bod 2: v5 reset v 17:00 CT (22:00 UTC v létě, 23:00 v zimě), ne v 00:00 UTC."""
+    utc = dt.UTC
+    v5 = _engine(prints=True)
+    evening = v5._hysteresis_for(dt.datetime(2026, 10, 14, 21, 59, tzinfo=utc))
+    after_open = v5._hysteresis_for(dt.datetime(2026, 10, 14, 22, 0, tzinfo=utc))
+    assert after_open is not evening
+    assert v5._hysteresis_for(dt.datetime(2026, 10, 15, 0, 0, tzinfo=utc)) is after_open
+    winter = v5._hysteresis_for(dt.datetime(2026, 11, 4, 22, 30, tzinfo=utc))
+    assert v5._hysteresis_for(dt.datetime(2026, 11, 4, 23, 0, tzinfo=utc)) is not winter
+    # Neděle: víkend patří pondělní seanci až od nedělního openu
+    saturday = v5._hysteresis_for(dt.datetime(2026, 10, 17, 12, 0, tzinfo=utc))
+    sunday_open = v5._hysteresis_for(dt.datetime(2026, 10, 18, 22, 0, tzinfo=utc))
+    assert sunday_open is not saturday
+    # v4: reset v 00:00 UTC jako dosud
+    v4 = _engine(prints=False)
+    before = v4._hysteresis_for(dt.datetime(2026, 10, 14, 22, 0, tzinfo=utc))
+    assert v4._hysteresis_for(dt.datetime(2026, 10, 14, 23, 59, tzinfo=utc)) is before
+    assert v4._hysteresis_for(dt.datetime(2026, 10, 15, 0, 0, tzinfo=utc)) is not before
+
+
+def test_v5_sentindex_hodnota_pred_oknem_ze_vcerejsi_partice(tmp_path: Path) -> None:
+    """#1584 bod 3: okno přes půlnoc UTC najde hodnotu před oknem ve včerejší partici."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from gexlens_engine.tendency import SENTIMENT_SUBDIR
+
+    folder = tmp_path / "derived" / SENTIMENT_SUBDIR / "ES"
+    folder.mkdir(parents=True)
+    utc = dt.UTC
+    pq.write_table(
+        pa.table(
+            {
+                "ts_min": [
+                    dt.datetime(2026, 10, 15, 23, 50, tzinfo=utc),
+                    dt.datetime(2026, 10, 15, 23, 58, tzinfo=utc),
+                ],
+                "value": [0.10, 0.20],
+            }
+        ),
+        folder / "2026-10-15.parquet",
+    )
+    pq.write_table(
+        pa.table({"ts_min": [dt.datetime(2026, 10, 16, 0, 1, tzinfo=utc)], "value": [0.30]}),
+        folder / "2026-10-16.parquet",
+    )
+    now = dt.datetime(2026, 10, 16, 0, 5, tzinfo=utc)  # okno začíná 23:55 předchozího dne
+    current, then = _engine(prints=True, tmp_path=tmp_path)._sentiment(now)
+    assert current == pytest.approx(0.30)
+    assert then == pytest.approx(0.10)
+    current, then = _engine(prints=False, tmp_path=tmp_path)._sentiment(now)
+    assert current == pytest.approx(0.30)
+    assert then is None

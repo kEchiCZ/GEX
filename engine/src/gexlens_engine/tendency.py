@@ -13,12 +13,20 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
+from gexlens_engine.compute.cumdelta import flow_window_sum
 from gexlens_engine.compute.gexfield import gamma_at_price
-from gexlens_engine.compute.settle import settle_ts
-from gexlens_engine.compute.setups import max_pain_strike
-from gexlens_engine.compute.tendency import BandHysteresis, TendencyInputs, evaluate_tendency
+from gexlens_engine.compute.settle import settle_ts, trading_session_date
+from gexlens_engine.compute.setups import CUMDELTA_PRINTS, max_pain_strike
+from gexlens_engine.compute.tendency import (
+    TENDENCY_RULES_V4,
+    TENDENCY_RULES_V5,
+    BandHysteresis,
+    TendencyInputs,
+    evaluate_tendency,
+)
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import ArchiveVersion, OIEodRepository
+from gexlens_engine.storage.parquet_store import FlowRowLike
 from gexlens_engine.storage.tendency_store import TendencyRepository, votes_payload
 
 logger = logging.getLogger(__name__)
@@ -41,17 +49,28 @@ class TendencyEngine:
     oi_repository: OIEodRepository
     publisher: PublisherLike
     data_dir: Path | None = None
+    # Pravidla tendence v5 se zlomem mechaniky v6 (CumΔ z tisků, ADR-0057,
+    # #1460). Pole, ne čtení globálu, ať jde v testech přepnout (vzor
+    # `SetupEngine.cumdelta_prints`); pod v5 počítá tendence v4 jako dosud.
+    cumdelta_prints: bool = CUMDELTA_PRINTS
 
     def __post_init__(self) -> None:
-        # Historie (cum_delta, close) pro sklon a rozchod; +1 na okrajovou minutu
+        # v4: historie (cum_delta, close) pro sklon a rozchod; +1 na okrajovou minutu
         self._history: deque[tuple[dt.datetime, float, float]] = deque(
             maxlen=SLOPE_LOOKBACK_MIN + 1
         )
+        # v5: řádky flow (ts_min, flow_delta) pro `flow_window_sum` a cena
+        # minut okna pro rozchod — obojí včetně hraniční minuty okna
+        self._flow_rows: deque[tuple[dt.datetime, float | None]] = deque(
+            maxlen=SLOPE_LOOKBACK_MIN + 1
+        )
+        self._price_history: deque[tuple[dt.datetime, float]] = deque(maxlen=SLOPE_LOOKBACK_MIN + 1)
         self._prev_volumes: dict[object, float] = {}
         self._max_pain: float | None = None
         self._max_pain_loaded_for: tuple[str, dt.date, ArchiveVersion] | None = None
-        # Cache dnešní parquet řady SentIndexu (přepisuje se celá každý cyklus)
-        self._sent_cache: tuple[Path, float, list[tuple[dt.datetime, float]]] | None = None
+        # Cache parquet řad SentIndexu podle cesty: (mtime, řada). Dnešní partice
+        # se přepisuje celá každý cyklus; v5 čte po půlnoci UTC i včerejší
+        self._sent_cache: dict[Path, tuple[float, list[tuple[dt.datetime, float]]]] = {}
         self._sent_missing_warned_at: dt.datetime | None = None
         # ATM IV historie pro vanna hlas (#397)
         self._iv_history: deque[tuple[dt.datetime, float]] = deque(maxlen=IV_LOOKBACK_MIN + 1)
@@ -60,9 +79,16 @@ class TendencyEngine:
             maxlen=WALL_LOOKBACK_MIN + 1
         )
         # Hystereze pásma (#394) — resetuje se na přelomu dne (nový den nemá
-        # dědit rozpracované přepnutí ani pásmo včerejšího závěru)
+        # dědit rozpracované přepnutí ani pásmo včerejšího závěru). v4 klíčuje
+        # UTC dnem (reset v 00:00 UTC uprostřed seance), v5 obchodním dnem:
+        # reset v 17:00 CT, minuty pauzy patří končící seanci (#1584)
         self._hysteresis = BandHysteresis()
         self._hysteresis_day: dt.date | None = None
+
+    @property
+    def version(self) -> int:
+        """Verze pravidel tendence této instance (v5 jen se zlomem mechaniky v6)."""
+        return TENDENCY_RULES_V5 if self.cumdelta_prints else TENDENCY_RULES_V4
 
     @property
     def max_pain(self) -> float | None:
@@ -148,6 +174,32 @@ class TendencyEngine:
         """Minuty do settle dnešní seance (16:00 ET, #511); po close záporné (rampa → 0)."""
         return (settle_ts(now.date()) - now).total_seconds() / 60.0
 
+    def _sentiment_path(self, day: dt.date) -> Path:
+        assert self.data_dir is not None
+        return (
+            self.data_dir
+            / "derived"
+            / SENTIMENT_SUBDIR
+            / self.symbol
+            / f"{day.isoformat()}.parquet"
+        )
+
+    def _sentiment_series(self, path: Path) -> list[tuple[dt.datetime, float]]:
+        """Řada (ts_min, hodnota) partice s cache podle mtime; výjimka = nečitelná."""
+        mtime = path.stat().st_mtime
+        cached = self._sent_cache.get(path)
+        if cached is None or cached[0] != mtime:
+            import pyarrow.parquet as pq
+
+            rows = pq.read_table(path).to_pylist()
+            cached = (mtime, [(row["ts_min"], float(row["value"])) for row in rows])
+            # Drží jen partice, které se ještě čtou (dnešní, v5 po půlnoci i včerejší)
+            self._sent_cache = {
+                key: value for key, value in self._sent_cache.items() if key.stem >= path.stem
+            }
+            self._sent_cache[path] = cached
+        return cached[1]
+
     def _sentiment(self, now: dt.datetime) -> tuple[float | None, float | None]:
         """Aktuální hodnota SentIndexu + hodnota před oknem z denní parquet partice.
 
@@ -155,32 +207,17 @@ class TendencyEngine:
         (ADR-0026, PR #658). Do 13. 9. 2026 se tu četla plochá cesta bez symbolu,
         která existovala jen do 31. 7. — hlas `sentindex` byl od 13. 8. tiše nula
         (#1136). Chybějící partice se proto loguje (škrceně), ne mlčí.
+        v5 hledá hodnotu před oknem i ve včerejší partici, když okno přesahuje
+        půlnoc UTC — v4 ji v 00:00–00:09 UTC nenajde a hlas bere „roste“ (#1584).
         """
         if self.data_dir is None:
             return None, None
-        path = (
-            self.data_dir
-            / "derived"
-            / SENTIMENT_SUBDIR
-            / self.symbol
-            / f"{now.date().isoformat()}.parquet"
-        )
+        path = self._sentiment_path(now.date())
         try:
             if not path.exists():
                 self._warn_missing_sentiment(now, path)
                 return None, None
-            mtime = path.stat().st_mtime
-            if (
-                self._sent_cache is None
-                or self._sent_cache[0] != path
-                or self._sent_cache[1] != mtime
-            ):  # noqa: E501
-                import pyarrow.parquet as pq
-
-                rows = pq.read_table(path).to_pylist()
-                series = [(row["ts_min"], float(row["value"])) for row in rows]
-                self._sent_cache = (path, mtime, series)
-            series = self._sent_cache[2]
+            series = self._sentiment_series(path)
         except Exception:
             logger.exception("SentIndex partice %s nečitelná — složka bez dat", path)
             return None, None
@@ -188,11 +225,16 @@ class TendencyEngine:
             return None, None
         current = series[-1][1]
         threshold = now - dt.timedelta(minutes=SLOPE_LOOKBACK_MIN)
-        then = None
-        for ts_min, value in reversed(series):
-            if ts_min <= threshold:
-                then = value
-                break
+        then = _value_at_or_before(series, threshold)
+        if then is None and self.version >= TENDENCY_RULES_V5 and threshold.date() < now.date():
+            previous = self._sentiment_path(threshold.date())
+            try:
+                if previous.exists():
+                    then = _value_at_or_before(self._sentiment_series(previous), threshold)
+            except Exception:
+                logger.exception(
+                    "SentIndex partice %s nečitelná — hodnota před oknem chybí", previous
+                )
         return current, then
 
     def _warn_missing_sentiment(self, now: dt.datetime, path: Path) -> None:
@@ -207,25 +249,65 @@ class TendencyEngine:
             path,
         )
 
+    def _hysteresis_for(self, now: dt.datetime) -> BandHysteresis:
+        """Hystereze dne minuty `now`; nový den = čistý stav (v4 UTC den, v5 seance)."""
+        day = trading_session_date(now) if self.version >= TENDENCY_RULES_V5 else now.date()
+        if self._hysteresis_day != day:
+            self._hysteresis = BandHysteresis()
+            self._hysteresis_day = day
+        return self._hysteresis
+
+    def _slope_inputs(
+        self, now: dt.datetime, spot: float, flow: FlowRowLike | None
+    ) -> tuple[float | None, float | None]:
+        """Sklon CumΔ za okno a cena před oknem (pro rozchod) podle verze pravidel.
+
+        v4: rozdíl CumΔ teď × nejstarší minuta historie ≥ 10 min zpět; přes
+        reset CumΔ v 17:00 CT tak srovnává minulou seanci (#1581).
+        v5: Σ flowΔ za (now − 10 min, now] v seanci (`flow_window_sum`, ADR-0057
+        bod 4); neúplné okno, mezera nebo okno přes začátek seance dá None.
+        Cena je přes pauzu spojitá, cena před oknem je proto minuta hranice okna
+        bez ohledu na seanci; chybí-li, rozchod nehlasuje.
+        """
+        window = dt.timedelta(minutes=SLOPE_LOOKBACK_MIN)
+        if self.version < TENDENCY_RULES_V5:
+            cum_now = flow.cum_delta if flow else None
+            cum_then: float | None = None
+            price_then: float | None = None
+            if self._history:
+                oldest = self._history[0]
+                # Sklon má smysl až s plným oknem — jinak by ranní minuty srovnávaly
+                # proti startu procesu a hlasovaly ze šumu
+                if now - oldest[0] >= window:
+                    cum_then = oldest[1]
+                    price_then = oldest[2]
+            if cum_now is not None:
+                self._history.append((now, cum_now, spot))
+            if cum_now is None or cum_then is None:
+                return None, price_then
+            return cum_now - cum_then, price_then
+        # Řádek minuty jen z cyklu téže minuty: po pádu cyklu nese `last_flow`
+        # minulou minutu a okno by ji započetlo dvakrát
+        if (
+            flow is not None
+            and flow.ts_min == now
+            and (not self._flow_rows or self._flow_rows[-1][0] != now)
+        ):
+            self._flow_rows.append((now, flow.flow_delta))
+        slope = flow_window_sum(self._flow_rows, now, minutes=SLOPE_LOOKBACK_MIN)
+        boundary = now - window
+        price_then = next((price for ts, price in self._price_history if ts == boundary), None)
+        if not self._price_history or self._price_history[-1][0] != now:
+            self._price_history.append((now, spot))
+        return slope, price_then
+
     async def on_minute(self, now: dt.datetime, spot: float, runtime: EngineRuntime) -> None:
         levels = runtime.last_gex_levels
         flow = runtime.last_flow
         self._refresh_max_pain(runtime.expiry, now.date())
         call_flow, put_flow = self._flows(runtime)
         sent_value, sent_then = self._sentiment(now)
-
-        cum_now = flow.cum_delta if flow else None
-        cum_then: float | None = None
-        price_then: float | None = None
-        if self._history:
-            oldest = self._history[0]
-            # Sklon má smysl až s plným oknem — jinak by ranní minuty srovnávaly
-            # proti startu procesu a hlasovaly ze šumu
-            if now - oldest[0] >= dt.timedelta(minutes=SLOPE_LOOKBACK_MIN):
-                cum_then = oldest[1]
-                price_then = oldest[2]
-        if cum_now is not None:
-            self._history.append((now, cum_now, spot))
+        cum_slope, price_then = self._slope_inputs(now, spot, flow)
 
         atm_iv = self._atm_iv(runtime, spot)
         iv_then: float | None = None
@@ -260,8 +342,7 @@ class TendencyEngine:
             centroid=levels.centroid if levels else None,
             call_wall_then=call_wall_then,
             put_wall_then=put_wall_then,
-            cum_delta_now=cum_now,
-            cum_delta_then=cum_then,
+            cum_delta_slope=cum_slope,
             price_then=price_then,
             call_flow=call_flow,
             put_flow=put_flow,
@@ -274,10 +355,7 @@ class TendencyEngine:
             iv_now=atm_iv,
             iv_then=iv_then,
         )
-        if self._hysteresis_day != now.date():
-            self._hysteresis = BandHysteresis()
-            self._hysteresis_day = now.date()
-        result = evaluate_tendency(inputs, self._hysteresis)
+        result = evaluate_tendency(inputs, self._hysteresis_for(now), version=self.version)
         if result is None:
             return
         runtime.tendency_band = result.band
@@ -293,3 +371,13 @@ class TendencyEngine:
                 "weights_version": result.weights_version,
             },
         )
+
+
+def _value_at_or_before(
+    series: list[tuple[dt.datetime, float]], threshold: dt.datetime
+) -> float | None:
+    """Poslední hodnota řady s ts ≤ threshold (řada vzestupně podle času)."""
+    for ts_min, value in reversed(series):
+        if ts_min <= threshold:
+            return value
+    return None
