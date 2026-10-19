@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.engine import Engine
 
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
@@ -15,6 +16,7 @@ from gexlens_engine.storage.oi_archive import (
     OIArchiver,
     OIEodRepository,
     OIRecord,
+    oi_eod_table,
 )
 
 DAY_1 = dt.date(2026, 7, 15)
@@ -298,3 +300,261 @@ async def test_snapshot_hodnoty_se_ulozi_a_prectou(repository: OIEodRepository) 
     bare = by_strike[(specs[1].strike, specs[1].right)]
     assert bare.oi == 50.0
     assert bare.iv is None and bare.delta is None
+
+
+# ── Původ hodnoty a stráž tasty zápisu (#1605) ─────────────────────
+
+GUARD_EXPIRY = "20260716"
+UTC = dt.UTC
+
+
+def _row_state(
+    engine: Engine, symbol: str, strike: float, right: str
+) -> tuple[float, float | None, float | None, dt.datetime | None, dt.datetime | None]:
+    """(OI, iv, close_prem, captured_ts, tasty_captured_ts) řádku; časy v UTC."""
+    c = oi_eod_table.c
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(c.oi, c.iv, c.close_prem, c.captured_ts, c.tasty_captured_ts).where(
+                c.symbol == symbol,
+                c.expiry == GUARD_EXPIRY,
+                c.strike == strike,
+                c["right"] == right,
+                c.date == DAY_1,
+            )
+        ).one()
+
+    def utc(value: dt.datetime | None) -> dt.datetime | None:
+        if value is None:
+            return None
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+    return (
+        float(row.oi),
+        row.iv,
+        row.close_prem,
+        utc(row.captured_ts),
+        utc(row.tasty_captured_ts),
+    )
+
+
+def _assert_tasty_guard(repository: OIEodRepository, engine: Engine, symbol: str) -> None:
+    """Scénář stráže `upsert_many` — sdílený sqlite i PostgreSQL variantou."""
+
+    def record(strike: float, oi: float, **snapshot: float) -> OIRecord:
+        return OIRecord(
+            symbol, GUARD_EXPIRY, strike, "P", DAY_1, oi, trading_class="E3D", **snapshot
+        )
+
+    ibkr_at = dt.datetime(2026, 7, 15, 13, 1, tzinfo=UTC)
+    midnight = dt.datetime(2026, 7, 15, 0, 0, tzinfo=UTC)
+    after_pub = dt.datetime(2026, 7, 15, 13, 30, tzinfo=UTC)
+
+    # A = IBKR řádek s greeks, B a C = tasty řádky z 00:00
+    assert repository.upsert_many([record(7500.0, 100.0, iv=0.2, close_prem=5.0)], ibkr_at) == 1
+    assert (
+        repository.upsert_many(
+            [record(7400.0, 250.0), record(7300.0, 300.0)], tasty_captured_ts=midnight
+        )
+        == 2
+    )
+
+    # Tasty po publikaci: A jiná hodnota (nedotknutelné), B stejná, C změna, D nový
+    written = repository.upsert_many(
+        [record(7500.0, 999.0), record(7400.0, 250.0), record(7300.0, 310.0), record(7200.0, 40.0)],
+        tasty_captured_ts=after_pub,
+    )
+
+    assert written == 2  # C přepsán + D vložen; A ani B se nepočítají
+    assert _row_state(engine, symbol, 7500.0, "P") == (100.0, 0.2, 5.0, ibkr_at, None)
+    assert _row_state(engine, symbol, 7400.0, "P") == (250.0, None, None, None, midnight)
+    assert _row_state(engine, symbol, 7300.0, "P") == (310.0, None, None, None, after_pub)
+    assert _row_state(engine, symbol, 7200.0, "P") == (40.0, None, None, None, after_pub)
+
+    # Tasty → IBKR: IBKR přepíše hodnotu i snímek, tasty čas zůstane (oba časy)
+    ibkr_late = dt.datetime(2026, 7, 15, 14, 0, tzinfo=UTC)
+    assert repository.upsert_many([record(7300.0, 320.0, iv=0.3)], ibkr_late) == 1
+    assert _row_state(engine, symbol, 7300.0, "P") == (320.0, 0.3, None, ibkr_late, after_pub)
+    # …a od té chvíle je řádek pro tasty nedotknutelný
+    late = dt.datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
+    assert repository.upsert_many([record(7300.0, 330.0)], tasty_captured_ts=late) == 0
+    assert _row_state(engine, symbol, 7300.0, "P")[0] == 320.0
+
+
+def test_tasty_zapis_neprepise_ibkr_radek_a_nezmenenou_hodnotu(tmp_path: Path) -> None:
+    """#1605: tasty upsert nad IBKR řádkem dřív přepsal OI a vynuloval greeks
+    (řádek se pak dál tvářil jako IBKR měření). Stráž v SQL to drží i při souběhu."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'guard.db'}")
+    repository = OIEodRepository(engine)
+    repository.ensure_schema()
+    _assert_tasty_guard(repository, engine, "ES")
+
+
+@pytest.mark.skipif(
+    not os.environ.get("GEXLENS_TEST_PG_DSN"),
+    reason="GEXLENS_TEST_PG_DSN nenastaveno (integrace s reálným PostgreSQL)",
+)
+def test_tasty_straz_a_mereni_na_real_postgres() -> None:
+    """Totéž na PG: počet zapsaných (RETURNING) nepočítá řádky,
+    které stráž nepustila, a HAVING měřených stran projde i s timestamptz.
+    Vlastní symboly, úklid jen vlastních řádků podle klíče."""
+    engine = create_engine(os.environ["GEXLENS_TEST_PG_DSN"])
+    repository = OIEodRepository(engine)
+    repository.ensure_schema()
+    guard_symbol, measured_symbol = "ZZ1605", "ZZ1605M"
+    own_rows = oi_eod_table.delete().where(
+        oi_eod_table.c.symbol.in_([guard_symbol, measured_symbol]),
+        oi_eod_table.c.expiry == GUARD_EXPIRY,
+        oi_eod_table.c.date == DAY_1,
+    )
+    with engine.begin() as conn:
+        conn.execute(own_rows)  # zbytek po přerušeném běhu
+    try:
+        _assert_tasty_guard(repository, engine, guard_symbol)
+        _assert_measured(repository, measured_symbol)
+    finally:
+        with engine.begin() as conn:
+            conn.execute(own_rows)
+
+
+async def test_tasty_radek_nebrani_finalite(repository: OIEodRepository) -> None:
+    """#1605: kontrakt, který IBKR nedodá a archiv ho má jen z tasty, není
+    „dřív archivované čtení" — finalitě nebrání (jinak by FA joby neběžely)."""
+    specs = contracts()
+    repository.upsert_many(
+        [
+            OIRecord(
+                "ES",
+                specs[0].expiry,
+                specs[0].strike,
+                specs[0].right,
+                DAY_1,
+                80.0,
+                trading_class=specs[0].trading_class or "",
+            )
+        ],
+        tasty_captured_ts=dt.datetime(2026, 7, 15, 0, 0, tzinfo=UTC),
+    )
+    archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs[1:], 500.0)), Settings())
+
+    await archiver.archive_day(specs, DAY_1)
+    result = await archiver.archive_day(specs, DAY_1)
+
+    assert specs[0] in result.missing
+    assert result.changed is False  # dvě shodná IBKR čtení → ustáleno
+
+
+async def test_prvni_ibkr_cteni_klice_s_tasty_hodnotou_je_zmena(
+    repository: OIEodRepository,
+) -> None:
+    """#1605: tasty řádek se stejnou hodnotou není předchozí IBKR čtení — jinak
+    by snímek vyšel finální po jediném IBKR čtení."""
+    specs = contracts()
+    repository.upsert_many(
+        [
+            OIRecord(
+                "ES", s.expiry, s.strike, s.right, DAY_1, 500.0, trading_class=s.trading_class or ""
+            )
+            for s in specs
+        ],
+        tasty_captured_ts=dt.datetime(2026, 7, 15, 12, 5, tzinfo=UTC),
+    )
+    archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), Settings())
+
+    first = await archiver.archive_day(specs, DAY_1)
+    second = await archiver.archive_day(specs, DAY_1)
+
+    assert first.changed is True
+    assert second.changed is False
+
+
+def test_snapshot_ibkr_only_vynecha_tasty_radky(repository: OIEodRepository) -> None:
+    """Srovnání OI IBKR × tasty (#664) nesmí brát tasty řádek jako IBKR hodnotu."""
+    repository.upsert_many(
+        [OIRecord("ES", GUARD_EXPIRY, 7500.0, "C", DAY_1, 100.0)],
+        dt.datetime(2026, 7, 15, 13, 1, tzinfo=UTC),
+    )
+    repository.upsert_many(
+        [OIRecord("ES", GUARD_EXPIRY, 7400.0, "P", DAY_1, 250.0)],
+        tasty_captured_ts=dt.datetime(2026, 7, 15, 13, 5, tzinfo=UTC),
+    )
+
+    assert repository.snapshot("ES", DAY_1, ibkr_only=True) == {(GUARD_EXPIRY, 7500.0, "C"): 100.0}
+    assert len(repository.snapshot("ES", DAY_1)) == 2  # bez filtru beze změny
+
+
+def test_measured_values_for_bere_jen_ibkr_mereni_po_prahu(repository: OIEodRepository) -> None:
+    """#1605: strana se počítá, jen když všechny její řádky změřilo IBKR od prahu;
+    s `include_tasty` (B+) i tasty řádek obnovený od prahu."""
+    _assert_measured(repository, "ES")
+    with pytest.raises(ValueError, match="časového pásma"):
+        repository.measured_values_for(
+            "ES", GUARD_EXPIRY, DAY_1, since=dt.datetime(2026, 7, 15, 12, 0)
+        )
+
+
+def _assert_measured(repository: OIEodRepository, symbol: str) -> None:
+    """Scénář `measured_values_for` — sdílený sqlite i PostgreSQL variantou."""
+    pub = dt.datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+    midnight = dt.datetime(2026, 7, 15, 0, 0, tzinfo=UTC)
+
+    def record(strike: float, oi: float, trading_class: str = "E3D") -> OIRecord:
+        return OIRecord(symbol, GUARD_EXPIRY, strike, "C", DAY_1, oi, trading_class=trading_class)
+
+    repository.upsert_many([record(7400.0, 10.0)], tasty_captured_ts=midnight)  # jen tasty
+    repository.upsert_many(
+        [record(7500.0, 20.0)], dt.datetime(2026, 7, 15, 5, 1, tzinfo=UTC)
+    )  # IBKR před publikací
+    repository.upsert_many([record(7600.0, 30.0)], tasty_captured_ts=midnight)
+    repository.upsert_many([record(7600.0, 35.0)], pub + dt.timedelta(minutes=1))  # tasty → IBKR
+    repository.upsert_many([record(7700.0, 40.0)], pub)  # IBKR přesně na prahu
+    repository.upsert_many([record(7700.0, 4.0, "EW3")], pub)  # druhá série, změřená
+    repository.upsert_many([record(7800.0, 50.0)], pub)
+    repository.upsert_many([record(7800.0, 5.0, "EW3")], tasty_captured_ts=midnight)  # smíšené
+    after_pub = pub + dt.timedelta(hours=8)  # večerní blok tasty
+    repository.upsert_many([record(7900.0, 60.0)], tasty_captured_ts=after_pub)  # tasty po prahu
+    repository.upsert_many([record(8000.0, 70.0)], pub)
+    repository.upsert_many(
+        [record(8000.0, 7.0, "EW3")], tasty_captured_ts=after_pub
+    )  # smíšené, obě série změřené
+    # IBKR čtení z cyklu před prahem přes tasty zápis po prahu: IBKR řádek se
+    # posuzuje jen podle `captured_ts`, ani s `include_tasty` se nepočítá
+    repository.upsert_many([record(8100.0, 80.0)], tasty_captured_ts=pub + dt.timedelta(minutes=1))
+    repository.upsert_many([record(8100.0, 81.0)], pub - dt.timedelta(minutes=1))
+
+    # Práh v jiném pásmu se převede na UTC (sqlite porovnává text)
+    since = pub.astimezone(dt.timezone(dt.timedelta(hours=-5)))
+    measured = repository.measured_values_for(symbol, GUARD_EXPIRY, DAY_1, since=since)
+    with_tasty = repository.measured_values_for(
+        symbol, GUARD_EXPIRY, DAY_1, since=since, include_tasty=True
+    )
+
+    assert {(r.strike, r.right): r.oi for r in measured} == {
+        (7600.0, "C"): 35.0,
+        (7700.0, "C"): 44.0,  # Σ přes série
+    }
+    # Tasty před prahem (7400, smíšené 7800) ani IBKR před prahem (7500, 8100) ne
+    assert {(r.strike, r.right): r.oi for r in with_tasty} == {
+        (7600.0, "C"): 35.0,
+        (7700.0, "C"): 44.0,
+        (7900.0, "C"): 60.0,
+        (8000.0, "C"): 77.0,
+    }
+
+
+def test_archive_version_nese_posledni_zapis_obou_zdroju(repository: OIEodRepository) -> None:
+    """#1605: klíč cache čtenářů se hne IBKR i tasty zápisem téže expirace, ne jiné."""
+    assert repository.archive_version("ES", GUARD_EXPIRY, DAY_1) == (None, None)
+    ibkr_at = dt.datetime(2026, 7, 15, 13, 1, tzinfo=UTC)
+    repository.upsert_many([OIRecord("ES", GUARD_EXPIRY, 7500.0, "C", DAY_1, 100.0)], ibkr_at)
+    tasty_at = dt.datetime(2026, 7, 15, 13, 5, tzinfo=UTC)
+    repository.upsert_many(
+        [OIRecord("ES", GUARD_EXPIRY, 7400.0, "P", DAY_1, 250.0)], tasty_captured_ts=tasty_at
+    )
+    # Zápis jiné expirace (sekundár) verzi nemění
+    repository.upsert_many(
+        [OIRecord("ES", "20260717", 7400.0, "P", DAY_1, 1.0)],
+        tasty_captured_ts=dt.datetime(2026, 7, 15, 14, 0, tzinfo=UTC),
+    )
+
+    assert repository.archive_version("ES", GUARD_EXPIRY, DAY_1) == (ibkr_at, tasty_at)

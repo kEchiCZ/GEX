@@ -583,8 +583,17 @@ async def test_pulnoc_resetuje_finalitu_a_archivuje_novy_den(
     pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
     day1 = TS.date()
 
-    # Den 1: čtení po okně shodné s archivem (make_pipeline uložil 500.0) → finální
+    # Den 1: čtení po okně shodné s předchozím IBKR čtením → finální. make_pipeline
+    # zapisuje bez času pořízení a takový řádek není IBKR čtení (#1605), proto
+    # předchozí čtení (500.0) s časem tady
     po_okne = settings.oi_publication_utc(dt.date(2026, 7, 17)) + dt.timedelta(minutes=5)
+    repository.upsert_many(
+        [
+            OIRecord("ES", s.expiry, s.strike, s.right, day1, 500.0, trading_class=s.trading_class)
+            for s in specs
+        ],
+        po_okne - dt.timedelta(minutes=1),
+    )
     assert await pipeline.try_archive_oi(day1, po_okne) is True
     assert pipeline.oi_final is True
 
@@ -1311,10 +1320,16 @@ async def test_kalibrace_alfa_po_oi_archivu_nastavi_runtime(
 
     today = TS.date()
     prev = today - dt.timedelta(days=1)
-    # Včerejší archiv (dnešní s OI 500 založil make_pipeline): ΔOI = +40 per strana
+    # Archivy obou dnů s IBKR měřením po publikaci (#1605; make_pipeline zapisuje
+    # dnešní OI 500 bez času pořízení): ΔOI = +40 per strana
     contracts = list(pipeline.runtime.contracts)
     oi_repository.upsert_many(
-        [OIRecord("ES", "20260717", c.strike, c.right, prev, 460.0) for c in contracts]
+        [OIRecord("ES", "20260717", c.strike, c.right, prev, 460.0) for c in contracts],
+        settings.oi_publication_utc(prev) + dt.timedelta(hours=1),
+    )
+    oi_repository.upsert_many(
+        [OIRecord("ES", "20260717", c.strike, c.right, today, 500.0) for c in contracts],
+        settings.oi_publication_utc(today) + dt.timedelta(hours=1),
     )
     # Včerejší netflow: +100 kontraktů na každé straně → poměr 40/100 = 0.4
     ts = dt.datetime.combine(prev, dt.time(20, 0), tzinfo=dt.UTC)
@@ -1373,8 +1388,10 @@ async def test_kalibrace_alfa_az_nad_finalnim_snimkem(
     today = TS.date()  # pátek 17. 7.
     prev = today - dt.timedelta(days=1)
     contracts = list(pipeline.runtime.contracts)
+    # Včerejšek s IBKR měřením po publikaci (#1605, varianta B+: měřená i strana D)
     oi_repository.upsert_many(
-        [OIRecord("ES", "20260717", c.strike, c.right, prev, 460.0) for c in contracts]
+        [OIRecord("ES", "20260717", c.strike, c.right, prev, 460.0) for c in contracts],
+        settings.oi_publication_utc(prev) + dt.timedelta(hours=1),
     )
     ts = dt.datetime.combine(prev, dt.time(20, 0), tzinfo=dt.UTC)
     writer.write_netflow(

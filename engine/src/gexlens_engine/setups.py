@@ -71,7 +71,7 @@ from gexlens_engine.compute.setups import (
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
-from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.oi_archive import ArchiveVersion, OIEodRepository
 from gexlens_engine.storage.parquet_store import FeatureRow, SnapshotWriter
 from gexlens_engine.storage.setups_store import SetupsRepository, StoredSetup
 
@@ -238,7 +238,7 @@ class SetupEngine:
         # Expirace, ke které už je v logu poznámka invariantu #1324 (po settle
         # setupy nevznikají, nebo je nečitelná) — log 1× za expiraci
         self._expiry_logged: str | None = None
-        self._max_pain_loaded_for: tuple[str, dt.date, dt.datetime | None] | None = None
+        self._max_pain_loaded_for: tuple[str, dt.date, ArchiveVersion] | None = None
         # Díry, o jejichž doplnění už engine požádal (#1320) — jedna žádost na
         # díru, i když na ní stojí víc setupů; bez blokace se množina vyprázdní
         self._requested_gaps: set[tuple[dt.datetime, dt.datetime]] = set()
@@ -269,16 +269,18 @@ class SetupEngine:
         dobíhá engine celé dopoledne (#463). NQ 24. 8.: Max Pain se za den
         posunul 29200 → 29400 → 29390 (jak Σ OI rostlo 1 570 → 3 459), ale
         tendence i setupy celý den počítaly s hodnotou z prvního načtení.
-        Klíč proto nese `captured_ts` snímku — mění se jen při novém
-        průchodu archivace (jednotky za den), takže přepočet zůstává levný.
+        Klíč proto nese verzi archivu expirace (`archive_version`: poslední
+        IBKR i tasty zápis, #1605) — mění se jen při novém průchodu archivace
+        nebo změně tasty křídla, takže přepočet zůstává levný. Samotný
+        `captured_ts` obnovu tasty křídel (~55 % Σ OI 0DTE) nepoznal.
         """
-        captured = self.oi_repository.captured_at(self.symbol, today)
-        if self._max_pain_loaded_for == (expiry, today, captured) and self._max_pain is not None:
+        version = self.oi_repository.archive_version(self.symbol, expiry, today)
+        if self._max_pain_loaded_for == (expiry, today, version) and self._max_pain is not None:
             return
         records = self.oi_repository.values_for(self.symbol, expiry, today)
         oi_map = {(r.strike, r.right): r.oi for r in records}
         self._max_pain = max_pain_strike(oi_map)
-        self._max_pain_loaded_for = (expiry, today, captured)
+        self._max_pain_loaded_for = (expiry, today, version)
 
     def _flows(self, runtime: EngineRuntime) -> tuple[float, float, float]:
         """Δ-vážené přírůstky volume per strana + surový přírůstek (z cache kotací)."""

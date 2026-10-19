@@ -880,6 +880,7 @@ class InstrumentPipeline:
                 self.oi_repository,
                 self.fa_repository,
                 today,
+                publication_utc=self.settings.oi_publication_utc,
             )
         except Exception:
             logger.exception("FA validace %s selhala — zkusí se při dalším OI cyklu", self.symbol)
@@ -938,6 +939,7 @@ class InstrumentPipeline:
                 self.oi_repository,
                 self.alpha_repository,
                 today,
+                publication_utc=self.settings.oi_publication_utc,
             )
         except Exception:
             logger.exception("Kalibrace α %s selhala — zkusí se při dalším OI cyklu", self.symbol)

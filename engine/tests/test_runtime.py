@@ -853,3 +853,30 @@ async def test_bs_fallback_hlidka_jen_pri_otevrenem_trhu(
     if not alerted:
         assert watcher.episode_started is None
         assert engine_runtime.bs_remediation_due(time.monotonic() + 10 * MIN_DURATION_S) is None
+
+
+async def test_oi_zdi_prepocita_obnova_tasty_kridla(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """#1605: tasty řádek se po publikaci obnoví bez změny `captured_ts`.
+    Cache na `captured_at` by zdi držela na předchozí publikaci."""
+    engine_runtime, _publisher, _settings = runtime
+    repository = engine_runtime.oi_repository
+    day = TS.date()
+    repository.upsert_many(
+        [OIRecord("ES", "20260716", 7000.0, "P", day, 5000.0)],
+        tasty_captured_ts=dt.datetime(2026, 7, 16, 0, 0, tzinfo=dt.UTC),
+    )
+    walls = await engine_runtime._oi_walls(day, SPOT)
+    assert walls is not None and walls.put == 7000.0
+
+    repository.upsert_many(
+        [
+            OIRecord("ES", "20260716", 7000.0, "P", day, 10.0),
+            OIRecord("ES", "20260716", 6900.0, "P", day, 3000.0),
+        ],
+        tasty_captured_ts=dt.datetime(2026, 7, 16, 12, 5, tzinfo=dt.UTC),
+    )
+    walls = await engine_runtime._oi_walls(day, SPOT)
+
+    assert walls is not None and walls.put == 6900.0
