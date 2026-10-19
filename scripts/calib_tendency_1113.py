@@ -37,8 +37,8 @@ Konvence času (decision-time; únik +1 minuty z #794 se nesmí opakovat):
   rozhodnutí `close(ts_min) − open(ts_min)` ukazuje, kolik na volbě báze záleží.
 - Žádný řádek tendence po ts_min; normalizace a standardizace jen z minulosti
   (σ z předchozích barů) nebo z tréninkových týdnů walk-forwardu. Odečtení
-  denního driftu bere jen průměr výnosů téže seance známý v čase ts (okna
-  skončená do ts); Spearman pořadí a odečtení průměru podle hodiny dne (přes
+  denního driftu je parciální korelace přes průměr výnosů téže seance známý
+  v čase ts (okna skončená do ts); Spearman pořadí a odečtení průměru podle hodiny dne (přes
   seance řezu) jsou popisné diagnostiky, ne prediktor.
 
 RTH a obchodní den z helperů repa: `settle.us_open_ts`, `settle.settle_ts`,
@@ -335,6 +335,38 @@ def boot_corr_diff(
     point = float(corr_from_sums(alt.sum(axis=0)) - corr_from_sums(base.sum(axis=0)))
     reps = corr_from_sums(counts @ alt) - corr_from_sums(counts @ base)
     return {"n": n} | ci_result(point, reps)
+
+
+def boot_partial_corr(
+    x: np.ndarray, y: np.ndarray, z: np.ndarray, idx: np.ndarray, boot: Boot
+) -> dict[str, Any]:
+    """Parciální Pearson r(x, y | z) s 95% CI bootstrapem po seancích.
+
+    Z poolovaných součtů seancí: r_xy·z = (r_xy − r_xz·r_yz) / √((1 − r_xz²)(1 − r_yz²)).
+    Na rozdíl od korelace s y − z neodečítá z s koeficientem 1, takže z, které y
+    nepředpovídá, nepřimíchá šum korelovaný s x.
+    """
+    mask = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
+    n = int(mask.sum())
+    out: dict[str, Any] = {"n": n, "sessions": int(len(np.unique(idx[mask]))) if n else 0}
+    if n < 30 or out["sessions"] < 3:
+        return out | {"r": None, "lo": None, "hi": None, "excludes_zero": False}
+    size = len(boot.sessions)
+    xy = session_sums(x[mask], y[mask], idx[mask], size)
+    xz = session_sums(x[mask], z[mask], idx[mask], size)
+    yz = session_sums(y[mask], z[mask], idx[mask], size)
+    counts = boot.counts_for(xy[:, 0] > 0)
+
+    def partial(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
+        r_xy, r_xz, r_yz = corr_from_sums(a), corr_from_sums(b), corr_from_sums(c)
+        denom = (1 - r_xz**2) * (1 - r_yz**2)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(
+                denom > 0, (r_xy - r_xz * r_yz) / np.sqrt(np.where(denom > 0, denom, 1.0)), np.nan
+            )
+
+    point = float(partial(xy.sum(axis=0), xz.sum(axis=0), yz.sum(axis=0)))
+    return out | ci_result(point, partial(counts @ xy, counts @ xz, counts @ yz))
 
 
 def ranks(values: np.ndarray) -> np.ndarray:
@@ -1038,14 +1070,16 @@ def robustness(sl: Slice) -> dict[str, Any]:
     - jen živý bar ts (`bar_source == ibkr`): bez minut, kdy engine neměřil;
     - bez minut se spotem mimo bar ts (rekonstrukce z walls_distance): bez
       rozhodnutí po close(ts) i se zatuchlým spotem;
-    - − známý průměr dne: výnos minus průměr r30 téže seance známý v ts;
+    - | známý den: parciální r(hlas, r30 | průměr r30 téže seance známý v ts);
+      odečet „r30 − průměr“ by průměr bral s koeficientem 1, ale průměr r30
+      nepředpovídá (sklon ≈ 0), takže by jen přimíchal šum korelovaný s hlasem;
     - − průměr hodiny: výnos minus průměr r30 podle hodiny UTC přes seance řezu
       (popisná — používá i pozdější seance; čistí efekt denní doby, např. rampu
       charm_flow 16:00–19:00 UTC).
     """
     frame = sl.frame
     y = sl.ret(MAIN_H)
-    y_known = y - known_day_mean(frame, y, MAIN_H)
+    day_known = known_day_mean(frame, y, MAIN_H)
     hours = pd.DatetimeIndex(frame["ts"]).hour.to_numpy()
     hour_mean = pd.Series(y).groupby(hours).transform("mean").to_numpy()
     y_hour = y - hour_mean
@@ -1063,7 +1097,7 @@ def robustness(sl: Slice) -> dict[str, Any]:
             else None,
             "live": boot_corr(np.where(live, x, np.nan), y, sl.idx, sl.boot),
             "spot_ok": boot_corr(np.where(spot_ok, x, np.nan), y, sl.idx, sl.boot),
-            "minus_known_day": boot_corr(x, y_known, sl.idx, sl.boot),
+            "partial_known_day": boot_partial_corr(x, y, day_known, sl.idx, sl.boot),
             "minus_hour": boot_corr(x, y_hour, sl.idx, sl.boot),
             "per_week": {
                 week.isoformat(): safe_corr(x[weeks == week], y[weeks == week])
@@ -1785,11 +1819,12 @@ def render(results: dict[str, Any]) -> str:
         "Sloupce: **vše** = kap. 4; **hlas ≠ 0** = bez pravidlových nul (kap. 2); **živý "
         "bar** = jen minuty s `bar_source = ibkr` (engine měřil); **spot v baru** = bez minut, "
         "kde rekonstruovaný spot leží mimo bar ts (rozhodnutí po close(ts) nebo zatuchlý "
-        "spot; minuty bez rekonstrukce zůstávají); **− známý den** = výnos minus průměr r30 "
-        "téže seance známý v čase ts (okna skončená do ts; začátek RTH bez známého výnosu "
-        "vypadá) — decision-time, bez budoucnosti; **− hodina** = výnos minus průměr r30 "
-        "podle hodiny UTC přes seance řezu (popisné, čistí efekt denní doby, např. rampu "
-        "charm_flow). Per týden = Pearson r30 v týdnu bez CI."
+        "spot; minuty bez rekonstrukce zůstávají); **parc. známý den** = parciální "
+        "r(hlas, r30 | průměr r30 téže seance známý v čase ts) (okna skončená do ts; "
+        "začátek RTH bez známého výnosu vypadá) — decision-time, bez budoucnosti; "
+        "**− hodina** = výnos minus průměr r30 podle hodiny UTC přes seance řezu "
+        "(popisné, čistí efekt denní doby, např. rampu charm_flow). Per týden = Pearson "
+        "r30 v týdnu bez CI."
     )
     add("")
     for symbol in SYMBOLS:
@@ -1803,7 +1838,7 @@ def render(results: dict[str, Any]) -> str:
                     fmt_ci(cell["nonzero"]),
                     fmt_ci(cell["live"]),
                     fmt_ci(cell["spot_ok"]),
-                    fmt_ci(cell["minus_known_day"]),
+                    fmt_ci(cell["partial_known_day"]),
                     fmt_ci(cell["minus_hour"]),
                     " / ".join(fmt_num(v, 2) for v in cell["per_week"].values()),
                 ]
@@ -1821,7 +1856,7 @@ def render(results: dict[str, Any]) -> str:
                     "hlas ≠ 0",
                     "živý bar",
                     "spot v baru",
-                    "− známý den",
+                    "parc. známý den",
                     "− hodina",
                     f"per týden ({weeks})",
                 ],
@@ -1873,7 +1908,7 @@ def render(results: dict[str, Any]) -> str:
                 *[fmt_ci(uni[h]["pearson_r"]) for h in HORIZONS],
                 fmt_ci(uni[MAIN_H]["pearson_rs"]),
                 fmt_ci(rob["nonzero"]),
-                fmt_ci(rob["minus_known_day"]),
+                fmt_ci(rob["partial_known_day"]),
                 " / ".join(fmt_num(v, 2) for v in rob["per_week"].values()),
                 sign_count([week_coef[w][name] for w in week_coef]),
             ]
@@ -1885,7 +1920,7 @@ def render(results: dict[str, Any]) -> str:
                 *[f"r{h}" for h in HORIZONS],
                 "rσ30",
                 "r30 hlas ≠ 0",
-                "r30 − známý den",
+                "r30 parc. známý den",
                 "r30 per týden",
                 "OLS po týdnech",
             ],
