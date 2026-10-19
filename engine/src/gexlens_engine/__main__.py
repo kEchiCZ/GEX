@@ -14,7 +14,6 @@ import os
 import sys
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
-from dataclasses import replace
 from typing import Any
 
 from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
@@ -180,7 +179,7 @@ from gexlens_engine.tasty.trade_branch import (
 )
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
 from gexlens_engine.tasty.watchdog import SilentStreamWatchdog, silent_alert_message
-from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
+from gexlens_engine.tasty.wideoi import wide_oi_pass, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.ticker import parse_ticker
 from gexlens_engine.verdict_writer import DayVerdictWriter
@@ -2310,7 +2309,8 @@ async def main() -> None:
             today = dt.datetime.now(dt.UTC).date()
             merged_oi: dict[tuple[str, str, float, str], float] = {}
             for pipeline_symbol in list(pipelines):
-                snapshot = oi_repository.snapshot(pipeline_symbol, today)
+                # Jen IBKR řádky (#1605): tasty řádky by srovnávaly tasty se sebou
+                snapshot = oi_repository.snapshot(pipeline_symbol, today, ibkr_only=True)
                 for (expiry, strike, right), oi_value in snapshot.items():
                     merged_oi[(pipeline_symbol, expiry, strike, right)] = oi_value
             return merged_oi
@@ -2729,57 +2729,37 @@ async def main() -> None:
                 except Exception:
                     logger.exception("Spot bez pipeline selhal — příští cyklus jede dál")
 
-        async def wide_oi_once() -> int:
-            """Archivace striků mimo IBKR obálku z tasty Summary (#828).
+        def summary_oi(streamer: str) -> float | None:
+            """OI ze Summary tasty cache; None = kontrakt v cache není."""
+            state = tasty_cache.state(streamer)
+            return state.summary.open_interest if state is not None else None
 
-            Běží v kadenci extended smyčky, ale zapisuje jen kontrakty, které
-            IBKR archiv nepokrývá — `covered` se zjišťuje dotazem na archiv,
-            takže se nemusí protahovat znalost obálky přes celý engine a dva
-            zdroje se nikdy neperou o týž řádek.
+        async def wide_oi_once() -> int:
+            """Široký OI z tasty Summary (#828) → počet zapsaných/obnovených řádků.
+
+            Běží v kadenci extended smyčky; jádro je `wide_oi_pass` (#1605):
+            pokryté jsou jen striky s IBKR řádkem dne (dotaz na archiv, takže
+            se znalost obálky nemusí protahovat přes engine), tasty řádky se
+            během dne obnovují (publikace CME ~12:00 UTC) a zapisuje se jen
+            změněná hodnota. IBKR řádek tasty nikdy nepřepíše (stráž v SQL).
             """
             if not settings.tasty_wide_oi:
                 return 0
-            today = dt.datetime.now(dt.UTC).date()
+            now = dt.datetime.now(dt.UTC)
             written = 0
             for symbol, chain in list(shadow_chain.items()):
                 pipe = pipelines.get(symbol)
                 if pipe is None or not pipe.runtime.contracts:
                     continue  # bez běžící pipeline není podle čeho poznat obálku
-                # Vzor nese exchange/trading_class/multiplier aktivní expirace
-                sample = pipe.runtime.contracts[0]
-                expiry = pipe.runtime.expiry
-                covered = await asyncio.to_thread(oi_repository.values_for, symbol, expiry, today)
-                covered_specs = [
-                    replace(sample, strike=row.strike, right=row.right) for row in covered
-                ]
-                contracts = wide_contracts(
+                written += await wide_oi_pass(
+                    oi_repository,
                     chain,
-                    expiry,
-                    covered_specs,
                     symbol=symbol,
-                    exchange=sample.exchange,
-                    multiplier=sample.multiplier,
-                    trading_class=sample.trading_class,
+                    expiry=pipe.runtime.expiry,
+                    sample=pipe.runtime.contracts[0],
+                    oi_lookup=summary_oi,
+                    now=now,
                 )
-                if not contracts:
-                    continue
-                records = wide_records(
-                    contracts,
-                    lambda streamer: (
-                        state.summary.open_interest
-                        if (state := tasty_cache.state(streamer)) is not None
-                        else None
-                    ),
-                    today,
-                )
-                if not records:
-                    continue
-                await asyncio.to_thread(
-                    oi_repository.upsert_many,
-                    records,
-                    tasty_captured_ts=dt.datetime.now(dt.UTC),
-                )
-                written += len(records)
             return written
 
         async def extended_snapshot_loop() -> None:
@@ -2807,7 +2787,8 @@ async def main() -> None:
                         wide_written = await wide_oi_once()
                         if wide_written:
                             logger.info(
-                                "Široký OI z tasty (#828): %d striků mimo IBKR obálku",
+                                "Široký OI z tasty (#828): %d řádků zapsáno/obnoveno "
+                                "(jen změněné hodnoty, mimo IBKR řádky dne)",
                                 wide_written,
                             )
                     except Exception:

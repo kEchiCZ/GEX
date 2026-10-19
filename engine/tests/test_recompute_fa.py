@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import io
 import sys
 from pathlib import Path
 from typing import Any
@@ -116,6 +117,23 @@ def test_dry_run_nic_nezapise_apply_opravi_alfu_i_validaci(tmp_path: Path) -> No
     assert new_doi == pytest.approx(480.0) and new_ratio == pytest.approx(0.4)
 
 
+def test_vystup_v_cp1250_neshodi_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Přesměrovaný výstup na Windows (cp1250) nesmí shodit print „α … → …“ před zápisem;
+    logy na stderr jdou taky v UTF-8."""
+    module = _load()
+    url, settings = _seed(tmp_path)
+    buffer = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buffer, encoding="cp1250"))
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(io.BytesIO(), encoding="cp1250"))
+    args = ["--db", url, "--data", str(settings.data_dir), "--symbols", "ES"]
+    assert module.main([*args, "--apply", "--yes"]) == 0
+    sys.stdout.flush()
+    assert "ES: α 0.000 → 0.400" in buffer.getvalue().decode("utf-8")
+    assert sys.stderr.encoding == "utf-8"
+    state = FaAlphaRepository(create_engine(url)).get("ES")
+    assert state is not None and state.alpha == pytest.approx(0.4)
+
+
 def test_predpublikacni_snimek_je_neoveritelny(tmp_path: Path) -> None:
     module = _load()
     url, settings = _seed(tmp_path)
@@ -128,3 +146,46 @@ def test_predpublikacni_snimek_je_neoveritelny(tmp_path: Path) -> None:
     result = module.replay_symbol("ES", settings, oi_repo, create_engine(url))
     assert [day for day, _ in result.unverifiable] == [TODAY]
     assert result.new_alpha is None and not result.validation
+
+
+def test_report_pocty_stran_a_body_bez_noveho_prepoctu(tmp_path: Path) -> None:
+    """#1605: report ukáže starý/nový počet stran a body v produkci, které
+    přehrání nevytvoří — `--apply` je nechá beze změny (nic nemaže), takže bez
+    téhle sekce by starý bod (např. nulový medián z tasty stran) zůstal tiše."""
+    module = _load()
+    url, settings = _seed(tmp_path)
+    db = create_engine(url)
+    stale_day = PREV - dt.timedelta(days=1)  # bod, ke kterému přehrání nemá data
+    FaAlphaRepository(db).record(
+        "ES", stale_day, EXPIRY, AlphaCalibrationPoint(35, 0.0, None, None), 0.0, 0
+    )
+    FaValidationRepository(db).upsert(
+        FaValidationRecord(
+            "ES", EXPIRY, stale_day, PREV, FaValidationPoint(12, 1200.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        )
+    )
+
+    args = ["--db", url, "--data", str(settings.data_dir), "--symbols", "ES"]
+    assert module.main(args) == 0
+    report = next((settings.data_dir / "reports").glob("recompute-fa-*.md")).read_text("utf-8")
+
+    assert "| medián starý | nový | stran staré | nové | α po bodu |" in report
+    assert f"| {PREV} | 0.000 | 0.400 | 12 | 12 | 0.400 |" in report
+    assert "### Body v produkci bez nového přepočtu" in report
+    assert f"- α {stale_day}: medián 0.000 (35 stran)" in report
+    assert f"- FA validace {EXPIRY} {stale_day}: open-ratio 0.000" in report
+    assert "## Co udělá `--apply`" in report
+
+    assert module.main([*args, "--apply", "--yes"]) == 0
+    assert FaAlphaRepository(db).history_exists("ES", stale_day)  # nic se nemaže
+
+
+def test_report_bez_nove_alfy_necha_stavajici_fa_alpha() -> None:
+    """#1605: přehrání bez α (body ≤ 0 nebo bez vzorku) `fa_alpha` nepřepíše —
+    hlavička reportu nesmí tvrdit „platí konfigurace", když `--apply` nechá
+    stávající α produkce."""
+    module = _load()
+    item = module.SymbolReplay(symbol="ES", old_alpha=0.4, new_alpha=None)
+    report = module.report_markdown([item], dt.datetime(2026, 10, 18, 12, 0, tzinfo=dt.UTC))
+    assert "nechá `fa_alpha` 0.400" in report
+    assert "platí konfigurace" not in report
