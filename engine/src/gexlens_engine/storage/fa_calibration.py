@@ -1,7 +1,7 @@
 """Úložiště a job kalibrace α (#232, ADR-0011 fáze 2).
 
 Job běží v pipeline po finálním OI archivu dne (#1314, hned za FA validací):
-včerejší konec dne řady netflow (řez 21:00 UTC — konec trade date) se
+včerejší konec dne řady netflow (řez 16:00 CT — konec trade date) se
 porovná s ΔOI mezi archivy na stranách změřených po publikaci CME
 (#1605), medián poměrů dá denní bod a EMA přes dny
 aktualizuje α symbolu. Historie bodů zůstává v `fa_alpha_history` pro audit
@@ -28,8 +28,9 @@ from gexlens_engine.compute.facalibration import (
     calibrate_alpha,
     update_alpha,
 )
+from gexlens_engine.compute.marketclock import daily_close_utc
 from gexlens_engine.compute.settle import is_trading_session
-from gexlens_engine.storage.fa_validation import CUTOFF_HOUR_UTC, PublicationUtc, measured_oi_pair
+from gexlens_engine.storage.fa_validation import PublicationUtc, measured_oi_pair
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.parquet_store import read_netflow_latest
 
@@ -191,16 +192,17 @@ class FaAlphaRepository:
 
 
 def netflow_at_cutoff(path: Path, day: dt.date) -> dict[Key, float]:
-    """Poslední kumulativní net každé strany k řezu 21:00 UTC (konec trade date).
+    """Poslední kumulativní net každé strany k řezu 16:00 CT (konec trade date).
 
-    Stejný řez jako FA validace: po 21:00 UTC začíná další seance a kumulativ
-    už patří novému trade date (counter volume IBKR se resetuje ve 22:00 UTC).
-    Řádek přesně v 21:00 nese tok do 21:00, proto se počítá (`end` je řez
-    + 1 min, okno `read_netflow_latest` je zprava otevřené). Čte se přes
+    Stejný řez jako FA validace (`daily_close_utc`: v létě 21:00 UTC, v zimě
+    22:00 UTC): po přestávce začíná další seance a kumulativ už patří novému
+    trade date (counter volume IBKR se resetuje v 17:00 CT). Řádek přesně
+    v řezu nese tok do řezu, proto se počítá (`end` je řez + 1 min, okno
+    `read_netflow_latest` je zprava otevřené). Čte se přes
     `schema=` (#1460), staré partice bez sloupce `source` projdou. Bez filtru
     zdroje: body α podle zdroje odděluje reset α při bumpu v6 (ADR-0057 bod 6).
     """
-    cutoff = dt.datetime.combine(day, dt.time(CUTOFF_HOUR_UTC), tzinfo=dt.UTC)
+    cutoff = daily_close_utc(day)
     return read_netflow_latest(path, end=cutoff + dt.timedelta(minutes=1), sources=None)
 
 

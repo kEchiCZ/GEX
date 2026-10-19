@@ -24,6 +24,7 @@ from gexlens_engine.compute.favalidation import (
     Key,
     compute_fa_validation,
 )
+from gexlens_engine.compute.marketclock import daily_close_utc
 from gexlens_engine.compute.settle import is_trading_session
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
@@ -46,10 +47,6 @@ fa_validation_table = Table(
     Column("spearman", Float, nullable=False),
     Column("silent_share", Float, nullable=False),
 )
-
-# Řez trade date: volume counter IBKR se resetuje ve 22:00 UTC (start nové
-# seance), poslední poctivá kumulativní hodnota dne je před 21:00 UTC (#232)
-CUTOFF_HOUR_UTC = 21
 
 #: Čas publikace OI CME pro UTC den archivu (`Settings.oi_publication_utc`)
 PublicationUtc = Callable[[dt.date], dt.datetime]
@@ -166,8 +163,13 @@ class FaValidationRepository:
 
 
 def volumes_at_cutoff(path: Path, day: dt.date) -> dict[Key, float]:
-    """Poslední kumulativní volume každé strany (strike, right) k řezu 21:00 UTC."""
-    cutoff = dt.datetime.combine(day, dt.time(CUTOFF_HOUR_UTC), tzinfo=dt.UTC)
+    """Poslední kumulativní volume každé strany (strike, right) k řezu konce dne.
+
+    Řez trade date = začátek denní přestávky 16:00 CT (`daily_close_utc`, #232):
+    volume counter IBKR se resetuje se startem nové seance v 17:00 CT, poslední
+    poctivá kumulativní hodnota dne je před přestávkou.
+    """
+    cutoff = daily_close_utc(day)
     table = pq.read_table(path, columns=["ts_min", "strike", "right", "volume"])
     latest: dict[Key, tuple[dt.datetime, float]] = {}
     columns = [table.column(name).to_pylist() for name in ("ts_min", "strike", "right", "volume")]

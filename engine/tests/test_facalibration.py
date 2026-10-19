@@ -501,3 +501,21 @@ def test_collect_bez_ibkr_mereni_bod_nezamkne_a_zkusi_znovu(
     result = _collect(settings, oi_repo, alpha_repo)
     assert result is not None
     assert result.point.ratio_median == pytest.approx(0.4)
+
+
+def test_netflow_at_cutoff_zimni_cas_rez_22_utc(tmp_path: Path) -> None:
+    """#1460: řez 16:00 CT — v zimě 22:00 UTC, kumulativ 21:30 UTC do dne patří."""
+    winter = dt.date(2026, 11, 4)
+    rows = [
+        NetFlowRow(
+            ts_min=dt.datetime.combine(winter, dt.time(hour, minute), tzinfo=dt.UTC),
+            strike=7500.0,
+            right="C",
+            net_volume=net,
+            source=SOURCE_MIDPOINT,
+        )
+        for hour, minute, net in ((20, 59, 80.0), (21, 30, 95.0), (22, 30, 999.0))
+    ]
+    path = SnapshotWriter(Settings(data_dir=tmp_path)).write_netflow("ES", EXPIRY, winter, rows)
+    assert path is not None
+    assert netflow_at_cutoff(path, winter) == {(7500.0, "C"): 95.0}
