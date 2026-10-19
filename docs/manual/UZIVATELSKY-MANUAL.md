@@ -1233,6 +1233,9 @@ tendence hlásila short a v RTH nevznikl jediný long setup na NQ.
 - Tendence short/strong short při +400 b: hlasy „poloha mezi zdmi" a „Max Pain" jsou
   mean-reversion. Nově poloha nehlasuje u zdi s dominancí < 25 % nebo u zdi, která se
   za 30 min posunula ve směru ceny; Max Pain hlasuje jen ≤ 90 min do close.
+  Od mechaniky v6 (#1403, tendence verze 5) poloha mezi zdmi do skóre nevstupuje
+  vůbec (váha 0, revize vah 14. 9.–16. 10. nenašla edge, #1113) a Max Pain po settle
+  nehlasuje (#1584).
 - Setup T3 „Max Pain pin" short s cílem 934 b pod cenou: nově jen do vzdálenosti
   šířky pásma zdí.
 - Briefing v pondělí „overnight bez dat": PDC je nově settle poslední RTH seance
@@ -1768,7 +1771,9 @@ velikost proher. Tooltip dlaždice i karty nese celý dosazený výpočet.
   trvalé streamy), ne konfigurační konstanta. Strop účtu je 100 linek;
   typická špička sweep okna je ~85 %.
 - **α badge** (u FA odhadu OI) — kalibrovaná hodnota alfa per symbol + počet
-  kalibračních dnů; do první kalibrace default 0,4.
+  kalibračních dnů; do první kalibrace default 0,4. Od mechaniky v6 (#1403) se α
+  kalibruje znovu z CumΔ jen z tisků a FA odhad je vypnutý, dokud nemá 5 dnů
+  kalibrace (ADR-0057 bod 6).
 - **Catch-up** — první minuty po startu enginu jsou označené příznakem
   (CumΔ má vysvětlující popisek): kumulativy se dopočítávají ze session
   archivu, ne od nuly.
@@ -2470,7 +2475,7 @@ podkladu**, ne absolutní čísla.
 | **Korekční epizoda (pokus / negace)** | Pokles denního SentIndexu o ≥ 1 σ pod 20denní maximum; pokus = zahlazeno do 10 obchodních dní, negace = ne. Předběžné parametry (v1.17, #565). |
 | **Signál (NEWS/COMBINED)** | Empiricky gate-ovaná Long/Short nápověda z reakcí na zprávy; COMBINED navíc vyžaduje souhlas GEX kontextu. |
 | **Gate / Wilson LB** | Podmínka spuštění signálů: bucket musí mít n ≥ 30 reakcí a spodní mez 95% intervalu úspěšnosti (Wilson lower bound) > 0,50 a |Ø reakce| ≥ 1 bp (ADR-0042). |
-| **Tendence** | Souhrnný chip Strong Short … Strong Long z 12 složek positioningu a toku (flip, zdi, CumΔ, charm/vanna tok…); orientační, váhy zatím nekalibrované. |
+| **Tendence** | Souhrnný chip Strong Short … Strong Long z 12 složek positioningu a toku (flip, zdi, CumΔ, charm/vanna tok…); orientační, váhy zatím nekalibrované. Od mechaniky v6 (#1403, verze 5): sklon a rozchod CumΔ jen z tisků od burzy a jen v rámci seance (prvních 10 min po otevření v 17:00 CT a minuty s mezerou nehlasují), poloha mezi zdmi má váhu 0, Max Pain hlasuje jen 0–90 min do settle a hystereze pásma začíná s otevřením seance (#1460, #1581, #1584). |
 | **Drift** | Statistický rozchod čerstvé úspěšnosti bucketu s historickou — signál, že se trh vůči modelu změnil. |
 
 ---

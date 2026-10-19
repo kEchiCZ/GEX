@@ -75,6 +75,13 @@ def measured_oi_pair(
     pravidlo znamenalo „ΔOI ≠ 0" — vypadly by skutečné nuly a α by se
     vychýlila nahoru. Třetí prvek = strany D nesené (i) tasty řádkem, pro
     rozpad logu bodu.
+
+    Limit (#1626, vlastník 19. 10. 2026 varianta A): tasty nese publikaci D
+    už kolem 01:50 UTC dne D, ne až po publikaci CME v 07:00 CT. Řádek
+    obnovený v noci má `tasty_captured_ts` před prahem a po něm se hodnota
+    nemění, takže strana D z tasty se bere jen výjimečně (změna OI přes den)
+    a B+ v praxi dává totéž co B. Data se nekazí, strana bez měření je
+    „nevíme“.
     """
 
     def measured(day: dt.date, *, include_tasty: bool) -> dict[Key, float]:

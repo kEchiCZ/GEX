@@ -379,7 +379,10 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
   sekundár 160 striků, aktivní ~560); součty OI jsou z aktuálního archivu celé.
   O víkendu ukazuje pátek proti čtvrtku.
 - **FA validace a ranní kalibrace α** (#232) běží jen v obchodní den a párují
-  volume/netflow posledního obchodního dne s ΔOI do dneška. Sobotní běh dřív
+  volume/netflow posledního obchodního dne s ΔOI do dneška. Den se řeže začátkem
+  denní přestávky 16:00 CT (`marketclock.daily_close_utc`: v létě 21:00 UTC,
+  od konce US letního času 22:00 UTC; do #1460 pevně 21:00 UTC, takže v zimě by
+  poslední hodina Globexu vypadla). Sobotní běh dřív
   ukládal bod „pátek → sobota" (ΔOI ≈ 0) a dedup dne pak zablokoval poctivý bod
   „pátek → pondělí". Starší bod `fa_validation` s víkendovým `next_day`
   (19 řádků od 24. 7. 2026, naposledy 25. → 26. 9.) dedup nepočítá
@@ -413,7 +416,13 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
     (`captured_ts` NULL) s `tasty_captured_ts ≥ oi_publication_utc(D)`
     (`include_tasty`). Tasty obnoví hodnotu i čas jen při změně OI, takový řádek
     tedy nese publikaci D. Tasty řádky s časem před publikací D (07:00 CT =
-    12:00 UTC v létě, 13:00 UTC v zimě) nesou publikaci D−1 a vypadnou. Na
+    12:00 UTC v létě, 13:00 UTC v zimě) vypadnou. **Limit (#1626, varianta A,
+    vlastník 19. 10. 2026):** `Summary.openInterest` nese publikaci D už kolem
+    01:45–01:55 UTC dne D (měřeno 19. 10. 2026: hodnota po 02:10 UTC = IBKR po
+    publikaci ve všech porovnaných kontraktech) a po 12:00 UTC se obvykle nemění,
+    takže se znovu nezapíše. Strana D z tasty proto projde jen výjimečně (změna
+    OI přes den) a B+ v praxi dává totéž co B — data se nekazí, strana bez
+    měření je „nevíme“. Na
     straně D+1 by stejné pravidlo znamenalo „ΔOI ≠ 0“: vypadly by skutečné nuly
     a α by se vychýlila nahoru. FA validace navíc vyřadí stranu D z tasty, která
     nemá řádek ve snímku D (leží mimo univerzum IBKR, volume je neznámý, ne 0);
@@ -435,6 +444,28 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
   přehrává archiv z konce dne, shodne se proto s večerním bodem. Do #1605 nesly
   takové strany předchozí publikaci a ΔOI přesně 0: NQ měl od 5. 10. 2026
   medián přesně 0 v 7 z 8 bodů.
+- **Kalibrace α a FA vrstva od mechaniky v6** (#1403; ADR-0057 bod 6, #1460,
+  #1580). Pod v5 se nic z toho nemění.
+  - Kalibruje se jen řetěz, který byl **celou seanci D sekundárem**, tedy první
+    expirace po D. Náhradní řetěz se nehledá: D+2 píše netflow dne D až po rollu
+    v settle (~20:05 UTC) a jeho bod by nesl 55 minut toku. Pod v5 vyhrává
+    nejvzdálenější expirace s bodem, od 7. 10. tedy D+2 (#1580).
+  - Netflow jen se zdrojem `aggressor`. Den před bumpem (midpoint) bod nedá.
+  - **Den s mezerou trade větve bod nedá:** runtime aktivního i sekundárního
+    řetězu zapíše minutu, kterou za otevřeného trhu neměřil, do
+    `derived/{sym}/{exp}/netgap/` (i první minutu po restartu). Kalibrace čte
+    seanci D od 17:00 CT předchozího dne (dvě UTC partice) do řezu. Bod nedá ani
+    řada netflow, která končí víc než 5 min před řezem (engine spadlý přes konec
+    dne značku do seance D nezapíše).
+  - `fa_alpha` i `fa_alpha_history` nesou `source` (aditivní ADD COLUMN přes
+    `ensure_schema` enginu i API, na PostgreSQL `IF NOT EXISTS`; NULL = midpoint).
+    Stav jiného zdroje se bere jako nekalibrovaný: první bod z tisků jde přímo
+    (α se při bumpu resetuje sama, bez ručního `set_state`) a historie zůstává.
+    Stav s 0 dny bere první bod přímo i pod v5.
+  - **FA vrstva jede až po 5 dnech kalibrace z tisků** (`FA_MIN_DAYS`,
+    `fa_calibration.live_alpha`), do té doby α 0, i bez stavu. Výchozí
+    `GEXLENS_FLOW_OI_ALPHA` platí jen pod v5. Log „FA ES vypnutá do kalibrace
+    z tisků: n/5 dnů“, badge „nekalibrováno n/5“ ve frontendu přinese #1588.
 - **Verdikty dne** (#1091, #1595, ADR-0035 dodatek 2026-10-17): zapisuje **jen engine** —
   `DayVerdictWriter` (`verdict_writer.py`) v minutovém cyklu každého symbolu s pipeline,
   v obchodní seanci od jejího začátku (17:00 CT předchozího dne) do US openu: do
@@ -487,7 +518,8 @@ Od ADR-0029 (v1.2) se **`snapshots/` a `derived/` nemažou nikdy** (`GEXLENS_KEE
 | `derived/{sym}/{expiry}/oiwalls/{date}.parquet` | **OI zdi** (#851): oi_call_wall / oi_put_wall + `share` (podíl na OI strany; frontend pod 0,2 nekreslí) |
 | `derived/{sym}/features/{date}.parquet` | **Minutový feature log** (#796): vstupní vektor setup detektoru + ATR + band metriky — trénovací matice smyčky #794; minuta, jejíž dávka cyklu nemá bar, řádek nemá (#1346; dřív O = H = L = C ze spotu) |
 | `trades/{sym}/{YYYY-MM-DD}.parquet` | **Surové opční TimeAndSale printy z dxFeed** (#795): ts, streamer_symbol, price, size, aggressorSide, spread_leg, eth. Mimo retenci; podklad budoucí klasifikace agresora (#615). Flag `GEXLENS_TASTY_TRADES_RECORD` (default true) |
-| `derived/{sym}/{expiry}/netflow/{date}.parquet` | Kumulativní klasifikovaný net objem per strana; sloupec `source` nese zdroj znaménka jako `flow/` (`midpoint` v5, `aggressor` v6, NULL = partice před #1460 = midpoint), navázání po restartu bere jen řádky zdroje běžícího enginu (#1460) — podklad FA odhadu OI a ranní kalibrace α. Řádek má každá sledovaná strana, i s netem 0 (#1582): explicitní 0 = naměřená nula, chybějící řádek = strana se nesleduje. Od mechaniky v6 minuta s mezerou trade větve CumΔ (ADR-0057 bod 3) netflow řádky nemá vůbec — net v ní ještě nese tisky částečné minuty; čtenáři berou poslední měřený řádek strany. Píše **aktivní i sekundární řetěz** (#1182): aktivní ES/NQ je vždy 0DTE bez ΔOI do D+1, kalibrace proto bere netflow sekundáru (expirace po dni netflow); `fa_alpha_history.expiry` říká, ze kterého řetězu bod vznikl. |
+| `derived/{sym}/{expiry}/netflow/{date}.parquet` | Kumulativní klasifikovaný net objem per strana; sloupec `source` nese zdroj znaménka jako `flow/` (`midpoint` v5, `aggressor` v6, NULL = partice před #1460 = midpoint), navázání po restartu bere jen řádky zdroje běžícího enginu (#1460) — podklad FA odhadu OI a ranní kalibrace α. Řádek má každá sledovaná strana, i s netem 0 (#1582): explicitní 0 = naměřená nula, chybějící řádek = strana se nesleduje. Od mechaniky v6 minuta s mezerou trade větve CumΔ (ADR-0057 bod 3) netflow řádky nemá vůbec — net v ní ještě nese tisky částečné minuty; čtenáři berou poslední měřený řádek strany. Píše **aktivní i sekundární řetěz** (#1182): aktivní ES/NQ je vždy 0DTE bez ΔOI do D+1, kalibrace proto bere netflow sekundáru (expirace po dni netflow, od mechaniky v6 jen řetěz, který byl sekundárem celou seanci D, #1580); `fa_alpha_history.expiry` říká, ze kterého řetězu bod vznikl. |
+| `derived/{sym}/{expiry}/netgap/{date}.parquet` | **Minuty mezery trade větve** řetězu (#1460, ADR-0057 bod 6; jen mechanika v6): `ts_min` cyklu, ve kterém aktivní nebo sekundární řetěz za otevřeného trhu neměřil tisky — netflow se tehdy nepíše. Den bez mezery partici nemá. Kalibrace α podle ní vynechá den s mezerou i u sekundáru, jehož řádek `flow` se zahazuje a jehož netflow chodí jen každý N-tý cyklus. |
 | `derived/{sym}/{expiry}/oiest/{date}.parquet` | FA odhad OI (netflow×α, #232) |
 | `derived/{sym}/{expiry}/gexprofile(fa)/…` + `gexfield(fa)/…` | Dyn profily/pole; `…fa` varianty nad FA odhadem |
 | `derived/{sym}/{expiry}/charmprofile/…`, `vannaprofile/…` (+ `…field`) | Dyn Charm/Vanna plochy (#204) |

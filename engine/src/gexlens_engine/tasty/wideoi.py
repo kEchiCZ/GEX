@@ -14,8 +14,10 @@ zbytek řetězu. Původ hodnoty určuje vyplněný `captured_ts` (IBKR); tasty
 řádek má jen `tasty_captured_ts`. Když IBKR strike doarchivuje (rozšíření
 obálky), řádek přepíše a nese pak oba časy — tasty ho od té chvíle nemění
 (stráž v `OIEodRepository.upsert_many`, #1605). Tasty řádky se během dne
-obnovují: publikace CME (~12:00 UTC) přijde do Summary a zapíše se, jen když
-se hodnota změnila.
+obnovují a zapíše se jen změněná hodnota. Novou publikaci OI nese
+`Summary.openInterest` už kolem 01:45–01:55 UTC dne D (20:45–20:55 CT
+předchozího večera), asi o 10 h dřív než IBKR po publikaci CME v 07:00 CT
+(měření 19. 10. 2026, #1626); po 12:00 UTC se hodnota už obvykle nemění.
 """
 
 import asyncio
