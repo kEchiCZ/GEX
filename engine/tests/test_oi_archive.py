@@ -484,7 +484,8 @@ def test_snapshot_ibkr_only_vynecha_tasty_radky(repository: OIEodRepository) -> 
 
 
 def test_measured_values_for_bere_jen_ibkr_mereni_po_prahu(repository: OIEodRepository) -> None:
-    """#1605: strana se počítá, jen když všechny její řádky změřilo IBKR od prahu."""
+    """#1605: strana se počítá, jen když všechny její řádky změřilo IBKR od prahu;
+    s `include_tasty` (B+) i tasty řádek obnovený od prahu."""
     _assert_measured(repository, "ES")
     with pytest.raises(ValueError, match="časového pásma"):
         repository.measured_values_for(
@@ -510,14 +511,34 @@ def _assert_measured(repository: OIEodRepository, symbol: str) -> None:
     repository.upsert_many([record(7700.0, 4.0, "EW3")], pub)  # druhá série, změřená
     repository.upsert_many([record(7800.0, 50.0)], pub)
     repository.upsert_many([record(7800.0, 5.0, "EW3")], tasty_captured_ts=midnight)  # smíšené
+    after_pub = pub + dt.timedelta(hours=8)  # večerní blok tasty
+    repository.upsert_many([record(7900.0, 60.0)], tasty_captured_ts=after_pub)  # tasty po prahu
+    repository.upsert_many([record(8000.0, 70.0)], pub)
+    repository.upsert_many(
+        [record(8000.0, 7.0, "EW3")], tasty_captured_ts=after_pub
+    )  # smíšené, obě série změřené
+    # IBKR čtení z cyklu před prahem přes tasty zápis po prahu: IBKR řádek se
+    # posuzuje jen podle `captured_ts`, ani s `include_tasty` se nepočítá
+    repository.upsert_many([record(8100.0, 80.0)], tasty_captured_ts=pub + dt.timedelta(minutes=1))
+    repository.upsert_many([record(8100.0, 81.0)], pub - dt.timedelta(minutes=1))
 
     # Práh v jiném pásmu se převede na UTC (sqlite porovnává text)
     since = pub.astimezone(dt.timezone(dt.timedelta(hours=-5)))
     measured = repository.measured_values_for(symbol, GUARD_EXPIRY, DAY_1, since=since)
+    with_tasty = repository.measured_values_for(
+        symbol, GUARD_EXPIRY, DAY_1, since=since, include_tasty=True
+    )
 
     assert {(r.strike, r.right): r.oi for r in measured} == {
         (7600.0, "C"): 35.0,
         (7700.0, "C"): 44.0,  # Σ přes série
+    }
+    # Tasty před prahem (7400, smíšené 7800) ani IBKR před prahem (7500, 8100) ne
+    assert {(r.strike, r.right): r.oi for r in with_tasty} == {
+        (7600.0, "C"): 35.0,
+        (7700.0, "C"): 44.0,
+        (7900.0, "C"): 60.0,
+        (8000.0, "C"): 77.0,
     }
 
 

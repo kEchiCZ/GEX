@@ -15,8 +15,9 @@ den po dni nad čistou paměťovou DB a porovná výsledek s produkcí:
 - den archivu, jehož snímek (nebo snímek předchozího obchodního dne) vznikl
   před publikačním oknem, se nepřehrává — **neověřitelný** (obnova po
   publikaci neproběhla, finální čísla v DB nejsou);
-- strany bez IBKR měření po publikaci (tasty křídla, předpublikační IBKR
-  čtení) vyřadí už samy přehrávané funkce (#1605) — kontrola dne podle max
+- strany bez měření po publikaci (tasty křídla, předpublikační IBKR čtení;
+  strana D bere i tasty řádek obnovený po publikaci D, varianta B+) vyřadí
+  už samy přehrávané funkce (#1605) — kontrola dne podle max
   `captured_ts` je nepozná; počty vyřazených stran jdou do logu (INFO);
 - α se počítá od nuly v pořadí dnů (EMA); dny bez netflow partice (retence)
   bod nemají, report ukáže starou i novou α a počet dnů.
@@ -250,7 +251,7 @@ def report_markdown(results: Sequence[SymbolReplay], generated: dt.datetime) -> 
             "### Body v produkci bez nového přepočtu",
             "",
             "Přehrání je nevytvořilo (neověřitelný den, málo stran po vyřazení stran bez "
-            "IBKR měření po publikaci #1605, chybějící partice). `--apply` je nechá beze "
+            "měření po publikaci #1605, chybějící partice). `--apply` je nechá beze "
             "změny — nic nemaže.",
             "",
         ]
@@ -350,14 +351,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.db:
         parser.error("chybí --db, GEXLENS_HOST_DATABASE_URL nebo GEXLENS_DATABASE_URL")
-    # Logy přehrávaných funkcí: počty vyřazených stran bez IBKR měření (#1605)
+    # Logy přehrávaných funkcí: počty vyřazených stran bez měření po publikaci (#1605)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     # Přesměrovaný výstup má na Windows kódování cp1250: „α“ a „→“ by print
-    # shodily po reportu, ještě před --apply (dry-run 18. 10.)
-    reconfigure = getattr(sys.stdout, "reconfigure", None)
-    if reconfigure is not None:
-        reconfigure(encoding="utf-8")
+    # shodily po reportu, ještě před --apply (dry-run 18. 10.); logy na stderr
+    # by vyšly jako „α“ a rozsypaná diakritika (dry-run 19. 10.)
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
     settings = Settings(data_dir=Path(args.data))
     prod = create_engine(args.db)
     oi_repo = OIEodRepository(prod)

@@ -32,6 +32,7 @@ from sqlalchemy import (
     case,
     func,
     inspect,
+    or_,
     select,
     text,
     tuple_,
@@ -577,23 +578,42 @@ class OIEodRepository:
         ]
 
     def measured_values_for(
-        self, symbol: str, expiry: str, day: dt.date, *, since: dt.datetime
+        self,
+        symbol: str,
+        expiry: str,
+        day: dt.date,
+        *,
+        since: dt.datetime,
+        include_tasty: bool = False,
     ) -> list[OIRecord]:
-        """Σ OI expirace dne jen pro strany změřené IBKR od `since` (#1605).
+        """Σ OI expirace dne jen pro strany změřené od `since` (#1605).
 
         Strana (strike, right) se vrátí, jen když VŠECHNY její řádky přes série
         nesou IBKR měření s `captured_ts >= since` (typicky publikace CME dne).
         Strana nesená tasty nebo IBKR čtením před `since` chybí — „nevíme",
-        ne hodnota (#1172); stejně strana se smíšenými sériemi. Podmínka na
-        `tasty_captured_ts` tu záměrně není: řádek tasty → IBKR nese oba časy
-        a IBKR razítkuje začátkem cyklu, ne časem zápisu, takže časy dvou
-        zdrojů porovnat nejde; ochranu IBKR řádku dává stráž v `upsert_many`.
+        ne hodnota (#1172); stejně strana se smíšenými sériemi.
+
+        `include_tasty` (varianta B+, jen strana D v `measured_oi_pair`): za
+        změřený platí i tasty řádek (`captured_ts` NULL) s `tasty_captured_ts
+        >= since` — tasty obnoví hodnotu i čas jen při změně OI, takový řádek
+        tedy nese publikaci od `since`. U IBKR řádku se `tasty_captured_ts`
+        nečte nikdy: řádek tasty → IBKR nese oba časy a IBKR razítkuje
+        začátkem cyklu, ne časem zápisu, takže časy dvou zdrojů porovnat nejde;
+        ochranu IBKR řádku dává stráž v `upsert_many`.
         """
         if since.tzinfo is None:
             raise ValueError(f"measured_values_for: `since` bez časového pásma ({since!r})")
         # sqlite porovnává uložený UTC čas jako text — práh musí být taky v UTC
         threshold = since.astimezone(dt.UTC)
-        measured = oi_eod_table.c.captured_ts >= threshold
+        measured: ColumnElement[bool] = oi_eod_table.c.captured_ts >= threshold
+        if include_tasty:
+            measured = or_(
+                measured,
+                and_(
+                    oi_eod_table.c.captured_ts.is_(None),
+                    oi_eod_table.c.tasty_captured_ts >= threshold,
+                ),
+            )
         stmt = (
             select(
                 oi_eod_table.c.strike,
@@ -606,7 +626,8 @@ class OIEodRepository:
                 oi_eod_table.c.date == day,
             )
             .group_by(oi_eod_table.c.strike, oi_eod_table.c["right"])
-            # NULL `captured_ts` (tasty řádek) spadne do else → strana vypadne
+            # NULL čas (tasty řádek bez `include_tasty`, řádek před #463) spadne
+            # do else → strana vypadne
             .having(func.sum(case((measured, 0), else_=1)) == 0)
         )
         with self._engine.connect() as conn:

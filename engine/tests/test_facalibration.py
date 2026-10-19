@@ -330,41 +330,60 @@ def test_collect_bere_jen_strany_s_ibkr_merenim_po_publikaci(
     """#1605: strana, kterou archiv D+1 nese z tasty (nebo z IBKR čtení před
     publikací), má předchozí publikaci a ΔOI přesně 0 — NQ od 5. 10. 2026
     medián 0 v 7 z 8 bodů. Je to „nevíme", ne nula: do bodu nesmí. Strana
-    tasty → IBKR po publikaci se počítá; strana bez měření D (varianta B) ne."""
+    tasty → IBKR po publikaci se počítá. Varianta B+: strana D bere i tasty
+    řádek obnovený po publikaci D, tasty řádek D před publikací ne; strana
+    D+1 tasty ani po publikaci D+1 (obnova = ΔOI ≠ 0, vypadly by nuly)."""
     settings, oi_repo, alpha_repo = _repos(tmp_path)
     measured = [7500.0 + 10 * i for i in range(5)]  # IBKR po publikaci obou dnů, ΔOI +40
-    tasty_only = [7600.0 + 10 * i for i in range(6)]  # D+1 jen tasty, ΔOI 0
+    tasty_only = [7600.0 + 10 * i for i in range(6)]  # D+1 jen tasty z 00:00, ΔOI 0
     pre_pub = [7700.0]  # D+1 jen IBKR čtení před publikací, ΔOI 0
     tasty_then_ibkr = [7800.0]  # D+1 tasty z 00:00, pak IBKR po publikaci, ΔOI +40
-    no_before = [7900.0]  # D jen tasty — strana D bez měření
-    _write_netflow(settings, measured + tasty_only + pre_pub + tasty_then_ibkr + no_before)
+    no_before = [7900.0]  # D jen tasty před publikací D — strana D bez měření
+    tasty_d = [7910.0, 7920.0]  # D tasty obnovené po publikaci D (B+), ΔOI +40
+    tasty_d1 = [7930.0]  # D+1 tasty obnovené po publikaci D+1 — strana D+1 bez měření
+    _write_netflow(
+        settings,
+        measured + tasty_only + pre_pub + tasty_then_ibkr + no_before + tasty_d + tasty_d1,
+    )
     midnight = dt.datetime.combine(TODAY, dt.time(0, 0), tzinfo=dt.UTC)
+    prev_midnight = dt.datetime.combine(PREV, dt.time(0, 0), tzinfo=dt.UTC)
+    evening = dt.timedelta(hours=8)  # večerní blok tasty (~20:00 UTC)
 
     oi_repo.upsert_many(
-        _records(measured + tasty_only + pre_pub + tasty_then_ibkr, PREV, 1000.0),
+        _records(measured + tasty_only + pre_pub + tasty_then_ibkr + tasty_d1, PREV, 1000.0),
         _after_pub(settings, PREV),
     )
-    oi_repo.upsert_many(_records(no_before, PREV, 1000.0), tasty_captured_ts=midnight)
+    oi_repo.upsert_many(_records(no_before, PREV, 1000.0), tasty_captured_ts=prev_midnight)
+    oi_repo.upsert_many(
+        _records(tasty_d, PREV, 1000.0),
+        tasty_captured_ts=settings.oi_publication_utc(PREV) + evening,
+    )
     oi_repo.upsert_many(
         _records(tasty_only + tasty_then_ibkr, TODAY, 1000.0), tasty_captured_ts=midnight
+    )
+    oi_repo.upsert_many(
+        _records(tasty_d1, TODAY, 1040.0),
+        tasty_captured_ts=settings.oi_publication_utc(TODAY) + evening,
     )
     oi_repo.upsert_many(
         _records(pre_pub, TODAY, 1000.0), dt.datetime.combine(TODAY, dt.time(5, 1), tzinfo=dt.UTC)
     )
     oi_repo.upsert_many(
-        _records(measured + tasty_then_ibkr + no_before, TODAY, 1040.0),
+        _records(measured + tasty_then_ibkr + no_before + tasty_d, TODAY, 1040.0),
         _after_pub(settings, TODAY),
     )
 
     with caplog.at_level(logging.INFO, logger="gexlens_engine.storage.fa_calibration"):
         result = _collect(settings, oi_repo, alpha_repo)
 
-    # Před opravou: 7 nul + 7× 0,4 → medián 0,2; teď jen strany změřené v obou dnech
+    # Před opravou (values_for obou dnů): 17 stran, 7 nul + 10× 0,4 → medián 0,4,
+    # rozliší ho počet stran a log; teď jen strany změřené po publikaci v obou dnech
     assert result is not None
-    assert result.point.samples == 6
+    assert result.point.samples == 8
     assert result.point.ratio_median == pytest.approx(0.4)
-    assert "14 stran s |net| ≥ 25, vyřazeno 8 bez IBKR měření po publikaci (D+1 7, D 1)" in (
-        caplog.text
+    assert (
+        "17 stran s |net| ≥ 25, vyřazeno 9 bez měření po publikaci (D+1 8, D 1), D tasty 2"
+        in caplog.text
     )
 
 
@@ -406,7 +425,7 @@ def test_collect_bez_ibkr_mereni_bod_nezamkne_a_zkusi_znovu(
 
     with caplog.at_level(logging.INFO, logger="gexlens_engine.storage.fa_calibration"):
         assert _collect(settings, oi_repo, alpha_repo) is None
-    assert "bez stran s IBKR měřením po publikaci v obou dnech" in caplog.text
+    assert "bez stran změřených po publikaci v obou dnech" in caplog.text
     assert "jsou shodné" not in caplog.text
     assert not alpha_repo.history_exists("ES", PREV)
 

@@ -1388,7 +1388,7 @@ async def test_kalibrace_alfa_az_nad_finalnim_snimkem(
     today = TS.date()  # pátek 17. 7.
     prev = today - dt.timedelta(days=1)
     contracts = list(pipeline.runtime.contracts)
-    # Včerejšek s IBKR měřením po publikaci (#1605, varianta B: i strana D)
+    # Včerejšek s IBKR měřením po publikaci (#1605, varianta B+: měřená i strana D)
     oi_repository.upsert_many(
         [OIRecord("ES", "20260717", c.strike, c.right, prev, 460.0) for c in contracts],
         settings.oi_publication_utc(prev) + dt.timedelta(hours=1),

@@ -114,15 +114,18 @@ def test_dry_run_nic_nezapise_apply_opravi_alfu_i_validaci(tmp_path: Path) -> No
 
 
 def test_vystup_v_cp1250_neshodi_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Přesměrovaný výstup na Windows (cp1250) nesmí shodit print „α … → …“ před zápisem."""
+    """Přesměrovaný výstup na Windows (cp1250) nesmí shodit print „α … → …“ před zápisem;
+    logy na stderr jdou taky v UTF-8."""
     module = _load()
     url, settings = _seed(tmp_path)
     buffer = io.BytesIO()
     monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buffer, encoding="cp1250"))
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(io.BytesIO(), encoding="cp1250"))
     args = ["--db", url, "--data", str(settings.data_dir), "--symbols", "ES"]
     assert module.main([*args, "--apply", "--yes"]) == 0
     sys.stdout.flush()
     assert "ES: α 0.000 → 0.400" in buffer.getvalue().decode("utf-8")
+    assert sys.stderr.encoding == "utf-8"
     state = FaAlphaRepository(create_engine(url)).get("ES")
     assert state is not None and state.alpha == pytest.approx(0.4)
 

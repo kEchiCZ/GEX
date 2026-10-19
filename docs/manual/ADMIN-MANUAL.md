@@ -403,23 +403,35 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
   Report má u α starý/nový počet stran a sekci „Body v produkci bez nového
   přepočtu“ (body, které přehrání nevytvoří — `--apply` je nechá beze změny);
   logy vyřazených stran vypisuje na INFO.
-- **Jen strany s IBKR měřením po publikaci** (#1605, `measured_oi_pair`,
-  `OIEodRepository.measured_values_for`): finalita potvrzuje jen univerzum IBKR
-  čtení, proto kalibrace α i FA validace berou jen strany, jejichž všechny řádky
-  (přes série) změřilo IBKR po publikačním okně (`captured_ts ≥
-  oi_publication_utc(den)`), a to v obou dnech: D+1 proti publikaci D+1, D proti
-  publikaci D (varianta B, prozatím — čeká na potvrzení vlastníka; varianta A =
-  filtr jen na straně D+1 je změna jednoho místa v `measured_oi_pair`). Strana,
-  kterou archiv nese z tasty nebo z IBKR čtení před publikací, je „nevíme“, ne
-  ΔOI 0 (#1172): klíče se zužují na průnik obou dnů (u FA validace volume i OI
-  před/po), takže chybějící hodnota nedá ΔOI = −oi_before. Podmínka na
-  `tasty_captured_ts` tu není: IBKR razítkuje začátkem cyklu, ne časem zápisu,
-  a řádek tasty → IBKR nese oba časy; IBKR řádek chrání stráž v SQL. Log bodu
-  uvádí počet stran s |net| ≥ 25 a kolik jich vypadlo bez IBKR měření po
-  publikaci (rozpad D+1 / D; FA validace obdobně obchodované strany). Expirace
-  bez takových stran se neukládá ani nezamyká (log „bez stran s IBKR měřením po
-  publikaci“) a zkusí se znovu — bod se tak častěji dopočítá až při rollu
-  v settle (nová pipeline má `oi_final=False`, finalita večer znovu spustí FA
+- **Jen strany změřené po publikaci** (#1605, `measured_oi_pair`,
+  `OIEodRepository.measured_values_for`; varianta B+, vlastník 19. 10. 2026):
+  finalita potvrzuje jen univerzum IBKR čtení, proto kalibrace α i FA validace
+  berou jen strany, jejichž všechny řádky (přes série) jsou změřené po
+  publikačním okně svého dne, a to v obou dnech:
+  - **strana D+1** jen z IBKR měření po publikaci D+1 (`captured_ts ≥
+    oi_publication_utc(D+1)`);
+  - **strana D** z IBKR měření po publikaci D, nebo z tasty řádku
+    (`captured_ts` NULL) s `tasty_captured_ts ≥ oi_publication_utc(D)`
+    (`include_tasty`). Tasty obnoví hodnotu i čas jen při změně OI, takový řádek
+    tedy nese publikaci D. Tasty řádky s časem před publikací D (07:00 CT =
+    12:00 UTC v létě, 13:00 UTC v zimě) nesou publikaci D−1 a vypadnou. Na
+    straně D+1 by stejné pravidlo znamenalo „ΔOI ≠ 0“: vypadly by skutečné nuly
+    a α by se vychýlila nahoru. FA validace navíc vyřadí stranu D z tasty, která
+    nemá řádek ve snímku D (leží mimo univerzum IBKR, volume je neznámý, ne 0);
+    log ji počítá jako „D tasty bez volume“.
+
+  Strana se smíšenými sériemi se počítá, jen když je změřená každá série.
+  Strana, kterou archiv nese z tasty bez obnovy po publikaci nebo z IBKR čtení
+  před publikací, je „nevíme“, ne ΔOI 0 (#1172): klíče se zužují na průnik obou
+  dnů (u FA validace volume i OI před/po), takže chybějící hodnota nedá ΔOI =
+  −oi_before. U IBKR řádku se `tasty_captured_ts` nečte: IBKR razítkuje
+  začátkem cyklu, ne časem zápisu, a řádek tasty → IBKR nese oba časy; IBKR
+  řádek chrání stráž v SQL. Log bodu uvádí počet stran s |net| ≥ 25 a kolik
+  jich vypadlo bez měření po publikaci (rozpad D+1 / D) a kolik započtených
+  stran nese D z tasty („D tasty“; FA validace obdobně obchodované strany).
+  Expirace bez takových stran se neukládá ani nezamyká (log „bez stran
+  změřených po publikaci v obou dnech“) a zkusí se znovu — bod se tak častěji
+  dopočítá až při rollu v settle (nová pipeline má `oi_final=False`, finalita večer znovu spustí FA
   joby nad archivem rozšířeným o doarchivaci obálky); `recompute_fa.py`
   přehrává archiv z konce dne, shodne se proto s večerním bodem. Do #1605 nesly
   takové strany předchozí publikaci a ΔOI přesně 0: NQ měl od 5. 10. 2026

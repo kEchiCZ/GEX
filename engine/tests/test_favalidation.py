@@ -281,9 +281,10 @@ def test_collect_bere_jen_strany_s_ibkr_merenim_po_publikaci(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """#1605: obchodovaná strana, kterou archiv D+1 nese z tasty (předchozí
-    publikace, ΔOI 0), nebo kterou IBKR v D po publikaci nezměřilo, je „nevíme":
-    vypadne z volume i z OI před/po. Jinak by ΔOI 0 (nebo −oi_before) srazilo
-    open-ratio a korelaci."""
+    publikace, ΔOI 0), nebo kterou v D po publikaci nezměřilo IBKR ani neobnovil
+    tasty (B+), je „nevíme": vypadne z volume i z OI před/po. Jinak by ΔOI 0
+    (nebo −oi_before) srazilo open-ratio a korelaci. Strana D z tasty bez řádku
+    ve snímku D (mimo univerzum IBKR) má volume neznámý, ne 0 — vypadne taky."""
     db = create_engine("sqlite://")
     oi_repo = OIEodRepository(db)
     oi_repo.ensure_schema()
@@ -291,11 +292,13 @@ def test_collect_bere_jen_strany_s_ibkr_merenim_po_publikaci(
     fa_repo.ensure_schema()
     measured = [7000.0 + 5 * i for i in range(12)]
     tasty_d1 = [7100.0, 7105.0, 7110.0]  # D změřeno, D+1 jen tasty z 00:00
-    tasty_d = [7200.0]  # D jen tasty, D+1 změřeno
+    tasty_d = [7200.0]  # D jen tasty před publikací D, D+1 změřeno
+    tasty_d_after = [7300.0]  # D tasty obnovené po publikaci D (B+), D+1 změřeno
+    tasty_no_volume = [7400.0]  # jako 7300, ale bez řádku ve snímku D
     _write_snapshot(
         tmp_path / "ES" / EXPIRY / f"{DAY.isoformat()}.parquet",
         DAY,
-        [(20, s, "C", 10.0 * (i + 1)) for i, s in enumerate(measured)]
+        [(20, s, "C", 10.0 * (i + 1)) for i, s in enumerate(measured + tasty_d_after)]
         + [(20, s, "C", 100.0) for s in tasty_d1 + tasty_d],
     )
     oi_repo.upsert_many(
@@ -306,15 +309,20 @@ def test_collect_bere_jen_strany_s_ibkr_merenim_po_publikaci(
         tasty_captured_ts=dt.datetime.combine(DAY, dt.time(0, 0), tzinfo=dt.UTC),
     )
     oi_repo.upsert_many(
+        [OIRecord("ES", EXPIRY, s, "C", DAY, 100.0) for s in tasty_d_after + tasty_no_volume],
+        tasty_captured_ts=_after_pub(DAY) + dt.timedelta(hours=7),
+    )
+    oi_repo.upsert_many(
         [OIRecord("ES", EXPIRY, s, "C", NEXT, 100.0) for s in tasty_d1],
         tasty_captured_ts=dt.datetime.combine(NEXT, dt.time(0, 0), tzinfo=dt.UTC),
     )
     oi_repo.upsert_many(
         [
             OIRecord("ES", EXPIRY, s, "C", NEXT, 100.0 + 4.0 * (i + 1))
-            for i, s in enumerate(measured)
+            for i, s in enumerate(measured + tasty_d_after)
         ]
-        + [OIRecord("ES", EXPIRY, s, "C", NEXT, 160.0) for s in tasty_d],
+        + [OIRecord("ES", EXPIRY, s, "C", NEXT, 160.0) for s in tasty_d]
+        + [OIRecord("ES", EXPIRY, s, "C", NEXT, 600.0) for s in tasty_no_volume],
         _after_pub(NEXT),
     )
 
@@ -323,11 +331,13 @@ def test_collect_bere_jen_strany_s_ibkr_merenim_po_publikaci(
 
     assert [(r.expiry, r.day) for r in records] == [(EXPIRY, DAY)]
     point = records[0].point
-    assert point.contracts == 12  # jen strany změřené v obou dnech
-    assert point.open_ratio == pytest.approx(0.4)
+    assert point.contracts == 13  # strany změřené v obou dnech, D i z tasty po publikaci
+    assert point.open_ratio == pytest.approx(0.4)  # tichá strana 7400 by dala 0,95
     assert point.spearman == pytest.approx(1.0)
-    assert "16 obchodovaných stran, 4 mimo strany s IBKR měřením po publikaci (D+1 3, D 1)" in (
-        caplog.text
+    assert point.silent_share == 0.0
+    assert (
+        "17 obchodovaných stran, 4 mimo strany změřené po publikaci (D+1 3, D 1), D tasty 1, "
+        "D tasty bez volume 1" in caplog.text
     )
 
 
@@ -357,5 +367,5 @@ def test_collect_bez_ibkr_mereni_po_publikaci_bod_neulozi(
     with caplog.at_level(logging.INFO, logger="gexlens_engine.storage.fa_validation"):
         assert _collect(tmp_path, oi_repo, fa_repo, NEXT) == []
 
-    assert "bez stran s IBKR měřením po publikaci" in caplog.text
+    assert "bez stran změřených po publikaci v obou dnech" in caplog.text
     assert not fa_repo.exists("ES", EXPIRY, DAY)

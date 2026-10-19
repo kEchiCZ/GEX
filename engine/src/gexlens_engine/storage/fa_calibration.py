@@ -2,7 +2,7 @@
 
 Job běží v pipeline po finálním OI archivu dne (#1314, hned za FA validací):
 včerejší konec dne řady netflow (řez 21:00 UTC — konec trade date) se
-porovná s ΔOI mezi archivy na stranách s IBKR měřením po publikaci CME
+porovná s ΔOI mezi archivy na stranách změřených po publikaci CME
 (#1605), medián poměrů dá denní bod a EMA přes dny
 aktualizuje α symbolu. Historie bodů zůstává v `fa_alpha_history` pro audit
 (vč. buy/sell mediánů — případná asymetrie se rozhodne až nad daty).
@@ -230,7 +230,7 @@ def collect_alpha_calibration(
     Víkendový `today` se nekalibruje (#1309): archiv soboty je kopie pátku,
     bod „pátek → sobota" vyšel s mediánem 0 (fa_alpha_history 18. a 25. 9.
     2026) a dedup dne pak zablokoval poctivý bod „pátek → pondělí".
-    ΔOI jen na stranách s IBKR měřením po publikaci v obou dnech
+    ΔOI jen na stranách změřených po publikaci v obou dnech
     (`measured_oi_pair`, #1605); bez nich se bod neukládá a zkusí se znovu
     (i po rollu nad večerním archivem). Blokující (parquet + DB) — volat
     přes to_thread.
@@ -262,22 +262,23 @@ def collect_alpha_calibration(
         netflow_path = netflow_dir / f"{previous.isoformat()}.parquet"
         if not netflow_path.exists():
             continue
-        oi_before, oi_after = measured_oi_pair(
+        oi_before, oi_after, before_tasty = measured_oi_pair(
             oi_repository, symbol, expiry, today, previous, publication_utc
         )
         if not oi_after and not oi_repository.values_for(symbol, expiry, today):
             continue  # mrtvá expirace — dnešní archiv ji nenese
         netflow = netflow_at_cutoff(netflow_path, previous)
-        # ΔOI jen pro strany změřené IBKR po publikaci v OBOU dnech (#1605);
+        # ΔOI jen pro strany změřené po publikaci v OBOU dnech (#1605);
         # ostatní zůstávají bez klíče a kalibrace je přeskočí (#1172) — nula
         # za chybějící hodnotu by dala ΔOI = −oi_before nebo přesně 0
         doi = {key: oi_after[key] - oi_before[key] for key in oi_after.keys() & oi_before.keys()}
         qualifying = [key for key, net in netflow.items() if abs(net) >= MIN_ABS_NET]
         no_after = sum(1 for key in qualifying if key not in oi_after)
         no_before = sum(1 for key in qualifying if key in oi_after and key not in oi_before)
+        tasty_before = sum(1 for key in qualifying if key in doi and key in before_tasty)
         logger.info(
-            "Kalibrace α %s %s %s: %d stran s |net| ≥ %.0f, vyřazeno %d bez IBKR měření "
-            "po publikaci (D+1 %d, D %d)",
+            "Kalibrace α %s %s %s: %d stran s |net| ≥ %.0f, vyřazeno %d bez měření "
+            "po publikaci (D+1 %d, D %d), D tasty %d",
             symbol,
             expiry,
             previous,
@@ -286,10 +287,11 @@ def collect_alpha_calibration(
             no_after + no_before,
             no_after,
             no_before,
+            tasty_before,
         )
         if not doi:
             logger.info(
-                "Kalibrace α %s %s %s: bez stran s IBKR měřením po publikaci v obou dnech "
+                "Kalibrace α %s %s %s: bez stran změřených po publikaci v obou dnech "
                 "(D+1 %d, D %d stran) — bod se neukládá, zkusí se znovu",
                 symbol,
                 expiry,
