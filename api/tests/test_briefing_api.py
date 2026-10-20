@@ -16,6 +16,7 @@ from sqlalchemy import text, update
 from gexlens_api.briefing_routes import build_briefing_router
 from gexlens_api.main import create_app
 from gexlens_api.meta_repo import MetaRepository
+from gexlens_engine.compute.dayverdict import VERDICT_RULES_VERSION
 from gexlens_engine.compute.settle import is_trading_session, us_open_ts
 from gexlens_engine.config import Settings
 from gexlens_engine.storage.briefing_verdicts_store import (
@@ -71,7 +72,7 @@ def _write(meta: MetaRepository, session: dt.date = TODAY, **overrides: Any) -> 
         "verdict": "long",
         "score": 4,
         "votes": VOTES,
-        "rules_version": 3,
+        "rules_version": VERDICT_RULES_VERSION,
     }
     values.update(overrides)
     repository.upsert_verdict(session_date=session, **values)
@@ -156,17 +157,21 @@ def _evaluate(meta: MetaRepository, verdict_id: int, hit: bool) -> None:
     )
 
 
+def _past_session(month: int) -> dt.date:
+    """Obchodní den kolem 15. dne `month` do dneška — do 400 dní okna `days` (le=400)."""
+    year = TODAY.year if dt.date(TODAY.year, month, 15) <= TODAY else TODAY.year - 1
+    return _trading_day_on_or_before(dt.date(year, month, 15))
+
+
 @pytest.mark.parametrize(
     "session",
-    [dt.date(2026, 10, 2), dt.date(2026, 11, 3)],  # US letní čas (open 13:30 UTC) a zimní (14:30)
+    [_past_session(7), _past_session(1)],  # US letní čas (open 13:30 UTC) a zimní (14:30 UTC)
 )
 def test_verdict_stats_jen_aktualni_verze_a_zapis_pred_openem(
     client: TestClient, meta: MetaRepository, session: dt.date
 ) -> None:
     """#1588 (Rozhodnuto 20. 10.: C a B): statistiky čtou jen aktuální verzi pravidel
     a vyřadí řádek zapsaný od US openu (řádky z Briefingu do 16. 10.); nic se nemaže."""
-    from gexlens_engine.compute.dayverdict import VERDICT_RULES_VERSION
-
     days = (dt.datetime.now(dt.UTC).date() - session).days + 30
     _write(meta, session, symbol="ES", rules_version=VERDICT_RULES_VERSION)
     _write(meta, session, symbol="NQ", rules_version=VERDICT_RULES_VERSION)
