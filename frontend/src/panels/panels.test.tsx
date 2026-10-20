@@ -6,7 +6,7 @@ import { LiveSocket } from '../api/ws'
 import { BottomPanels } from '../components/BottomPanels'
 import { FakeWebSocket } from '../test/fakeWs'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
-import { cumDeltaAreas, barHeights, cvdLinePoints, evoOiDisplay, evoOiStepPath, sentimentCandleGeometry } from './geometry' // prettier-ignore
+import { cumDeltaAreas, cumDeltaSegments, barHeights, cvdLinePoints, evoOiDisplay, evoOiStepPath, sentimentCandleGeometry, visibleCumDelta, CUMDELTA_MIDPOINT_REASON } from './geometry' // prettier-ignore
 import type { PanelSeries } from '../components/BottomPanels'
 
 const DATA: PanelSeries = {
@@ -834,4 +834,69 @@ test('tažení bez onTimePan nepadá a crosshair při tažení stojí', () => {
   fireEvent.pointerDown(svg, { clientX: 10, clientY: 10, button: 0 })
   fireEvent.pointerMove(svg, { clientX: 40, clientY: 30 })
   fireEvent.pointerUp(svg)
+})
+
+// ── Cum Δ s mezerou a skrytí midpointu (ADR-0057 body 3 a 8, #1588) ──
+
+const CUM_VISIBLE = {
+  vol: false,
+  optVol: false,
+  delta: true,
+  deltaFlow: false,
+  evoOi: false,
+  sentiment: false,
+}
+
+test('cumDeltaSegments: mezera (null) dělí plochu na úseky bez spojnice, škála společná', () => {
+  const { segments, zeroY } = cumDeltaSegments([100, null, null, -100], 400, 80)
+  expect(zeroY).toBe(40)
+  expect(segments).toHaveLength(2)
+  // x = (index + 0,5) × 100: první úsek jen minuta 0, druhý jen minuta 3
+  expect(segments[0].positive).toBe('50,40 50,6 50,40')
+  expect(segments[1].negative).toBe('350,40 350,74 350,40')
+  // Bez mezer = jeden úsek shodný s cumDeltaAreas
+  const whole = cumDeltaSegments([100, -100], 200, 80)
+  expect(whole.segments).toHaveLength(1)
+  expect(whole.segments[0].positive).toBe(cumDeltaAreas([100, -100], 200, 80).positive)
+  expect(cumDeltaSegments([null, null], 200, 80).segments).toEqual([])
+})
+
+test('visibleCumDelta skrývá midpoint minuty jen pod v6 a nese důvod', () => {
+  const values = [10, 20, null, 30]
+  const midpoint = [true, true, false, false]
+  // Pod v5 (engine midpoint) netečné: nic se neskrývá
+  expect(visibleCumDelta(values, midpoint, false)).toMatchObject({ values, hiddenReason: null })
+  const hidden = visibleCumDelta(values, midpoint, true)
+  expect(hidden.values).toEqual([null, null, null, 30])
+  expect(hidden.hiddenReason).toBe(CUMDELTA_MIDPOINT_REASON)
+  expect(hidden.hiddenAt(0)).toBe(true)
+  expect(hidden.hiddenAt(2)).toBe(false) // mezera trade větve, ne midpoint
+  // Den celý z tisků: bez důvodu
+  expect(visibleCumDelta(values, [false, false, false, false], true).hiddenReason).toBeNull()
+})
+
+test('panel Cum Δ: mezera = dva úseky plochy a readout „—“, midpoint pod v6 skrytý s důvodem', () => {
+  const data: PanelSeries = {
+    ...DATA,
+    cumDelta: [50, null, 200, -50],
+    cumDeltaMidpoint: [true, false, false, false],
+    futuresCvd: [10, 20, 30, 40],
+  }
+  const { rerender } = render(
+    <CrosshairProvider>
+      <BottomPanels data={data} visible={CUM_VISIBLE} width={400} />
+    </CrosshairProvider>,
+  )
+  const panel = screen.getByLabelText('Cum Δ panel')
+  expect(panel.querySelectorAll('[data-part="cumdelta-positive"]')).toHaveLength(2)
+  expect(screen.queryByTestId('cumdelta-hidden')).toBeNull() // pod v5 bez důvodu
+  rerender(
+    <CrosshairProvider>
+      <BottomPanels data={data} visible={CUM_VISIBLE} width={400} hideMidpointCumDelta />
+    </CrosshairProvider>,
+  )
+  // Minuta 0 (midpoint) i 1 (mezera) se nekreslí → jeden úsek 2–3; CVD zůstává
+  expect(panel.querySelectorAll('[data-part="cumdelta-positive"]')).toHaveLength(1)
+  expect(screen.getByTestId('cumdelta-hidden').textContent).toContain(CUMDELTA_MIDPOINT_REASON)
+  expect(screen.getByTestId('cumdelta-cvd')).toBeDefined()
 })

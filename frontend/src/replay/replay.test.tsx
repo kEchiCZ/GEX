@@ -1470,3 +1470,31 @@ test('Daily balík nese verzi obsahu v URL, plný balík ne (#1602)', async () =
   ).toBe(true)
   expect(full.endsWith('/replay/ES/20260716/2026-07-16')).toBe(true)
 })
+
+// ── Cum Δ s mezerou a zdrojem znaménka (ADR-0057 body 3 a 8, #1588) ──
+
+test('flow s cum_delta NULL je mezera, díra ve sběru drží stav, zdroj per minuta (#1588)', () => {
+  const MID2 = '2026-07-16T15:02:00Z'
+  const M3 = '2026-07-16T15:03:00Z'
+  const bars = [...BARS, { ...BARS[1], ts_min: MID2 }, { ...BARS[1], ts_min: M3 }]
+  const bundle = bundleFor(CELLS, bars, LEVELS, [])
+  const flow = [
+    { ts_min: M0, flow_delta: 50, cum_delta: 50, source: 'midpoint' },
+    // M1: trade větev neběžela (NULL), MID2: řádek chybí (díra ve sběru, #459)
+    { ts_min: M1, flow_delta: null, cum_delta: null, source: 'aggressor' },
+    { ts_min: M3, flow_delta: 20, cum_delta: 70, source: 'aggressor' },
+  ]
+  const day = buildReplayDay({ ...bundle, flow })
+  expect(day.panels.cumDelta).toEqual([50, null, null, 70])
+  expect(day.panels.cumDeltaMidpoint).toEqual([true, false, false, false])
+
+  // Živý append z WS: null zůstane mezerou, zdroj se nese
+  const live = appendMinute(decodeBundle({ ...bundle, flow: flow.slice(0, 1) }), {
+    tsIso: M1,
+    rows: [],
+    flow: { cum_delta: null, source: 'aggressor' },
+  })
+  const liveDay = assembleReplayDay(live)
+  expect(liveDay.panels.cumDelta.slice(0, 2)).toEqual([50, null])
+  expect(liveDay.panels.cumDeltaMidpoint?.slice(0, 2)).toEqual([true, false])
+})

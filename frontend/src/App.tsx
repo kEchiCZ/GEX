@@ -1550,11 +1550,8 @@ function MainContent() {
   // mezera v okně = „—" (ADR-0057 bod 4), stejná řada jako v panelu
   const rangeCumSeries = useMemo(
     () =>
-      visibleCumDelta(
-        rawDay.panels.cumDelta,
-        rawDay.panels.cumDeltaMidpoint,
-        hideMidpointCumDelta,
-      ).values,
+      visibleCumDelta(rawDay.panels.cumDelta, rawDay.panels.cumDeltaMidpoint, hideMidpointCumDelta)
+        .values,
     [rawDay.panels.cumDelta, rawDay.panels.cumDeltaMidpoint, hideMidpointCumDelta],
   )
   const rangeCum = useMemo(
@@ -2168,7 +2165,8 @@ function MainContent() {
                 {rangeLabel(range)}
                 {rangeB && ` · B ${rangeLabel(rangeB)}`}
                 {rangeNote && ` · ⏳ ${rangeNote}`}
-                {rangeCum !== null && ` · CumΔ${rangeB ? ' A' : ' okna'} ${windowCumLabel(rangeCum)}`}
+                {rangeCum !== null &&
+                  ` · CumΔ${rangeB ? ' A' : ' okna'} ${windowCumLabel(rangeCum)}`}
                 {rangeB && rangeCumB !== null && ` · B ${windowCumLabel(rangeCumB)}`}
                 {/* Duální rozsah (#489): +B vytvoří navazující okno, mód přepíná profil */}
                 {!rangeB && (

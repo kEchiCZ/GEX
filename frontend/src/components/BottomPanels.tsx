@@ -790,7 +790,13 @@ function BottomPanelsBase({
         {idx !== null && (
           <PanelValue>
             {cum.values[idx] === null ? (
-              <span title={cum.hiddenAt(idx) ? (cum.hiddenReason ?? '') : 'Mezera: tisky z burzy v této minutě neběžely (ADR-0057) — tok se neměřil'}>
+              <span
+                title={
+                  cum.hiddenAt(idx)
+                    ? (cum.hiddenReason ?? '')
+                    : 'Mezera: tisky z burzy v této minutě neběžely (ADR-0057) — tok se neměřil'
+                }
+              >
                 —
               </span>
             ) : (

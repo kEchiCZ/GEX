@@ -205,9 +205,7 @@ málo a byl by opticky plochý), nebo absolutní úroveň. */
 export function evoOiDisplay(series: (number | null)[], mode: 'delta' | 'abs'): (number | null)[] {
   if (mode === 'abs') return series
   const base = series.find((value): value is number => value !== null && value > 0) ?? 0
-  return series.map((value) =>
-    value === null ? null : value > 0 || base === 0 ? value - base : 0,
-  )
+  return series.map((value) => (value === null ? null : value > 0 || base === 0 ? value - base : 0))
 }
 
 /** SVG path schodovité křivky (H → V úseky) — OI se mezi aktualizacemi tick 101
@@ -248,7 +246,11 @@ export function visibleCumDelta(
   values: (number | null)[],
   midpoint: boolean[] | undefined,
   hideMidpoint: boolean,
-): { values: (number | null)[]; hiddenReason: string | null; hiddenAt: (index: number) => boolean } {
+): {
+  values: (number | null)[]
+  hiddenReason: string | null
+  hiddenAt: (index: number) => boolean
+} {
   const hidden = (index: number): boolean =>
     hideMidpoint && midpoint !== undefined && midpoint[index] === true
   if (!hideMidpoint || midpoint === undefined || !midpoint.some(Boolean)) {
