@@ -43,6 +43,8 @@ function makeInputs(): ReplayInputs {
     hasPrintVol: false,
     callVolume: new Float32Array([10]),
     putVolume: new Float32Array([5]),
+    callVolumeKnown: new Float32Array([1]),
+    putVolumeKnown: new Float32Array([1]),
     callDelta: new Float32Array([0.5]),
     putDelta: new Float32Array([-0.4]),
     callVega: new Float32Array([0]),

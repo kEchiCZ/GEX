@@ -145,6 +145,10 @@ def daily_totals(snapshots: pd.DataFrame) -> tuple[dict[str, object], object | N
     Δ Flow vážené |delta| minuty; Evo OI = Σ OI přes striky v poslední minutě.
     Vrací (součty, poslední ts_min).
 
+    Jediný rozdíl proti Σ minutového panelu: catch-up minuta (#518) se v Daily
+    počítá — nese objem dne z doby výpadku enginu; panel ji kreslí jako 0,
+    protože není minutový obchod (ES 7. 10.: 3 344 z 305 961).
+
     Při změně vzorce zvedni `DAILY_TOTALS_VERSION` ve frontendu
     (`frontend/src/replay/loader.ts`): uzavřený den drží prohlížeč podle URL
     `immutable` rok.

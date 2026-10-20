@@ -177,6 +177,8 @@ type MatrixKey =
   | 'putOiEst'
   | 'callVolume'
   | 'putVolume'
+  | 'callVolumeKnown'
+  | 'putVolumeKnown'
   | 'callDelta'
   | 'putDelta'
   | 'callVega'
@@ -238,6 +240,12 @@ export interface ReplayInputs {
   hasOiEst: boolean
   callVolume: Float32Array
   putVolume: Float32Array
+  /** 1 = buňka nese měřený objem, 0 = řádek chybí nebo má volume NULL (#1602).
+   * Nula v `callVolume`/`putVolume` tam není měření — přírůstkové panely ji
+   * nesmí vzít za referenci, jinak by první minuta s objemem nesla celý
+   * denní kumulativ. */
+  callVolumeKnown: Float32Array
+  putVolumeKnown: Float32Array
   callDelta: Float32Array
   putDelta: Float32Array
   callVega: Float32Array
@@ -442,13 +450,22 @@ export async function fetchDays(symbol: string): Promise<DayListing[]> {
   return payload.days
 }
 
+/** Verze vzorce denních součtů API `daily_totals` v URL Daily balíku (#1602).
+ *
+ * Uzavřený den jde s `Cache-Control: immutable` na rok a prohlížeč ho drží
+ * podle URL — po změně vzorce by Daily dál ukazoval staré součty. Zvedni při
+ * každé změně `daily_totals`; API parametr nečte, nové URL jen obejde cache
+ * prohlížeče (serverová `_DAILY_BUNDLE_CACHE` žije v paměti procesu API
+ * a nasazení ji vyprázdní). 2 = přírůstky proti průběžnému maximu. */
+export const DAILY_TOTALS_VERSION = 2
+
 async function fetchBundle(
   symbol: string,
   expiry: string,
   date: string,
   resolution: ReplayResolution = 'full',
 ): Promise<ReplayBundle> {
-  const query = resolution === 'daily' ? '?resolution=daily' : ''
+  const query = resolution === 'daily' ? `?resolution=daily&v=${DAILY_TOTALS_VERSION}` : ''
   const response = await fetch(`${API_BASE}/replay/${symbol}/${expiry}/${date}${query}`)
   if (!response.ok) {
     throw new Error(`Replay ${symbol}/${expiry}/${date} selhal: HTTP ${response.status}`)
@@ -600,6 +617,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const putOi = new Float32Array(size)
   const callVolume = new Float32Array(size)
   const putVolume = new Float32Array(size)
+  const callVolumeKnown = new Float32Array(size)
+  const putVolumeKnown = new Float32Array(size)
   const callDelta = new Float32Array(size)
   const putDelta = new Float32Array(size)
   const callVega = new Float32Array(size)
@@ -621,9 +640,9 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     const right = String(rightColumn.get(row)) as 'C' | 'P'
     const oi = Number(oiColumn?.get(row) ?? 0) || 0
     const rawVolume = volumeColumn?.get(row)
-    if (rawVolume !== null && rawVolume !== undefined && Number.isFinite(Number(rawVolume))) {
-      volumeSeen[minuteIdx] = true
-    }
+    const volumeKnown =
+      rawVolume !== null && rawVolume !== undefined && Number.isFinite(Number(rawVolume))
+    if (volumeKnown) volumeSeen[minuteIdx] = true
     const volume = Number(rawVolume ?? 0) || 0
     const delta = Number(deltaColumn?.get(row) ?? 0) || 0
     const vega = Number(vegaColumn?.get(row) ?? 0) || 0
@@ -633,12 +652,14 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     if (right === 'C') {
       callOi[index] = oi
       callVolume[index] = volume
+      callVolumeKnown[index] = volumeKnown ? 1 : 0
       callDelta[index] = delta
       callVega[index] = vega
       callMid[index] = mid
     } else {
       putOi[index] = oi
       putVolume[index] = volume
+      putVolumeKnown[index] = volumeKnown ? 1 : 0
       putDelta[index] = delta
       putVega[index] = vega
       putMid[index] = mid
@@ -834,6 +855,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     hasPrintVol: printvolRows.length > 0,
     callVolume,
     putVolume,
+    callVolumeKnown,
+    putVolumeKnown,
     callDelta,
     putDelta,
     callVega,
@@ -990,6 +1013,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const putOiEst = matrix('putOiEst')
   const callVolume = matrix('callVolume')
   const putVolume = matrix('putVolume')
+  const callVolumeKnown = matrix('callVolumeKnown')
+  const putVolumeKnown = matrix('putVolumeKnown')
   const callDelta = matrix('callDelta')
   const putDelta = matrix('putDelta')
   const callVega = matrix('callVega')
@@ -1005,10 +1030,12 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   // Nová minuta ze snapshot řezu; odhad = měření, dokud ho oiest nepřepíše
   for (const row of minute.rows) {
     const to = newStrikeIndex.get(row.strike)! * capacity + targetMinute
+    const volumeKnown = row.volume !== null && Number.isFinite(row.volume) ? 1 : 0
     if (row.right === 'C') {
       callOi[to] = row.oi
       callOiEst[to] = row.oi
       callVolume[to] = row.volume ?? 0
+      callVolumeKnown[to] = volumeKnown
       callDelta[to] = row.delta
       callVega[to] = row.vega ?? 0
       callMid[to] = row.mid ?? 0
@@ -1016,6 +1043,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       putOi[to] = row.oi
       putOiEst[to] = row.oi
       putVolume[to] = row.volume ?? 0
+      putVolumeKnown[to] = volumeKnown
       putDelta[to] = row.delta
       putVega[to] = row.vega ?? 0
       putMid[to] = row.mid ?? 0
@@ -1172,6 +1200,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     hasPrintVol: inputs.hasPrintVol || (minute.printVol?.length ?? 0) > 0,
     callVolume,
     putVolume,
+    callVolumeKnown,
+    putVolumeKnown,
     callDelta,
     putDelta,
     callVega,
@@ -1281,16 +1311,12 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   // Minuta bez snapshotu nese v maticích nuly, ne měření (#459) — Max Pain z
   // nulového OI by ukázal libovolný strike, takže se v díře nekreslí vůbec
   const hasSnapshot = (minuteIdx: number): boolean => inputs.snapshotMinutes[minuteIdx] !== false
-  // Přírůstkové panely počítají rozdíl vůči PŘEDCHOZÍ MĚŘENÉ minutě, ne vůči
-  // index-1 (#459): sloupec bez snapshotu má nulové kumulativní volume, takže
-  // by za dírou vyskočil falešný špic o velikosti celého dne.
-  // Catch-up minuta (#518) se chová jako první měřená minuta dne — její
-  // kumulativy dohánějí celou dobu výpadku, ne jednu minutu obchodů.
+  // Catch-up minuta (#518) přírůstek nekreslí — její kumulativy dohánějí celou
+  // dobu výpadku, ne jednu minutu obchodů; referenci přírůstků jen posune
   const isCatchUp = (minuteIdx: number): boolean => inputs.catchUpMinutes.has(minuteKeys[minuteIdx])
-  const measured = measuredMinutes(inputs.snapshotMinutes, minutes, isCatchUp)
   // Odvozené řady per minuta (#515): dopočítají se jen sloupce od poslední
   // změny (append/přepis živé minuty = 1 sloupec) a memoizují se na inputs
-  const series = ensureDerived(inputs, measured, hasSnapshot)
+  const series = ensureDerived(inputs, hasSnapshot, isCatchUp)
   const maxPain = series.maxPain.slice(0, minutes)
 
   // Flip na řídké OI páteři (#664): minuty s nadpoloviční dírou v OI se kreslí
@@ -1589,35 +1615,43 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   return assembleReplayDay(decodeBundle(bundle))
 }
 
-/** Mapa „předchozí MĚŘENÁ minuta" pro přírůstkové panely (#459).
- *
- * `prev[i]` = index poslední minuty se snapshotem před `i`, nebo -1 (žádná —
- * první měřená minuta dne, nebo minuta bez snapshotu). Přírůstky se počítají
- * přes díru, ne vůči nulovému sloupci.
- *
- * Catch-up minuta (#518, ADR-0024) dostává `prev = -1` VŽDY: její kumulativy
- * dohánějí celou dobu výpadku, takže rozdíl proti čemukoli dřívějšímu není
- * minutový obchod. Pro NÁSLEDUJÍCÍ minuty ale předchůdcem je — její kumulativy
- * už jsou správné a diff proti nim je poctivá minuta. */
-interface MeasuredMinutes {
-  measured: (minuteIdx: number) => boolean
-  prev: Int32Array
+/** Průběžné maximum kumulativního volume per strike přes sloupce `0..upTo-1`
+ * (#1602); NaN = strike zatím objem nenesl. Buňka bez objemu (maska 0: řádek
+ * chybí, NULL z tasty fallbacku, minuta bez snapshotu) referenci nemění. */
+function volumeReference(
+  volume: Float32Array,
+  known: Float32Array,
+  strikeCount: number,
+  stride: number,
+  upTo: number,
+): Float64Array {
+  const reference = new Float64Array(strikeCount).fill(Number.NaN)
+  for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+    const row = strikeIdx * stride
+    let max = Number.NaN
+    for (let minuteIdx = 0; minuteIdx < upTo; minuteIdx += 1) {
+      if (known[row + minuteIdx] === 0) continue
+      const value = volume[row + minuteIdx]
+      if (Number.isNaN(max) || value > max) max = value
+    }
+    reference[strikeIdx] = max
+  }
+  return reference
 }
 
-function measuredMinutes(
-  snapshotMinutes: boolean[],
-  minutes: number,
-  isCatchUp?: (minuteIdx: number) => boolean,
-): MeasuredMinutes {
-  const measured = (minuteIdx: number): boolean => snapshotMinutes[minuteIdx] ?? true
-  const prev = new Int32Array(minutes).fill(-1)
-  let last = -1
-  for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
-    if (!measured(minuteIdx)) continue
-    prev[minuteIdx] = isCatchUp?.(minuteIdx) ? -1 : last
-    last = minuteIdx
+/** Přírůstek kumulativního volume buňky proti průběžnému maximu strike a jeho
+ * posun (#1602) — týž vzorec jako API `volume_increments`. Denní kumulativ
+ * v seanci jen roste, IBKR ho ale kmitá (862 ↔ 863) a propadá (pauza Globexu):
+ * pokles i návrat k maximu dají 0, první výskyt strike jen založí stav. */
+function volumeIncrement(reference: Float64Array, strikeIdx: number, value: number): number {
+  const max = reference[strikeIdx]
+  if (Number.isNaN(max)) {
+    reference[strikeIdx] = value
+    return 0
   }
-  return { measured, prev }
+  if (value <= max) return 0
+  reference[strikeIdx] = value
+  return value - max
 }
 
 /** Dopočet odvozených řad per minuta s memoizací na `inputs.derived` (#515).
@@ -1627,16 +1661,18 @@ se počítá jen zbytek — v běžném živém provozu JEDEN sloupec místo cel
 Sémantika sloupců je shodná s původními celodenními průchody:
 
 * Max Pain — argmin per sloupec, minuta bez snapshotu null (#459)
-* OptVol / Δ Flow — kladné přírůstky kumulativního volume vůči PŘEDCHOZÍ
-  MĚŘENÉ minutě (#459), Δ Flow vážené |delta| (SPEC 4.6)
+* OptVol / Δ Flow — přírůstky kumulativního volume proti průběžnému maximu
+  strike (#1602) jen z buněk s objemem, takže díra ve sběru (#459), NULL ani
+  chybějící strike nepřidají celý kumulativ; catch-up minuta (#518) referenci
+  jen posune; Δ Flow vážené |delta| (SPEC 4.6)
 * Evo OI (#573) — Σ OI přes striky; minuta bez snapshotu drží schod
 
 Cache se mutuje in-place — je to čistá memoizace (výsledek téhož vstupu),
 opakované volání nad týmž stavem je no-op. */
 function ensureDerived(
   inputs: ReplayInputs,
-  measured: MeasuredMinutes,
   hasSnapshot: (minuteIdx: number) => boolean,
+  isCatchUp: (minuteIdx: number) => boolean,
 ): DerivedSeriesCache {
   const minutes = inputs.minutes.length
   const stride = inputs.minuteCapacity
@@ -1651,6 +1687,22 @@ function ensureDerived(
     evoOiCall: [],
     evoOiPut: [],
   }
+  // Reference přírůstků do prvního počítaného sloupce: průchod platným
+  // prefixem stojí O(striky × minuty), řádově jako skládání gridu
+  const callReference = volumeReference(
+    inputs.callVolume,
+    inputs.callVolumeKnown,
+    strikeCount,
+    stride,
+    cache.upTo,
+  )
+  const putReference = volumeReference(
+    inputs.putVolume,
+    inputs.putVolumeKnown,
+    strikeCount,
+    stride,
+    cache.upTo,
+  )
   for (let minuteIdx = cache.upTo; minuteIdx < minutes; minuteIdx += 1) {
     const snapshot = hasSnapshot(minuteIdx)
     cache.maxPain[minuteIdx] = snapshot
@@ -1674,22 +1726,23 @@ function ensureDerived(
       cache.evoOiCall[minuteIdx] = minuteIdx > 0 ? cache.evoOiCall[minuteIdx - 1] : 0
       cache.evoOiPut[minuteIdx] = minuteIdx > 0 ? cache.evoOiPut[minuteIdx - 1] : 0
     }
-    const previous = minuteIdx > 0 ? measured.prev[minuteIdx] : -1
+    const counted = !isCatchUp(minuteIdx)
     let optVolCall = 0
     let optVolPut = 0
     let deltaFlowCall = 0
     let deltaFlowPut = 0
-    if (previous >= 0) {
-      for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
-        const index = strikeIdx * stride + minuteIdx
-        const prevIndex = strikeIdx * stride + previous
-        const callIncrement = inputs.callVolume[index] - inputs.callVolume[prevIndex]
-        if (callIncrement > 0) {
+    for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+      const index = strikeIdx * stride + minuteIdx
+      if (inputs.callVolumeKnown[index] !== 0) {
+        const callIncrement = volumeIncrement(callReference, strikeIdx, inputs.callVolume[index])
+        if (counted && callIncrement > 0) {
           optVolCall += callIncrement
           deltaFlowCall += callIncrement * Math.abs(inputs.callDelta[index])
         }
-        const putIncrement = inputs.putVolume[index] - inputs.putVolume[prevIndex]
-        if (putIncrement > 0) {
+      }
+      if (inputs.putVolumeKnown[index] !== 0) {
+        const putIncrement = volumeIncrement(putReference, strikeIdx, inputs.putVolume[index])
+        if (counted && putIncrement > 0) {
           optVolPut += putIncrement
           deltaFlowPut += putIncrement * Math.abs(inputs.putDelta[index])
         }

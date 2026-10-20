@@ -1311,3 +1311,129 @@ test('minuta bez objemu (řetěz z tasty fallbacku) nese volumeMissing, ne nulu 
   expect(recovered.volumeMissing).toEqual([false, true, true, false])
   expect(recovered.callVolume[3]).toBe(44)
 })
+
+// ── Přírůstek proti průběžnému maximu (#1602) ─────────────────────────
+
+/** Řady z #1602 — stejné jako `VOLUME_SERIES` v `api/tests/test_api.py`
+ * (parita s API `volume_increments`): propad a návrat k maximu, kmitání IBKR
+ * o 1 kontrakt, NULL uprostřed seance, první výskyt až v průběhu seance.
+ * `null` = řádek s volume NULL (tasty fallback). */
+const VOLUME_SERIES: [(number | null)[], number[]][] = [
+  [
+    [1000, 800, 760, 1000, 1010],
+    [0, 0, 0, 0, 10],
+  ],
+  [
+    [862, 863, 862, 863, 864],
+    [0, 1, 0, 0, 1],
+  ],
+  [
+    [100, null, 130],
+    [0, 0, 30],
+  ],
+  [
+    [null, null, 500, 510],
+    [0, 0, 0, 10],
+  ],
+]
+
+const minuteIso = (minuteIdx: number): string =>
+  new Date(Date.parse(M0) + minuteIdx * 60_000).toISOString().replace('.000Z', 'Z')
+
+/** Balík jednoho striku 7600: `undefined` = řádek v minutě chybí, `null` = volume NULL. */
+function volumeBundle(call: (number | null | undefined)[], put: (number | null | undefined)[]) {
+  const cells: Cell[] = []
+  const minutes = Math.max(call.length, put.length)
+  for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
+    for (const [right, series] of [
+      ['C', call],
+      ['P', put],
+    ] as const) {
+      const volume = series[minuteIdx]
+      if (volume === undefined) continue
+      cells.push({
+        ts: minuteIso(minuteIdx),
+        strike: 7600,
+        right,
+        volume: volume ?? Number.NaN,
+        oi: 100,
+        delta: right === 'C' ? 0.5 : -0.4,
+      })
+    }
+  }
+  const bars = Array.from({ length: minutes }, (_, minuteIdx) => ({
+    ...BARS[0],
+    ts_min: minuteIso(minuteIdx),
+  }))
+  return bundleFor(cells, bars, [], [])
+}
+
+test.each(VOLUME_SERIES)(
+  'Opt Vol a Δ Flow proti průběžnému maximu, ne poslední hodnotě (#1602): %j',
+  (series, expected) => {
+    const day = buildReplayDay(volumeBundle(series, series))
+    expect(day.panels.optVolCall).toEqual(expected)
+    expect(day.panels.optVolPut).toEqual(expected)
+    expect(day.panels.deltaFlowCall).toEqual(expected.map((v) => v * 0.5))
+    expect(day.panels.deltaFlowPut.map((v) => Math.round(v * 1e6) / 1e6)).toEqual(
+      expected.map((v) => v * 0.4),
+    )
+  },
+)
+
+test('chybějící řádek ani NULL uprostřed seance nepřidají celý kumulativ (#1602)', () => {
+  // Call: řádek v minutě 1 chybí; put: NULL v minutě 2. Dřív minuta po mezeře
+  // nesla celý denní kumulativ (130, resp. 310) místo přírůstku nad maximem.
+  const day = buildReplayDay(volumeBundle([100, undefined, 130, 131], [300, 305, null, 310]))
+  expect(day.panels.optVolCall).toEqual([0, 0, 30, 1])
+  expect(day.panels.optVolPut).toEqual([0, 5, 0, 5])
+})
+
+test('catch-up minuta referenci jen posune (#518, #1602)', () => {
+  // Minuta 2 je catch-up: dohání výpadek (1000 → 1500), přírůstek se nekreslí,
+  // ale další minuta počítá proti 1500; propad pod maximum nic nepřidá
+  const day = buildReplayDay({
+    ...volumeBundle([1000, 1010, 1500, 1490, 1520], []),
+    catchup: [{ ts_min: minuteIso(2) }],
+  })
+  expect(day.panels.optVolCall).toEqual([0, 10, 0, 0, 20])
+})
+
+test('živý append a přepis starší minuty dají totéž jako plný build (#515, #1602)', () => {
+  const call = [1000, 800, 760, 1000, 1010]
+  const put = [862, 863, 862, 863, 864]
+  const full = buildReplayDay(volumeBundle(call, put))
+  let inputs = decodeBundle(volumeBundle(call.slice(0, 1), put.slice(0, 1)))
+  for (let minuteIdx = 1; minuteIdx < call.length; minuteIdx += 1) {
+    inputs = appendMinute(inputs, {
+      tsIso: minuteIso(minuteIdx),
+      rows: [
+        { strike: 7600, right: 'C', oi: 100, volume: call[minuteIdx], delta: 0.5 },
+        { strike: 7600, right: 'P', oi: 100, volume: put[minuteIdx], delta: -0.4 },
+      ],
+    })
+    assembleReplayDay(inputs) // naplní cache odvozenin po každé minutě
+  }
+  const live = assembleReplayDay(inputs)
+  expect(live.panels.optVolCall).toEqual(full.panels.optVolCall)
+  expect(live.panels.optVolPut).toEqual(full.panels.optVolPut)
+  // Živá minuta s volume null (fallback) referenci nemění
+  const withNull = appendMinute(inputs, {
+    tsIso: minuteIso(5),
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: null, delta: 0.5 }],
+  })
+  const recovered = appendMinute(withNull, {
+    tsIso: minuteIso(6),
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: 1012, delta: 0.5 }],
+  })
+  expect(assembleReplayDay(recovered).panels.optVolCall.slice(5)).toEqual([0, 2])
+  // Přepis starší minuty stáhne cache a reference se přepočte z prefixu:
+  // minuta 1 nově 1005 → +5 v ní a minuta 4 počítá proti 1005, ne 1000
+  const overwritten = appendMinute(inputs, {
+    tsIso: minuteIso(1),
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: 1005, delta: 0.5 }],
+  })
+  const day = assembleReplayDay(overwritten)
+  expect(day.panels.optVolCall).toEqual([0, 5, 0, 0, 5])
+  expect(day.panels).toEqual(assembleReplayDay({ ...overwritten, derived: undefined }).panels)
+})
