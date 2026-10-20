@@ -31,7 +31,9 @@ MINUTES = 3
 class _Flow:
     """Minimální FlowRowLike pro fixture (bez závislosti na compute)."""
 
-    def __init__(self, ts_min: dt.datetime, flow_delta: float, cum_delta: float) -> None:
+    def __init__(
+        self, ts_min: dt.datetime, flow_delta: float | None, cum_delta: float | None
+    ) -> None:
         self.ts_min = ts_min
         self.flow_delta = flow_delta
         self.cum_delta = cum_delta
@@ -424,6 +426,43 @@ def test_replay_bundle_daily_resolution(client: TestClient) -> None:
     assert daily["vol"] == pytest.approx(sum(bar["volume"] for bar in bars))
     # Plný balík se nemění
     assert "daily" not in full and len(full["bars"]) == MINUTES
+
+
+def test_daily_and_flow_window_with_print_gap(settings: Settings) -> None:
+    """Mezera trade větve = NULL minuta (ADR-0057 bod 3, #1588): Daily i okno /flow
+    vrací 200 — CumΔ dne je poslední měřená úroveň, okno přes mezeru je null."""
+    from gexlens_api import main as api_main
+
+    api_main._DAILY_BUNDLE_CACHE.clear()  # uzavřený den z jiného testu by vrátila cache
+    # Za minutou 2 (CumΔ 150): mezera uprostřed (3), měření (4) pokračuje od 150,
+    # mezera na konci (5)
+    SnapshotWriter(settings).write_flow(
+        "ES",
+        DAY,
+        [_Flow(ts(3), None, None), _Flow(ts(4), 20.0, 170.0), _Flow(ts(5), None, None)],
+    )
+    client = TestClient(create_app(settings))
+    url = f"/replay/ES/20260716/{DAY.isoformat()}?resolution=daily"
+    for _ in range(2):  # druhé čtení jde z cache uzavřeného dne
+        response = client.get(url)
+        assert response.status_code == 200
+        daily = response.json()["daily"]
+        assert daily["cum_delta"] == pytest.approx(170.0)
+        assert daily["cum_delta_gap_minutes"] == 2
+
+    def window(start: int, end: int) -> float | None:
+        params = {"date": DAY.isoformat(), "from": ts(start).isoformat(), "to": ts(end).isoformat()}
+        response = client.get("/flow/ES", params=params)
+        assert response.status_code == 200
+        value: float | None = response.json()["window"]["cum_delta"]
+        return value
+
+    assert window(0, 2) == pytest.approx(100.0)  # bez mezery beze změny
+    assert window(2, 4) is None  # mezera v minutě 3
+    assert window(4, 5) is None  # mezera na konci okna
+    # Hranice okna v mezeře: úroveň k minutě 3 je poslední měřená (150), ne 0
+    assert window(3, 4) == pytest.approx(20.0)
+    assert window(5, 5) == pytest.approx(0.0)  # prázdné okno
 
 
 def test_replay_bundle_oiest(settings: Settings) -> None:
