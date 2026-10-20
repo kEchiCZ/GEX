@@ -277,9 +277,9 @@ nepřinášejí, jen popisují, jak kód mezeru měří.
 
 ## Doplněk (20. 10. 2026, #1460 část 1b)
 
-Zpřesnění bodů 4, 6 a 8, která zavádí část 1b. Nové rozhodnutí přinášejí jen dvě volby
-vlastníka z 19. 10. 2026 (Rozhodnuto v epice #1385): E-0.12 varianta C a zobrazení hlasu
-s vahou 0 (varianta 1).
+Zpřesnění bodů 3, 4, 6 a 8, která zavádí část 1b. Nové rozhodnutí přinášejí jen volby
+vlastníka v epice #1385: z 19. 10. 2026 E-0.12 varianta C a zobrazení hlasu s vahou 0
+(varianta 1), z 20. 10. 2026 mezera rollu v settle varianta C („chci to přesně“).
 
 - **Tendence verze 5** (body 4 a 8, `compute/tendency.py`, `tendency.py`). Zapíná ji
   mechanika v6 přes instanční pole `TendencyEngine.cumdelta_prints`, pod v5 počítá dál v4.
@@ -309,13 +309,38 @@ s vahou 0 (varianta 1).
     od běžné kadence neodliší.
   - Den bez bodu je i takový, jehož řada netflow končí víc než 5 min před řezem. Engine
     spadlý přes konec dne totiž značku do seance D nezapíše.
-  - **Výjimka: mezera rollu v settle.** Roll zastaví pipeline a nová nad kalibrovaným
-    řetězem měří až po obnově tras (bod 3), takže mezera vzniká každý den. Bod neblokuje
-    souvislá řada, která celá leží do 5 min po settle (`ROLL_GAP_WINDOW_MIN`). Netflow
-    řetězu jí musí předcházet nejvýš o kadenci sekundáru + 2 min, jinak řadu předchází
-    výpadek bez značek. V netu tak chybí obvykle 2–5 min tisků (poslední zápis
-    sekundáru → první měřená minuta). Bez výjimky by kalibrace pod tisky nedala bod
-    nikdy. Varianta čeká na potvrzení vlastníka v PR.
+  - **Pravidlo platí bez výjimky.** Roll v settle mezeru nedělá, viz následující bod.
+- **Roll v settle předá stav kalibrovaného řetězu** (varianta C, Rozhodnuto 20. 10.; zpřesňuje
+  bod 3 „po rollu v settle až po obnově plánu“ a doplněk 18. 10. „expirace musí sedět na
+  běžící řetěz“).
+  - Řetěz D+1 si nechá tracker sekundáru, mění se jen runtime kolem něj. Nová pipeline ho
+    převezme, je-li D+1 její aktivní expirací (`EngineRuntime.take_over`,
+    `CumDeltaTracker.promote`). Net v paměti, tisky ještě neuzavřené v řádku i vzorky okna
+    zůstávají. Navázání z partice netflow se podruhé nespouští.
+  - **Trasy tisků patří trackeru, ne pipeline.** Pod tisky nese každá část tras tracker, pro
+    který se stavěla. Tisk jde do něj (`route_trade`) i mezi zastavením staré a založením nové
+    pipeline. Vzorek uzná trasy podle identity trackeru (`owned_universe`), takže trackeru
+    nového aktivního runtime patří sekundární část tras ještě před obnovou plánu. Do trackeru
+    jiné expirace tisk nejde ani teď: zastaralá část doručuje jen do trackeru svého řetězu,
+    tracker zastavené pipeline dostává tisky naprázdno.
+  - **Hranice** je vzorek minuty rollu, ve kterém aktivní řetěz D uzavřel poslední řádek.
+    Od ní začínají metriky aktivního řetězu jako u nového trackeru: tok do CumΔ, pokrytí,
+    podíly a rozklady barů. První bar stav objemu jen založí. Tok a pokrytí sekundáru před
+    hranicí do řádku aktivního řetězu nejdou. CumΔ symbolu dál navazuje z flow aktivního
+    řetězu, kumulativ sekundáru do ní nepatří.
+  - **První minuta aktivního D+1 je měřená**, když vzorky pokryjí hranici. Její verdikt
+    zahrnuje i okno, které sekundár ještě neuzavřel (cyklus po N minutách). Výpadek v tomto
+    okně proto udělá mezeru z prvního řádku aktivního řetězu a vrátí celý uzavřený úsek
+    netu. Konzervativní je to jen o pár minut navíc, kalibraci to nemění: den s mezerou bod
+    nedá tak jako tak.
+  - **Mezera rollu v CumΔ** z bodu 3 pod v6 zaniká. Zůstává jen u nového sekundáru D+2 do
+    obnovy tras (sekundy, `on_pipeline_created`). Ten v seanci D kalibrovaný není (#1580).
+  - **Předání platí jen v první iteraci po rollu.** Nevznikne-li nová pipeline hned
+    (spojení, chyba setupu), tracker propadá a první minuta nového je mezera jako po
+    restartu. Tracker, který vynechal vzorek, by okno potvrdil bez doložení. **Restart
+    procesu zůstává mezerou.**
+  - Pod v5 (midpoint) se nic nepředává. Trasy i vzorky se řídí pozicí a expirací jako
+    před #1460 a net sekundáru se po rollu navazuje z partice.
 - **Reset α při bumpu je automatický.** `fa_alpha` i `fa_alpha_history` nesou `source`
   (aditivní sloupec, NULL = midpoint).
   - Pod tisky se stav jiného zdroje bere jako nekalibrovaný a první bod jde přímo.

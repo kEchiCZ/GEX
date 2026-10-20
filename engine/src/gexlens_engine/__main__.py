@@ -3218,7 +3218,8 @@ async def main() -> None:
                 )
                 setup_cooldown.succeeded(symbol)
                 # Trasy tisků nového řetězu hned (#1460): po rollu drží trasy
-                # vypršelý řetěz a zdroj tisků do jejich obnovy píše mezeru
+                # vypršelý řetěz a nový sekundár D+2 má do jejich obnovy mezeru
+                # (aktivní D+1 s převzatým trackerem ji nemá, varianta C)
                 created_tracker = pipelines[symbol].runtime.cum_delta
                 if (
                     on_pipeline_created is not None

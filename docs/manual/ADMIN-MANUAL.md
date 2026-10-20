@@ -457,17 +457,21 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
     seanci D od 17:00 CT předchozího dne (dvě UTC partice) do řezu. Bod nedá ani
     řada netflow, která končí víc než 5 min před řezem (engine spadlý přes konec
     dne značku do seance D nezapíše).
-  - **Výjimka: mezera rollu v settle** (vědomý limit, k potvrzení v PR). Roll
-    zastaví pipeline a nová nad kalibrovaným řetězem měří až po obnově tras, takže
-    každý den začíná 1–2 min mezery do 5 min po settle (19. 10. 2026: roll
-    20:01:34 UTC). Bod neblokuje souvislá řada, která **celá** leží do
-    `ROLL_GAP_WINDOW_MIN` (5) po settle a které předchází netflow řetězu nejvýš
-    `GEXLENS_NEXT_EXPIRY_SWEEP_EVERY` + 2 min zpátky (kadence sekundáru). Log je
-    „mezera rollu v settle … vědomý limit“. V netu chybí tisky od posledního
-    zápisu sekundáru do první měřené minuty, nejvýš ~10 min, obvykle 2–5. Řada,
-    která začala před settle nebo trvá za okno, je výpadek. Stejně tak značka
-    po delším tichu netflow: během výpadku enginu značky nevznikají, zapíše se
-    jen první minuta po restartu.
+  - Pravidlo platí **bez výjimky**: **roll v settle mezeru nedělá** (varianta C,
+    ADR-0057 doplněk 20. 10.).
+    - Řetěz D+1 si nechá tracker sekundáru. Nová pipeline ho převezme v další
+      iteraci orchestrátoru. Do té doby do něj tečou tisky přes trasy, které pod
+      tisky nesou tracker svého řetězu.
+    - Net navazuje bez mezery, včetně tisků od posledního zápisu sekundáru (každý
+      N-tý cyklus). První minuta aktivního D+1 je měřená.
+    - CumΔ symbolu navazuje z flow aktivního řetězu a nese tok až od vzorku minuty
+      rollu. Mezera rollu v CumΔ pod v6 zaniká.
+    - Log předání: „Roll ES: aktivní řetěz 20261020 převzal tracker sekundáru
+      (net N stran) — tisky bez mezery (#1460)“.
+    - Nevznikne-li pipeline hned po rollu (spojení, chyba setupu), tracker propadá
+      s varováním „pipeline nevznikla hned po rollu — tracker sekundáru … propadá“.
+      První minuta nového trackeru je mezera a den bod nedá, stejně jako po
+      restartu procesu.
   - `fa_alpha` i `fa_alpha_history` nesou `source` (aditivní ADD COLUMN přes
     `ensure_schema` enginu i API, na PostgreSQL `IF NOT EXISTS`; NULL = midpoint).
     Stav jiného zdroje se bere jako nekalibrovaný: první bod z tisků jde přímo

@@ -291,6 +291,18 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-20 — roll v settle zahodil stav kalibrovaného řetězu a mezera blokovala α každý den (#1460).**
+  Tracker netu řetězu D+1 žil v runtime pipeline, která se v settle zastaví. Nová pipeline
+  začala s novým trackerem: tisky od posledního zápisu sekundáru (každý 3. cyklus) do první
+  měřené minuty se ztratily. Trasy tisků mířily přes pipeline, takže mezi zastavením staré
+  a založením nové nedoručily nic. Pravidlo „den s mezerou bod nedá“ by tak α pod tisky
+  nedalo nikdy. První oprava byla výjimka ve čtenáři (B), měřila ale okno a kadenci a v netu
+  dál chyběly 2–5 min tisků. → Stav, který patří entitě (řetěz), nesmí žít v kontejneru
+  s kratší životností (pipeline). Při přechodu ho předat a cesty k němu (trasy tisků)
+  adresovat stavem, ne kontejnerem. Výjimka ve čtenáři je workaround, ne oprava. Test: celý
+  den se vzorky každou minutu a předáním v rollu (všední den, pátek, nedělní open, zimní čas,
+  zkrácená seance) a mutace „tisky mezi zastavením a založením se ztratí“ (α 0,44 místo 0,40).
+
 - **2026-10-20 — kalibrace α vybírala řetěz pořadím adresářů, ne jeho rolí v seanci (#1580, #1460).**
   `collect_alpha_calibration` brala nejvzdálenější expiraci s platným bodem. Předpoklad „den má
   dvě expirace s daty“ přestal platit rollem v settle (#1331): D+2 píše netflow dne D od ~20:05 UTC

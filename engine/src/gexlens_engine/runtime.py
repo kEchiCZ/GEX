@@ -346,8 +346,9 @@ class EngineRuntime:
 
         Obnovují se všechny uložené strany, i mimo dnešní pásmo (#1460): pásmo
         je grow-only, takže nový runtime začne užší než ten, kdo stranu přes den
-        měřil — po rollu expirace v settle (sekundár) i po restartu uprostřed
-        seance (reconnect IBKR, pád, restart kontejneru). Zahozený základ by po
+        měřil — po rollu expirace v settle (sekundár; pod tisky net nese
+        převzatý tracker, `take_over`) i po restartu uprostřed seance (reconnect
+        IBKR, pád, restart kontejneru). Zahozený základ by po
         rozšíření pásma začal znovu od nuly a další řádek netflow by uložený
         kumulativ strany přepsal. Platí i pod v5: strany mimo pásmo dostávají
         konstantní řádky netflow a po rozšíření pásma pokračují net, FA vrstvy
