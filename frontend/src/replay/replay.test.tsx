@@ -12,7 +12,9 @@ import {
   appendMinute,
   assembleReplayDay,
   buildReplayDay,
+  DAILY_BUNDLE_VERSION,
   decodeBundle,
+  fetchReplay,
   oiTotalSeries,
 } from './loader'
 import type { LiveMinute, ReplayDay } from './loader'
@@ -1436,4 +1438,29 @@ test('živý append a přepis starší minuty dají totéž jako plný build (#5
   const day = assembleReplayDay(overwritten)
   expect(day.panels.optVolCall).toEqual([0, 5, 0, 0, 5])
   expect(day.panels).toEqual(assembleReplayDay({ ...overwritten, derived: undefined }).panels)
+})
+
+test('Daily balík nese verzi obsahu v URL, plný balík ne (#1602)', async () => {
+  // Uzavřený den je v cache prohlížeče `immutable` podle URL — bez verze by
+  // po změně vzorce zůstaly staré součty
+  const fetchMock = vi.fn(
+    async (url: string) =>
+      ({
+        ok: true,
+        url,
+        json: async () => bundleFor(CELLS, BARS, LEVELS, FLOW),
+      }) as unknown as Response,
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  try {
+    await fetchReplay('ES', '20260716', '2026-07-16', { resolution: 'daily' })
+    await fetchReplay('ES', '20260716', '2026-07-16')
+  } finally {
+    vi.unstubAllGlobals()
+  }
+  const [daily, full] = fetchMock.mock.calls.map(([url]) => url)
+  expect(
+    daily.endsWith(`/replay/ES/20260716/2026-07-16?resolution=daily&v=${DAILY_BUNDLE_VERSION}`),
+  ).toBe(true)
+  expect(full.endsWith('/replay/ES/20260716/2026-07-16')).toBe(true)
 })

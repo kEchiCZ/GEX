@@ -450,14 +450,15 @@ export async function fetchDays(symbol: string): Promise<DayListing[]> {
   return payload.days
 }
 
-/** Verze vzorce denních součtů API `daily_totals` v URL Daily balíku (#1602).
+/** Verze obsahu Daily balíku `?resolution=daily` v jeho URL (#1602) — totéž
+ * číslo jako `DAILY_BUNDLE_VERSION` v API (`api/src/gexlens_api/main.py`,
+ * shodu hlídá pytest).
  *
  * Uzavřený den jde s `Cache-Control: immutable` na rok a prohlížeč ho drží
- * podle URL — po změně vzorce by Daily dál ukazoval staré součty. Zvedni při
- * každé změně `daily_totals`; API parametr nečte, nové URL jen obejde cache
- * prohlížeče (serverová `_DAILY_BUNDLE_CACHE` žije v paměti procesu API
- * a nasazení ji vyprázdní). 2 = přírůstky proti průběžnému maximu. */
-export const DAILY_TOTALS_VERSION = 2
+ * podle URL — po změně obsahu (součty `daily_totals`, `cum_delta`, řady) by
+ * Daily dál ukazoval staré hodnoty. Zvedni při každé takové změně; API odpoví
+ * `immutable` jen na svou verzi. 2 = přírůstky proti průběžnému maximu. */
+export const DAILY_BUNDLE_VERSION = 2
 
 async function fetchBundle(
   symbol: string,
@@ -465,7 +466,7 @@ async function fetchBundle(
   date: string,
   resolution: ReplayResolution = 'full',
 ): Promise<ReplayBundle> {
-  const query = resolution === 'daily' ? `?resolution=daily&v=${DAILY_TOTALS_VERSION}` : ''
+  const query = resolution === 'daily' ? `?resolution=daily&v=${DAILY_BUNDLE_VERSION}` : ''
   const response = await fetch(`${API_BASE}/replay/${symbol}/${expiry}/${date}${query}`)
   if (!response.ok) {
     throw new Error(`Replay ${symbol}/${expiry}/${date} selhal: HTTP ${response.status}`)
@@ -1687,6 +1688,7 @@ function ensureDerived(
     evoOiCall: [],
     evoOiPut: [],
   }
+  if (cache.upTo >= minutes) return cache // platná cache: bez průchodu prefixem
   // Reference přírůstků do prvního počítaného sloupce: průchod platným
   // prefixem stojí O(striky × minuty), řádově jako skládání gridu
   const callReference = volumeReference(

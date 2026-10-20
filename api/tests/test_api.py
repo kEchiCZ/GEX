@@ -352,8 +352,9 @@ def test_replay_bundle(client: TestClient) -> None:
 def _naive_daily_totals(rows: list[SnapshotRow]) -> dict[str, float]:
     """Referenční smyčka = algoritmus frontendu `ensureDerived` (#1206, #1602):
     přírůstek proti průběžnému maximu kontraktu, řádek bez objemu referenci
-    nemění, první výskyt kontraktu jen založí stav, duplicitní řádek ze sešití
-    partic se nepočítá (vyhrává první)."""
+    nemění, první výskyt kontraktu jen založí stav. Duplicitní řádek ze sešití
+    partic se nepočítá dvakrát: tady a v API vyhrává první, frontend v plném
+    balíku přepíše buňku posledním — u shodných řádků (fixture) bez rozdílu."""
     totals = {
         "opt_vol_call": 0.0,
         "opt_vol_put": 0.0,
@@ -512,7 +513,9 @@ def test_daily_and_flow_window_with_print_gap(settings: Settings) -> None:
         [_Flow(ts(3), None, None), _Flow(ts(4), 20.0, 170.0), _Flow(ts(5), None, None)],
     )
     client = TestClient(create_app(settings))
-    url = f"/replay/ES/20260716/{DAY.isoformat()}?resolution=daily"
+    url = (
+        f"/replay/ES/20260716/{DAY.isoformat()}?resolution=daily&v={api_main.DAILY_BUNDLE_VERSION}"
+    )
     for _ in range(2):  # druhé čtení jde z cache uzavřeného dne
         response = client.get(url)
         assert response.status_code == 200

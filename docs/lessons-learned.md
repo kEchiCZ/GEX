@@ -392,6 +392,18 @@ chyb**, hlavně diagnostických a provozních.
   deduplikuje stream sám. Backoff resetovat tam, kde se úspěch skutečně pozná (první doručený rámec),
   ne za voláním, které končí jen výjimkou.
 
+- **2026-10-20 — denní kumulativ volume IBKR není monotónní, přírůstek proti poslední hodnotě ho započetl znovu (#1602).**
+  IBKR kumulativ kontraktu kmitá o 1–2 kontrakty po celou seanci (ES 15. 10. v RTH 10,5 %
+  kontrakt-minut) a v pauze Globexu propadá o desetitisíce. Opt Vol, Δ Flow C/P i Daily
+  připočítávaly každý návrat znovu (RTH +12–70 %) a NULL z tasty fallbacku braly jako 0, takže
+  první minuta IBKR nesla celý denní kumulativ (Daily ES 7. 10. 1 623 419 místo 305 961). Odhalil
+  to až rozbor dat k #1460. → Přírůstek kumulativu se počítá proti průběžnému maximu seance, ne
+  proti poslední hodnotě; NULL ani chybějící řádek referenci nemění a první výskyt jen založí
+  stav. Totéž pravidlo platí ve všech kopiích výpočtu (API, frontend, živý append z WS, engine).
+  Uzavřené dny jdou do cache prohlížeče `immutable` podle URL, takže změna vzorce potřebuje
+  verzi v URL a stráž verze v API. Test: kmitání, propad a návrat, NULL uprostřed seance, první
+  výskyt pozdě, minuta jiné seance ve frontě WS.
+
 - **2026-10-17 — track record verdiktu dne vznikal jen při otevřeném Briefingu a ze dvou implementací s různými vstupy (#1595).**
   Verdikt počítal a přes POST ukládal frontend, jen když byl Briefing před openem otevřený: v3
   (24. 9.–16. 10.) má 5 řádků, všechny NQ, ES žádný. Engine měl pro automatický scénář vlastní port

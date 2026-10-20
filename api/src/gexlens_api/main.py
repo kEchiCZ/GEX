@@ -149,9 +149,7 @@ def daily_totals(snapshots: pd.DataFrame) -> tuple[dict[str, object], object | N
     počítá — nese objem dne z doby výpadku enginu; panel ji kreslí jako 0,
     protože není minutový obchod (ES 7. 10.: 3 344 z 305 961).
 
-    Při změně vzorce zvedni `DAILY_TOTALS_VERSION` ve frontendu
-    (`frontend/src/replay/loader.ts`): uzavřený den drží prohlížeč podle URL
-    `immutable` rok.
+    Při změně vzorce zvedni `DAILY_BUNDLE_VERSION` (tady i ve frontendu).
     """
     if snapshots.empty:
         return {}, None
@@ -187,6 +185,14 @@ def daily_totals(snapshots: pd.DataFrame) -> tuple[dict[str, object], object | N
 #: přepnutí na Daily čte stovky souborů z bind mountu znovu
 _DAILY_BUNDLE_CACHE: dict[tuple[str, str, str], dict[str, object]] = {}
 _DAILY_BUNDLE_CACHE_MAX = 64
+
+#: Verze obsahu `?resolution=daily` (#1602) — totéž číslo jako
+#: `DAILY_BUNDLE_VERSION` ve `frontend/src/replay/loader.ts` (hlídá test).
+#: Uzavřený den drží prohlížeč `immutable` rok podle URL, takže každá změna
+#: obsahu Daily balíku (součty, `cum_delta`, řady) verzi zvedá. Dotaz s jinou
+#: verzí (otevřený starý frontend, návrat jen jedné služby) dostane `no-cache`
+#: a do `_DAILY_BUNDLE_CACHE` se neuloží. 2 = přírůstky proti průběžnému maximu.
+DAILY_BUNDLE_VERSION = 2
 
 
 def _last_state(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1411,6 +1417,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         date: dt.date,
         if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
         resolution: Literal["full", "daily"] = "full",
+        v: int | None = None,
     ) -> Response:
         """Kompletní denní balík pro playback (SPEC kap. 6).
 
@@ -1424,7 +1431,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         HTTP cache (#514): uzavřená seance (konec seance < teď) je immutable —
         prohlížeč historické dny drží a nestahuje 12MB balík znovu. Živý den
-        dostává ETag z poslední minuty snapshotů → 304 při shodě.
+        dostává ETag z poslední minuty snapshotů → 304 při shodě. Daily balík
+        je immutable jen s `v` = `DAILY_BUNDLE_VERSION` (#1602).
         """
         # Osa obchodního dne = Globex seance (#512, ADR-0023 bod 3): každá
         # řada se sešívá z partice D−1 (večer) + D; gexfield/gexfieldfa drží
@@ -1433,6 +1441,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         snapshots_frame = session(lambda d: repository.snapshots(symbol, expiry, d), date)
         _, session_end = session_bounds(date)
         immutable = dt.datetime.now(dt.UTC) >= session_end
+        if resolution == "daily" and v != DAILY_BUNDLE_VERSION:
+            immutable = False  # cizí verze obsahu se nesmí zapéct do cache prohlížeče
         cache_key = (symbol, expiry, date.isoformat())
         if immutable:
             cache_headers = {"Cache-Control": "public, max-age=31536000, immutable"}
@@ -1444,7 +1454,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             etag = (
                 f'W/"{symbol}-{expiry}-{date.isoformat()}-{len(snapshots_frame)}-{last_ts}'
-                f'-{resolution}"'
+                f'-{resolution}-v{DAILY_BUNDLE_VERSION}"'
             )
             if if_none_match == etag:
                 return Response(status_code=304, headers={"ETag": etag})
