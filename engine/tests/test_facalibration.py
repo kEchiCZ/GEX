@@ -234,7 +234,6 @@ def _collect(
         alpha_repo,
         day,
         publication_utc=settings.oi_publication_utc,
-        secondary_every=3,
     )
 
 
@@ -591,7 +590,6 @@ def _collect_v6(
         alpha_repo,
         TODAY,
         publication_utc=settings.oi_publication_utc,
-        secondary_every=3,
         cumdelta_prints=True,
     )
 
@@ -739,59 +737,27 @@ def _gaps(settings: Settings, expiry: str, day: dt.date, *times: dt.time) -> Non
     )
 
 
-def _secondary_write(settings: Settings, at: dt.time) -> None:
-    """Zápis netflow sekundáru D+1 v `at` (kadence každý 3. cyklus) před rollem."""
-    SnapshotWriter(settings).write_netflow(
-        "ES",
-        EXPIRY_D1,
-        PREV,
-        [
-            NetFlowRow(
-                ts_min=dt.datetime.combine(PREV, at, tzinfo=dt.UTC),
-                strike=7500.0 + 10 * i,
-                right="C",
-                net_volume=100.0,
-                source=SOURCE_AGGRESSOR,
-            )
-            for i in range(5)
-        ],
-    )
-
-
 @pytest.mark.parametrize(
-    ("times", "last_write", "point"),
+    "times",
     [
-        # Roll 19. 10.: sekundár psal 19:58 a 20:01, nová pipeline měří od 20:03
-        ((dt.time(20, 2),), dt.time(20, 1), True),
-        ((dt.time(20, 1), dt.time(20, 2)), dt.time(19, 58), True),
-        # Za rollem další mezera v poslední hodině Globexu = výpadek
-        ((dt.time(20, 1), dt.time(20, 30)), dt.time(19, 58), False),
-        # Řada začala před settle — výpadek, který roll jen prodloužil
-        ((dt.time(19, 59), dt.time(20, 0), dt.time(20, 1)), dt.time(19, 58), False),
-        # Řada začne až 6 min po settle — mimo okno rollu
-        ((dt.time(20, 6),), dt.time(20, 1), False),
-        # Souvislá řada 20:01–20:40 — výpadek trade větve, ne roll (kontrola 5cb4b5a)
-        (tuple(dt.time(20, m) for m in range(1, 41)), dt.time(19, 58), False),
-        # Jediná značka 20:03, poslední netflow 14:00: engine neběžel, ne roll
-        ((dt.time(20, 3),), None, False),
+        (dt.time(20, 2),),  # první minuta po rollu (dřív výjimka B)
+        (dt.time(20, 1), dt.time(20, 2)),
+        (dt.time(20, 59),),  # poslední minuta před řezem
     ],
 )
-def test_v6_mezera_rollu_v_settle_je_vedomy_limit(
-    tmp_path: Path, times: tuple[dt.time, ...], last_write: dt.time | None, point: bool
+def test_v6_mezera_po_settle_bod_neda_bez_vyjimky(
+    tmp_path: Path, times: tuple[dt.time, ...]
 ) -> None:
-    """Nález kontroly 1b: roll zastaví pipeline, nová nad D+1 začíná mezerou — každý den.
+    """Varianta C (#1460): roll v settle mezeru nedělá, každá značka do řezu den blokuje.
 
-    Bez výjimky by kalibrace pod tisky nedala bod nikdy. Výjimka platí jen pro
-    souvislou řadu celou do ROLL_GAP_WINDOW_MIN po settle, které předchází zápis
-    sekundáru v jeho kadenci (jinak engine nebo pipeline předtím neběžely).
+    Výjimka B pro mezeru rollu (`ROLL_GAP_WINDOW_MIN`) je pryč — značku v okně
+    rollu zapíše jen restart nebo pipeline, která nevznikla hned po rollu.
     """
     settings, oi_repo, alpha_repo = _repos(tmp_path)
     _seed_v6(settings, oi_repo, EXPIRY_D1)
-    if last_write is not None:
-        _secondary_write(settings, last_write)
     _gaps(settings, EXPIRY_D1, PREV, *times)
-    result = _collect_v6(settings, oi_repo, alpha_repo)
-    assert (result is not None) is point
+    assert _collect_v6(settings, oi_repo, alpha_repo) is None
+    assert not alpha_repo.history_exists("ES", PREV)
 
 
 def test_v6_pondeli_proti_patku_a_vikend(tmp_path: Path) -> None:
@@ -831,7 +797,6 @@ def test_v6_pondeli_proti_patku_a_vikend(tmp_path: Path) -> None:
             alpha_repo,
             today,
             publication_utc=settings.oi_publication_utc,
-            secondary_every=3,
             cumdelta_prints=True,
         )
 

@@ -139,7 +139,6 @@ def replay_symbol(
             alpha_memory,
             day,
             publication_utc=settings.oi_publication_utc,
-            secondary_every=settings.next_expiry_sweep_every,
         )
         result.replayed.append(day)
 

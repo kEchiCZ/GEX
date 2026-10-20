@@ -49,7 +49,7 @@ from gexlens_engine.compute.facalibration import (
     update_alpha,
 )
 from gexlens_engine.compute.marketclock import daily_close_utc
-from gexlens_engine.compute.settle import is_trading_session, session_bounds, settle_ts
+from gexlens_engine.compute.settle import is_trading_session, session_bounds
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS
 from gexlens_engine.storage.fa_validation import PublicationUtc, measured_oi_pair
 from gexlens_engine.storage.oi_archive import OIEodRepository
@@ -99,14 +99,6 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
 #: Den pod tisky je dokončený, má-li netflow řádek nejvýš tolik minut před řezem
 #: (po rollu v settle je řetěz aktivní a píše každou minutu)
 DAY_END_TOLERANCE_MIN = 5
-#: Mezera rollu v settle: souvislá řada minut mezery, která celá leží do tolika
-#: minut po settle seance. Roll zastaví pipeline a nová nad týmž řetězem měří až
-#: po obnově tras (ADR-0057 bod 3), jinak by roll zablokoval α každý den
-ROLL_GAP_WINDOW_MIN = 5
-#: Rezerva nad kadencí sekundáru: poslední netflow řetězu před mezerou rollu smí
-#: být nejvýš `next_expiry_sweep_every` + tolik minut zpátky — jinak mezeru
-#: předchází výpadek bez značek (engine nebo pipeline neběžely)
-ROLL_LAST_WRITE_SLACK_MIN = 2
 
 
 @dataclass(frozen=True)
@@ -333,50 +325,6 @@ def _session_gaps(exp_dir: Path, session: dt.date) -> list[dt.datetime]:
     return sorted(gaps)
 
 
-def _roll_gap(gaps: list[dt.datetime], session: dt.date) -> list[dt.datetime]:
-    """Minuty mezery rollu v settle seance: souvislá řada celá do `ROLL_GAP_WINDOW_MIN`.
-
-    Vědomý limit (#1460, k potvrzení vlastníkem v PR): tisky kalibrovaného
-    řetězu od jeho posledního zápisu jako sekundáru (každý N-tý cyklus) do
-    první měřené minuty nové pipeline v netu chybí. Řada, která začala před
-    settle nebo trvá za okno, je výpadek, ne roll. Že roll nepředcházel
-    výpadek bez značek, hlídá `_roll_follows_write`.
-    """
-    settle = settle_ts(session)
-    end = settle + dt.timedelta(minutes=ROLL_GAP_WINDOW_MIN)
-    present = set(gaps)
-    minute = dt.timedelta(minutes=1)
-    first = next(
-        (ts for ts in gaps if settle <= ts <= end and ts - minute not in present),
-        None,
-    )
-    if first is None:
-        return []
-    run = [first]
-    while run[-1] + minute in present:
-        run.append(run[-1] + minute)
-    return run if run[-1] <= end else []
-
-
-def _roll_follows_write(
-    netflow_path: Path,
-    roll_start: dt.datetime,
-    sources: frozenset[str | None] | None,
-    secondary_every: int,
-) -> dt.datetime | None:
-    """Poslední netflow řetězu před mezerou rollu, je-li v kadenci sekundáru; jinak None.
-
-    Během výpadku enginu nebo pipeline značky nevznikají, zapíše se jen první
-    minuta po restartu — bez téhle kontroly by pád v 15:00 a nová pipeline po
-    settle prošly jako roll.
-    """
-    last = read_netflow_last_minute(netflow_path, end=roll_start, sources=sources)
-    limit = dt.timedelta(minutes=secondary_every + ROLL_LAST_WRITE_SLACK_MIN)
-    if last is None or roll_start - last > limit:
-        return None
-    return last
-
-
 def netflow_at_cutoff(
     path: Path, day: dt.date, *, sources: frozenset[str | None] | None = None
 ) -> dict[Key, float]:
@@ -403,7 +351,6 @@ def collect_alpha_calibration(
     today: dt.date,
     *,
     publication_utc: PublicationUtc,
-    secondary_every: int,
     cumdelta_prints: bool = CUMDELTA_PRINTS,
 ) -> AlphaCalibrationResult | None:
     """Spočítá a uloží chybějící kalibrační bod symbolu k dnešnímu OI archivu.
@@ -426,8 +373,6 @@ def collect_alpha_calibration(
     celou seanci D sekundárem (#1580), jen netflow ze zdroje tisků, den
     s mezerou trade větve nebo s řadou ukončenou před řezem bod nedá a stav
     z midpointu se bere jako nekalibrovaný. Pod v5 beze změny.
-    `secondary_every` = kadence sekundáru v cyklech (`next_expiry_sweep_every`)
-    pro kontrolu mezery rollu.
     """
     base = derived_dir / symbol
     if not is_trading_session(today) or not base.is_dir():
@@ -479,7 +424,7 @@ def collect_alpha_calibration(
         if not oi_after and not oi_repository.values_for(symbol, expiry, today):
             continue  # mrtvá expirace — dnešní archiv ji nenese
         if session is not None and not _day_complete(
-            symbol, expiry, exp_dir, netflow_path, session, sources, secondary_every
+            symbol, expiry, exp_dir, netflow_path, session, sources
         ):
             continue
         netflow = netflow_at_cutoff(netflow_path, previous, sources=sources)
@@ -590,34 +535,16 @@ def _day_complete(
     netflow_path: Path,
     session: dt.date,
     sources: frozenset[str | None] | None,
-    secondary_every: int,
 ) -> bool:
     """Je net seance pod tisky úplný? Bez mezery trade větve a s řadou až k řezu.
 
     Mezeru nese značka `netgap` (i po restartu: první minuta za otevřeného trhu
-    je mezera). Engine spadlý přes konec dne značku do seance D nezapíše, proto
-    řada netflow musí končit nejvýš `DAY_END_TOLERANCE_MIN` před řezem. Mezera
-    rollu v settle je vědomý limit (`_roll_gap`, `_roll_follows_write`).
+    je mezera) a platí bez výjimky. Roll v settle mezeru nedělá: nová pipeline
+    převezme tracker sekundáru (#1460, varianta C). Engine spadlý přes konec
+    dne značku do seance D nezapíše, proto řada netflow musí končit nejvýš
+    `DAY_END_TOLERANCE_MIN` před řezem.
     """
     gaps = _session_gaps(exp_dir, session)
-    roll = _roll_gap(gaps, session)
-    last_write = (
-        _roll_follows_write(netflow_path, roll[0], sources, secondary_every) if roll else None
-    )
-    if roll and last_write is not None:
-        logger.info(
-            "Kalibrace α %s %s %s: mezera rollu v settle %s–%s UTC (%d min, poslední "
-            "netflow %s) — vědomý limit",
-            symbol,
-            expiry,
-            session,
-            roll[0].strftime("%H:%M"),
-            roll[-1].strftime("%H:%M"),
-            len(roll),
-            last_write.strftime("%H:%M"),
-        )
-        rolled = set(roll)
-        gaps = [ts for ts in gaps if ts not in rolled]
     if gaps:
         logger.info(
             "Kalibrace α %s %s %s: mezera trade větve v %d minutách (první %s UTC) "
