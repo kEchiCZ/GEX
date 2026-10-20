@@ -36,7 +36,7 @@ GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME 
 - **GEX úrovně** — automaticky počítaný **flip** (zero-gamma), **call wall**, **put wall**, **centroid** a **Max Pain**, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. Volitelné **Walls** módy (Peak/Center/Smooth/Flip/Ridge vše/Ridge dominantní) a preset **✦ Čistý pohled** (dominantní hřeben + Max Pain + cena jedním kliknutím).
 - **Multi-instrument** — watchlist v sidebaru: přidej ticker (ES, NQ, RTY…) a engine ho začne sbírat **do několika sekund**; svíčky a Vol panel se zpětně doplní za celý den, opční data (OI, Greeks) běží od momentu přidání. Kliknutím přepínáš celou aplikaci.
 - **Více expirací najednou** — vedle aktivního řetězu se sbírá i následující expirace (čtení positioningu příští seance) a pravý profil umí **Σ souhrn přes expirace**.
-- **Živý tok** — kumulativní delta flow (Cum Δ) s klasifikací agresora + **Δ Flow C/P** (tok zvlášť za call/put stranu).
+- **Živý tok** — kumulativní delta flow opcí (Cum Δ; od mechaniky v6 jen z tisků se stranou agresora od burzy, do té doby čti směr z linky CVD podkladu, kap. 8) + **Δ Flow C/P** (tok zvlášť za call/put stranu).
 - **ΔOI vs. včera** — kde přes noc přibyly/ubyly otevřené pozice (tooltip profilu).
 - **Replay** — skrytý za tlačítkem ⏮ Replay; slider přehraje vývoj dne rychlostí 1×/5×/20×. Aplikace defaultně jede vždy live.
 - **Anotace** — šipky, linie a kreslení od ruky přímo do grafu; uložené k instrumentu a dni, přežijí restart.
@@ -532,16 +532,23 @@ Panely se **sdílenou časovou osou** s heatmapou. Každý zvlášť vypneš che
 | **Vol** | Minutový objem podkladu (futures) — šedé sloupce |
 | **Opt Vol** | Minutový objem opcí, **barevně call (teal) / put (červená)** vedle sebe. Počítá se jen objem **nad dosavadním maximem** denního objemu kontraktu v seanci (#1602): IBKR číslo kmitá (862 ↔ 863) a v pauze Globexu propadá, dřív se každý návrat započetl znovu a Opt Vol byl v RTH nadsazený o 12–70 %. Minuta bez objemu (fallback tastytrade) nepřidá nic a po návratu IBKR nenese celý denní objem. V **Daily** ose = součet za seanci; počítá se ze snímků při čtení, takže je opravený i zpětně (ES 15. 10.: 349 944 místo 501 501). Setupy T3 (aktivita) a T4 (podíl Δ Flow) a hlas tendence `delta_flow` počítají objem po staru až do mechaniky v6 (#1403), do té doby se s panelem mírně rozcházejí. |
 | **Δ Flow C/P** | Delta-vážený opční tok zvlášť za call a put stranu (\|Δ\| × přírůstek volume nad dosavadním maximem, stejně jako Opt Vol). Z něj čteš, **na které straně se právě obchoduje** — např. „uzavírání callů" = call sloupce slábnou. Default vypnutý (checkbox Δ Flow C/P). |
-| **Cum Δ** | Kumulativní delta flow jako plocha **nad nulou (zelená) / pod nulou (červená)**. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Znaménko dnes dává minutový midpoint test (poslední cena vs. střed bid/ask) pro celý řetěz. Měření ukázalo, že jde proti pohybu ceny (#1018). **Od mechaniky v6 (#1403)** nese Cum Δ jen tisky se stranou agresora od burzy (dxFeed `TimeAndSale`, ADR-0057). Objem bez tisku (nohy spreadů, bloky) do toku nejde. Minuta, kdy tisky z tastytrade neběžely, je **mezera** (NULL), ne nula ani odhad, a Cum Δ po ní pokračuje od poslední měřené úrovně. Zobrazení mezery a skrytí midpointové historie přinese #1588. Resetuje se na začátku obchodního dne. |
+| **Cum Δ** | Kumulativní delta-vážený tok **opčních** obchodů (ne podkladu) jako plocha **nad nulou (zelená) / pod nulou (červená)**. **Do mechaniky v6 (#1403)** dává znaménko minutový midpoint test (poslední cena vs. střed bid/ask), který podle měření jde **proti** pohybu ceny (#1018) — směr toku do v6 čti z **linky CVD podkladu** (níže). Od v6 nese plocha jen tisky se stranou agresora od burzy (dxFeed `TimeAndSale`, ADR-0057): roste = agresivní kupci call delty / prodejci put delty, klesá = opačně; objem bez tisku (nohy spreadů, bloky) do toku nejde. Minuta, kdy tisky z tastytrade neběžely, je **mezera**: plocha se přeruší (žádná spojnice), hodnota pod crosshairem je „—“ a Cum Δ po ní pokračuje od poslední měřené úrovně. Jakmile engine běží na v6, minuty se znaménkem z midpoint testu se **nekreslí** — legenda ukáže „· midpoint, obrácené znaménko (#1018)“ a linka CVD podkladu zůstává (data se nemažou, #1588). V agregaci TF koš nese poslední měřenou úroveň (koš celý v mezeře = mezera), v playbacku plocha končí na pozici přetáčení, chip okna Rozsah ⧉ ukáže přes mezeru „— (mezera)“ (kap. 8b). V **Daily** ose = poslední měřená úroveň dne; den s mezerou má pod crosshairem „neúplný (N min bez tisků)“, den bez měření je mezera. Resetuje se na začátku obchodního dne. |
 | **Evo OI** | Vývoj celkového Open Interest v čase, zvlášť call (teal) a put (červená), **schodovité kreslení**. V Daily ose = hodnota na konci každého dne. Default vypnutý (checkbox Evo OI). Podrobně níže. |
 | **Sentiment** | SentIndex z news-engine (zapíná checkbox **News**): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v **Daily** pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek). V replay staršího dne panel od v1.13 ukazuje řadu **zobrazeného dne** a při přetáčení drží osu s ostatními panely (dřív bral dnešní řadu a při přetáčení se posouval doleva, #976). |
 
 **Linka CVD podkladu v panelu Cum Δ** (agresivní nákupy − prodeje ve futures,
-#829) se živě posouvá **každou minutu**. Zůstává i v timeframu **5m a víc**
+#829): stranu agresora dává přímo burza (dxFeed `TimeAndSale`), nic se neklasifikuje.
+Linka má **vlastní měřítko** — čte se tvar a strana od nuly, ne výška proti ploše;
+legenda „· CVD podkladu“, pod crosshairem „· CVD …“. Popisek **„· osa od X“**:
+kumulativ se resetuje na open Globex seance (17:00 CT), osa ale začíná půlnocí, takže
+levý okraj nese už nasčítaný tok — výchylku čti proti této hodnotě, ne proti nule.
+Popisek „od HH:MM“ (engine startoval uprostřed seance) popisuje kap. 15 (catch-up).
+V **Daily** nese linka hodnotu na konci dne (#1591). Linka se živě posouvá **každou minutu**. Zůstává i v timeframu **5m a víc**
 (koš ukazuje poslední hodnotu; popisek panelu „od HH:MM“ zůstává také) a v playbacku
 končí na pozici přetáčení. Do opravy #1578 stála živě až hodinu na hodnotě
 z posledního načtení dne. V agregaci a v playbacku zmizela úplně, v playbacku
-i s panelem Evo OI.
+i s panelem Evo OI. Schodovitá čára Evo OI v playbacku končí na pozici přetáčení
+a za ní ukazuje „—“; dřív za pozicí spadla na nulu (#1591).
 
 **Ovládání panelů (v1.12).** Každý spodní panel jde ovládat myší jako graf:
 
@@ -2392,13 +2399,13 @@ nejbližší expirace (`GEXLENS_FRONT_ROLL_DAYS`, default 8).
 
 ### Playbook: zelený režim (spot NAD flip zónou)
 
-- **LONG:** cena spadne na hranu silné zelené zóny / put wall. Potvrzení: svíčky se zkracují, dolní knoty, CumΔ prodejní tlak zpomaluje nebo diverguje. Vstup od hrany, cíl střed pásma / nejbližší silný strike, **stop kousek POD zelenou zónu** (když brzda selže, nemáš tam co dělat).
+- **LONG:** cena spadne na hranu silné zelené zóny / put wall. Potvrzení: svíčky se zkracují, dolní knoty, prodejní tlak v CumΔ zpomaluje nebo diverguje (do mechaniky v6 čti linku CVD podkladu, kap. 8). Vstup od hrany, cíl střed pásma / nejbližší silný strike, **stop kousek POD zelenou zónu** (když brzda selže, nemáš tam co dělat).
 - **SHORT:** zrcadlově od call wall / horní hrany zelené, zpět do středu range. Proražení zdi o pár ticků bez follow-through = extra palivo pro fade.
 - **Ruce pryč:** od honění breakoutů — v zeleném dni většinou selžou.
 
 ### Playbook: červený režim (spot POD flip zónou / v červené)
 
-- **SHORT:** průraz poslední zelené / flipu dolů s potvrzením CumΔ (padá s cenou). Vstup **s pohybem**, cíl další zelený pás / put wall pod tebou, stop nad proraženou úroveň. Rychlé pohyby → kratší držení, rychlejší posun stopu.
+- **SHORT:** průraz poslední zelené / flipu dolů s potvrzením CumΔ (padá s cenou; do mechaniky v6 linka CVD podkladu, kap. 8). Vstup **s pohybem**, cíl další zelený pás / put wall pod tebou, stop nad proraženou úroveň. Rychlé pohyby → kratší držení, rychlejší posun stopu.
 - **LONG:** jediný spolehlivý = **reclaim flipu** — návrat nad žlutou, retest shora drží. Cíl první zelená zóna nad flipem.
 - **Ruce pryč:** od „už to spadlo hodně" longů — zesilující dealeři je přejedou.
 
