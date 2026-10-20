@@ -33,7 +33,8 @@ ADDED_COLUMNS: dict[str, str] = {
     "outcome_move_pts": "FLOAT",
     "outcome_move_em": "FLOAT",
     "outcome_hit": "BOOLEAN",
-    "outcome_computed_at": "TIMESTAMP",
+    # S časovou zónou jako model (`meta.py`); do #1598 ALTER zakládal TIMESTAMP bez ní
+    "outcome_computed_at": "TIMESTAMP WITH TIME ZONE",
 }
 
 #: Brána vzorku jako u signálů (SPEC 6.2): pod ní se hit-rate nevykládá
@@ -77,13 +78,28 @@ class BriefingVerdictRepository:
         table = briefing_verdicts_table.name
         if not inspector.has_table(table):
             return
-        columns = {col["name"] for col in inspector.get_columns(table)}
+        columns = {col["name"]: col for col in inspector.get_columns(table)}
         added = {name: sql for name, sql in ADDED_COLUMNS.items() if name not in columns}
-        if not added:
+        # Sloupec z ALTERu před #1598 je na PG `TIMESTAMP` bez zóny; SQLite zónu nenese
+        naive = (
+            self._engine.dialect.name == "postgresql"
+            and "outcome_computed_at" in columns
+            and getattr(columns["outcome_computed_at"]["type"], "timezone", True) is False
+        )
+        if not added and not naive:
             return
         with self._engine.begin() as conn:
             for name, sql_type in added.items():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+            if naive:
+                # Hodnoty jsou UTC (engine zapisuje UTC, TimeZone serveru Etc/UTC) —
+                # převod drží okamžik, data se nemění (#1598)
+                conn.execute(
+                    text(
+                        f"ALTER TABLE {table} ALTER COLUMN outcome_computed_at "
+                        "TYPE TIMESTAMP WITH TIME ZONE USING outcome_computed_at AT TIME ZONE 'UTC'"
+                    )
+                )
 
     def upsert_verdict(
         self,
