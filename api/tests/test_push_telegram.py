@@ -21,6 +21,7 @@ from gexlens_api.push_telegram import (
     TelegramPush,
     _index_kinds,
     effective,
+    fallback_cumdelta_bullet,
     format_message,
     in_quiet_hours,
     parse_quiet_hours,
@@ -182,6 +183,28 @@ def test_kazdy_druh_prave_jeden_prepinac() -> None:
     assert len(PUSH_TOPICS) == 32
     assert all(len(topic.setting) <= 64 for topic in PUSH_TOPICS)
     assert {topic.key for topic in PUSH_TOPICS if not topic.bell} == {"maintenance"}
+
+
+def test_tooltip_fallbacku_podle_zdroje_cumdelta() -> None:
+    """#1588: pod midpointem (v5) CumΔ za fallbacku stojí, pod tisky (v6) běží dál —
+    tooltip tématu říká totéž co alert enginu, celým zněním pro obě verze."""
+    from gexlens_engine.compute.setups import CUMDELTA_PRINTS
+
+    assert fallback_cumdelta_bullet(False) == "Během fallbacku stojí CumΔ a net objem"
+    assert fallback_cumdelta_bullet(True) == (
+        "Během fallbacku běží CumΔ a net objem dál z tisků, chybí jen rozklad objemu"
+    )
+    (topic,) = [topic for topic in PUSH_TOPICS if topic.key == "tasty_fallback"]
+    assert topic.help_lines() == [
+        "Zdroj dat se přepnul mezi IBKR a tastytrade.",
+        "",
+        "• Cena podkladu z tastytrade",
+        "• Opční řetěz z tastytrade a návrat na IBKR",
+        f"• {fallback_cumdelta_bullet(CUMDELTA_PRINTS)}",
+        "• Chodí i v tichých hodinách",
+        "• Ve zvonku: spot_fallback, chain_fallback",
+        "• Výchozí: zapnuto",
+    ]
 
 
 def test_duplicitni_druh_shodi_import() -> None:
