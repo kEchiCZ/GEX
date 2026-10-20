@@ -200,7 +200,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_OI_ARCHIVE_EXPIRIES` | 5 | Ranní OI archiv pokrývá N nejbližších expirací (základ ΔOI vs. včera) |
 | `GEXLENS_SWEEP_NEXT_EXPIRY` | true | Sekundární sweep následující expirace (positioning příští seance) |
 | `GEXLENS_NEXT_EXPIRY_SWEEP_EVERY` | 3 | Kadence sekundárního sweepu (každá k-tá minuta) |
-| `GEXLENS_STRIKE_RANGE_POINTS` | 200 | Výchozí denní obálka spot ± X (ADR-0002) |
+| `GEXLENS_STRIKE_RANGE_POINTS` | 200 | Výchozí denní obálka spot ± X (ADR-0002); od mechaniky v6 začne aktivní řetěz po rollu v settle v obálce rozšířené o striky sekundáru (ADR-0057 doplněk 20. 10.) |
 | `GEXLENS_STRIKE_RANGE_EXPAND_THRESHOLD` | 0.25 | Rozšíření při přiblížení k okraji |
 | `GEXLENS_STRIKE_RANGE_MAX_POINTS` | 800 | Strop šířky obálky (≥ 2× base) |
 | `GEXLENS_BATCH_SIZE` | 80 | Dávka rotačních subskripcí |
@@ -463,8 +463,9 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
       iteraci orchestrátoru. Do té doby do něj tečou tisky přes trasy, které pod
       tisky nesou tracker svého řetězu, a plán tasty subskripcí drží TimeAndSale
       D+1 dál (čekající předání).
-    - Pásmo nového aktivního D+1 pokryje i striky sekundáru (přes roll jen roste),
-      takže tisky chodí na všech stranách, které sekundár měřil.
+    - Pásmo nového aktivního D+1 pokryje i striky sekundáru (přes roll jen roste,
+      výjimka z ADR-0002 bod 3), takže tisky chodí na všech stranách, které sekundár
+      měřil. Širší pásmo drží celou seanci D+1; delší je jen sweep křídel.
     - Net navazuje bez mezery, včetně tisků od posledního zápisu sekundáru (každý
       N-tý cyklus). První minuta aktivního D+1 je měřená, když vzorky pokryjí
       hranici; výpadek v neuzavřeném okně sekundáru udělá mezeru z prvního řádku.

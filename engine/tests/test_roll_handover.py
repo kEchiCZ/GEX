@@ -4,11 +4,11 @@ Celý den nad skutečnými objekty: vzorky `TradeBranchMonitor` každou minutu,
 tisky přes trasy (`route_trade`) s bránou orchestrátoru (`_tasty_event`: symbol
 bez pipeline jen s čekajícím předáním, `pending_handovers`), cykly runtime
 sekundáru a po rollu aktivního runtime, který převezme tracker sekundáru
-(`EngineRuntime.take_over`), přestavba tras před vzorkem (`on_pipeline_created`)
-a ranní kalibrace α nad zapsanými particemi. Tisky mezi posledním zápisem
-sekundáru a novou pipeline jsou v netu a bod α vznikne; restart v rollu je
-mezera. Plán subskripcí model nemá — řetěz čekajícího předání v něm drží
-`pending_handovers` (test v test_trade_branch.py).
+(`EngineRuntime.take_over`), přestavba tras plánem až po vzorku téže iterace
+(`on_pipeline_created` jen probudí plán) a ranní kalibrace α nad zapsanými
+particemi. Tisky mezi posledním zápisem sekundáru a novou pipeline jsou v netu
+a bod α vznikne; restart v rollu je mezera. Plán subskripcí model nemá — řetěz
+čekajícího předání v něm drží `pending_handovers` (test v test_trade_branch.py).
 Mechaniku v6 volí explicitní zdroj trackeru (`SOURCE_AGGRESSOR`).
 """
 
@@ -181,12 +181,14 @@ async def _simulate(
             prints(now, 10.0)  # během zakládání: drží ho čekající předání
             pipe = Pipe(active, _runtime(settings, repo, day.expiry_d2, secondary=True))
             handovers.pop("ES", None)
-            routes = {"ES": build_routes(pipe, streamer_of)}  # on_pipeline_created
-        sample(now)
+        sample(now)  # převzatému trackeru patří sekundární část starých tras
         if now in secondary_cycles:
             await secondary.run_cycle(now, SPOT, [])
         if active is not None and now in active_cycles:
             await active.run_cycle(now, SPOT, [])
+        if now == roll + MIN:
+            assert pipe is not None
+            routes = {"ES": build_routes(pipe, streamer_of)}  # plán po probuzení
         if now == roll:
             # Konec cyklu rollu: stará pipeline se zastaví, trasy zůstávají
             pipe = None

@@ -2051,11 +2051,12 @@ async def main() -> None:
     trade_branch_sample: Callable[
         [dt.datetime, Mapping[str, InstrumentPipeline]], dict[str, str]
     ] = observe_without_branch
-    # Po založení pipeline (#1460): trasy tisků nového řetězu (roll v settle,
-    # restart) se přestaví hned, ještě před vzorkem téže iterace, a plán
-    # subskripcí se probudí. None bez tasty větve; volá se jen pod zdrojem
-    # tisků — pod midpointem by dřívější obnova univerza změnila stín `cumdelta_dx`
-    on_pipeline_created: Callable[[str], None] | None = None
+    # Probuzení plánu subskripcí po založení pipeline (#1460): trasy tisků nového
+    # řetězu (roll v settle, restart) se přestaví do sekund, ne až za minutu —
+    # spolu s odběrem tisků, ne dřív (trasa bez odběru by neúplnou minutu
+    # potvrdila). None bez tasty větve; volá se jen pod zdrojem tisků — pod
+    # midpointem by dřívější obnova univerza změnila stín `cumdelta_dx`
+    on_pipeline_created: Callable[[], None] | None = None
     # Křížová kontrola (#517 A) — None, dokud neběží shadow větev; status ji
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
     crosscheck: CrossCheckDetector | None = None
@@ -2174,24 +2175,7 @@ async def main() -> None:
             )
 
         trade_branch_sample = _trade_branch_sample
-
-        def _on_pipeline_created(created_symbol: str) -> None:
-            """Trasy tisků nové pipeline z mapy řetězu v cache hned (#1460, varianta C).
-
-            Smyčka plánu je přestaví do sekund, ale až po vzorku téže iterace:
-            nový tracker by v něm podle identity trasy neměl, vzorek by řekl
-            „neběží" a hraniční vzorek dalšího okna by zneplatnil i další
-            minutu. Bez mapy v cache (start) přestaví trasy smyčka plánu.
-            """
-            chain = shadow_chain.get(created_symbol)
-            created = pipelines.get(created_symbol)
-            if chain is not None and created is not None:
-                routes = build_routes(created, chain.streamer_symbol)
-                if routes.active:
-                    trade_routes[created_symbol] = routes
-            plan_wakeup.set()
-
-        on_pipeline_created = _on_pipeline_created
+        on_pipeline_created = plan_wakeup.set
 
         stream_kpi = StreamKpi(
             report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl",
@@ -3263,14 +3247,15 @@ async def main() -> None:
                 roll_handovers.pop(symbol, None)
                 setup_cooldown.succeeded(symbol)
                 # Trasy tisků nového řetězu hned (#1460): po rollu drží trasy
-                # vypršelý řetěz a nový sekundár D+2 by do jejich obnovy neměřil
+                # vypršelý řetěz a nový sekundár D+2 do jejich obnovy neměří.
+                # Převzatý tracker D+1 je jejich i bez obnovy (varianta C)
                 created_tracker = pipelines[symbol].runtime.cum_delta
                 if (
                     on_pipeline_created is not None
                     and created_tracker is not None
                     and created_tracker.prints
                 ):
-                    on_pipeline_created(symbol)
+                    on_pipeline_created()
             except ConnectionError as exc:
                 # Spojení se rozpadlo uprostřed setupu (odhlášená TWS, restart
                 # Gateway). O symbolu to nevypovídá nic — cooldown by jen držel

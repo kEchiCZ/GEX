@@ -317,18 +317,25 @@ vlastníka v epice #1385: z 19. 10. 2026 E-0.12 varianta C a zobrazení hlasu s 
     převezme, je-li D+1 její aktivní expirací (`EngineRuntime.take_over`,
     `CumDeltaTracker.promote`). Net v paměti, tisky ještě neuzavřené v řádku i vzorky okna
     zůstávají. Navázání z partice netflow se podruhé nespouští.
-  - **Pásmo řetězu přes roll jen roste** (ADR-0002): nový aktivní runtime začne v pásmu
-    kolem spotu rozšířeném o striky sekundáru (`discovery.band_covering`). Strany, které
-    sekundár měřil, tak dostávají tisky i kotace až do řezu dne. Bez toho by strany mimo
-    nové pásmo tisky ztratily: 19. 10. 2026 u NQ 8 strikových párů (29920–29990), na
-    kterých leželo ~8,5 % lotů tisků D+1 poslední hodiny před settle.
+  - **Pásmo řetězu přes roll jen roste** — pod v6 výjimka z ADR-0002 bod 3 („reset na
+    session start“): nový aktivní runtime začne v pásmu kolem spotu rozšířeném o striky
+    sekundáru (`discovery.band_covering`). Strany, které sekundár měřil, tak dostávají tisky
+    i kotace až do řezu dne. Širší pásmo pak drží celou seanci D+1, dokud pipeline žije; dál
+    roste podle ADR-0002 bodů 2 a 4. Náklad: delší je jen sweep křídel jednou za
+    `wings_sweep_every` cyklů, linky ani `batch_size` se nemění. Bez toho by strany mimo nové
+    pásmo tisky ztratily: 19. 10. 2026 u NQ 8 strikových párů (29920–29990), na kterých
+    leželo ~8,5 % lotů tisků D+1 poslední hodiny před settle. Pod v5 se pásmo v rollu
+    resetuje jako dřív.
   - **Trasy tisků patří trackeru, ne pipeline.** Pod tisky nese každá část tras tracker, pro
     který se stavěla. Tisk jde do něj (`route_trade`) i mezi zastavením staré a založením nové
     pipeline, ale jen dokud čeká předání (`pending_handovers`): symbol bez pipeline a bez
     předání tisky nedoručuje nikam jako v části 1a. Vzorek uzná trasy podle identity trackeru
     (`owned_universe`), takže trackeru nového aktivního runtime patří sekundární část tras
-    ještě před obnovou plánu. Po založení pipeline se trasy přestaví hned, ještě před vzorkem
-    téže iterace (`on_pipeline_created`). Do trackeru jiné expirace tisk nejde ani teď.
+    ještě před obnovou plánu. Ostatní trasy nové pipeline přestaví plán subskripcí do sekund
+    po založení (`on_pipeline_created`), spolu s odběrem tisků, ne dřív: trasa, po které
+    tisky ještě nechodí, by neúplnou minutu potvrdila (kotace z účelu extended chodí). Nový
+    tracker (sekundár D+2, pipeline založená znovu nad týmiž expiracemi po přepojení IBKR)
+    má proto mezeru v prvních dvou oknech. Do trackeru jiné expirace tisk nejde ani teď.
   - **Subskripci tisků řetězu D+1 drží čekající předání.** Plán tasty subskripcí bere účel
     chain z běžících pipeline a z čekajících předání. Bez toho by v okně mezi zastavením
     a založením odhlásil TimeAndSale D+1 (19. 10. 2026 pod v5 ticho tisků D+1 ES
@@ -345,8 +352,9 @@ vlastníka v epice #1385: z 19. 10. 2026 E-0.12 varianta C a zobrazení hlasu s 
     okně proto udělá mezeru z prvního řádku aktivního řetězu a vrátí celý uzavřený úsek
     netu. Konzervativní je to jen o pár minut navíc, kalibraci to nemění: den s mezerou bod
     nedá tak jako tak.
-  - **Mezera rollu v CumΔ** z bodu 3 pod v6 zaniká. Nový sekundár D+2 má nový tracker,
-    jeho první minuta je proto mezera jako po restartu. V seanci D kalibrovaný není (#1580).
+  - **Mezera rollu v CumΔ** z bodu 3 pod v6 zaniká. Nový sekundár D+2 má nový tracker
+    s mezerou v prvních dvou oknech (viz výše). V seanci D kalibrovaný není (#1580) a jeho
+    net seance D+1 začíná až jejím openem.
   - **Předání platí jen v první iteraci po rollu.** Nevznikne-li nová pipeline hned
     (spojení, chyba setupu, cooldown), tracker propadá s varováním a první minuta nového
     je mezera jako po restartu. Tracker, který vynechal vzorek, by okno potvrdil bez
