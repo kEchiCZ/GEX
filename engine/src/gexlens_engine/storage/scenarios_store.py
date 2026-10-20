@@ -298,9 +298,16 @@ class ScenariosRepository:
             total, rows, images = conn.execute(stmt).one()
         return {"bytes": int(total), "scenarios": int(rows), "images": int(images)}
 
-    def stats(self, symbol: str | None, source: str | None = None) -> dict[str, Any]:
+    def stats(
+        self, symbol: str | None, source: str | None = None, *, rules_version: int
+    ) -> dict[str, Any]:
         """Track record vyhodnocených scénářů s termínem v obchodní seanci: hit rate
-        cílů, pořadí, medián odchylky."""
+        cílů, pořadí, medián odchylky.
+
+        Automatický scénář (z verdiktu dne) se počítá jen s verzí pravidel verdiktu
+        `rules_version` z `rationale` — verze se nesčítají (ADR-0057 bod 8; Rozhodnuto
+        20. 10.: jen aktuální verze, #1588). Ruční scénář verzi nemá a počítá se vždy.
+        """
         stmt = select(scenarios_table).where(scenarios_table.c.result.is_not(None))
         if symbol:
             stmt = stmt.where(scenarios_table.c.symbol == symbol)
@@ -310,7 +317,15 @@ class ScenariosRepository:
             rows = [_row(row) for row in conn.execute(stmt).mappings()]
         # Termín bez settle (víkend, #1309) do track recordu nepatří ani u starších
         # řádků, které se stihly vyhodnotit před opravou
-        results = [row.result for row in rows if row.result and is_trading_session(row.deadline)]
+        results = [
+            row.result
+            for row in rows
+            if row.result
+            and is_trading_session(row.deadline)
+            and (
+                row.source != "auto" or (row.rationale or {}).get("rules_version") == rules_version
+            )
+        ]
         n = len(results)
         hit1 = sum(1 for r in results if r.get("hit1"))
         with_second = [r for r in results if r.get("hit2") is not None]

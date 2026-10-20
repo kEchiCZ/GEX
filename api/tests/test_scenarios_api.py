@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 
 from gexlens_api import scenario_routes
 from gexlens_api.scenario_routes import build_scenario_router
+from gexlens_engine.compute.dayverdict import VERDICT_RULES_VERSION
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
 
 NOW = dt.datetime(2026, 9, 15, 12, 0, tzinfo=dt.UTC)
@@ -131,7 +132,13 @@ def test_auto_scenar_dostane_snimek_pres_put_a_stats_per_zdroj(tmp_path: Path) -
         annotation_id=None,
         note=None,
         source="auto",
-        rationale={"verdict": "short", "score": -4, "votes": [], "missing": []},
+        rationale={
+            "rules_version": VERDICT_RULES_VERSION,
+            "verdict": "short",
+            "score": -4,
+            "votes": [],
+            "missing": [],
+        },
     )
     listed = client.get("/scenarios?symbol=ES&source=auto").json()["scenarios"]
     assert [row["id"] for row in listed] == [auto_id] and listed[0]["source"] == "auto"
@@ -158,6 +165,7 @@ def test_auto_scenar_dostane_snimek_pres_put_a_stats_per_zdroj(tmp_path: Path) -
     )
     stats = client.get("/scenarios/stats?symbol=ES").json()
     assert stats["n"] == 1 and stats["by_source"]["auto"]["n"] == 1
+    assert stats["rules_version"] == VERDICT_RULES_VERSION  # jen aktuální verze (#1588)
     assert (
         stats["by_source"]["manual"]["n"] == 0 and stats["by_source"]["auto"]["preliminary"] is True
     )
