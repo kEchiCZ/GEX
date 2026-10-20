@@ -112,31 +112,57 @@ from gexlens_engine.ticker import contract_multiplier, is_futures, parse_ticker
 logger = logging.getLogger(__name__)
 
 
+def volume_increments(volume: pd.DataFrame) -> pd.DataFrame:
+    """Přírůstky denního kumulativního volume per kontrakt a minuta (#1602).
+
+    `volume`: řádky = kontrakty (strike, right), sloupce = minuty vzestupně,
+    NaN = kontrakt v minutě objem nenese (chybějící řádek, NULL z tasty
+    fallbacku). Denní kumulativ v seanci jen roste, IBKR ho ale kmitá
+    (862 ↔ 863) a propadá (pauza Globexu) — reference přírůstku je proto
+    PRŮBĚŽNÉ MAXIMUM seance, ne poslední hodnota: pokles i návrat k maximu
+    dají 0, započte se jen objem nad maximem. NaN referenci nemění a první
+    výskyt kontraktu jen založí stav (přírůstek 0). Tentýž vzorec počítá
+    frontend `ensureDerived` (`frontend/src/replay/loader.ts`).
+    """
+    reference = volume.ffill(axis=1).cummax(axis=1)
+    return reference.diff(axis=1).clip(lower=0.0).fillna(0.0)
+
+
+def _contract_frame(snapshots: pd.DataFrame) -> pd.DataFrame:
+    """Snapshoty s jedním řádkem na (ts_min, strike, right).
+
+    Klíč je unikátní per partice; sešití D−1 + D může minutu nést dvakrát
+    (viz bars_session) — vyhrává první výskyt.
+    """
+    return snapshots.drop_duplicates(subset=["ts_min", "strike", "right"], keep="first")
+
+
 def daily_totals(snapshots: pd.DataFrame) -> tuple[dict[str, object], object | None]:
     """Denní součty pro Daily pohled (#1206) — stejné vzorce jako frontend
-    `ensureDerived`: OptVol / Δ Flow = KLADNÉ přírůstky kumulativního volume
-    vůči předchozí MĚŘENÉ minutě (minuta bez snapshotu se přeskakuje, chybějící
-    strike v minutě = 0), Δ Flow vážené |delta| minuty; Evo OI = Σ OI přes
-    striky v poslední minutě. Vrací (součty, poslední ts_min).
+    `ensureDerived`: OptVol / Δ Flow = přírůstky kumulativního volume proti
+    průběžnému maximu kontraktu (`volume_increments`, #1602; NULL ani
+    chybějící strike nejsou 0, první výskyt kontraktu jen založí stav),
+    Δ Flow vážené |delta| minuty; Evo OI = Σ OI přes striky v poslední minutě.
+    Vrací (součty, poslední ts_min).
+
+    Při změně vzorce zvedni `DAILY_TOTALS_VERSION` ve frontendu
+    (`frontend/src/replay/loader.ts`): uzavřený den drží prohlížeč podle URL
+    `immutable` rok.
     """
     if snapshots.empty:
         return {}, None
-    # Klíč (ts_min, strike, right) je unikátní per partice; sešití D−1 + D
-    # může minutu nést dvakrát (viz bars_session) — vyhrává první výskyt.
     # `pivot` (bez agregace), NE `pivot_table`: na řídkých prod datech (striky
     # přibývají/mizí, NaN volume) dával pivot_table o 13 % nižší OptVol než
     # referenční smyčka po minutách (ověřeno 17. 9. 2026 nad ES 20260916).
-    frame = snapshots[["ts_min", "strike", "right", "volume", "delta", "oi"]].drop_duplicates(
-        subset=["ts_min", "strike", "right"], keep="first"
-    )
+    frame = _contract_frame(snapshots[["ts_min", "strike", "right", "volume", "delta", "oi"]])
     last_ts = frame["ts_min"].max()
-    volume = frame.pivot(index=["strike", "right"], columns="ts_min", values="volume").fillna(0.0)
+    volume = frame.pivot(index=["strike", "right"], columns="ts_min", values="volume")
     delta = (
         frame.pivot(index=["strike", "right"], columns="ts_min", values="delta")
         .reindex(index=volume.index, columns=volume.columns)
         .fillna(0.0)
     )
-    increments = volume.diff(axis=1).clip(lower=0.0).fillna(0.0)
+    increments = volume_increments(volume)
     weighted = increments * delta.abs()
     rights = volume.index.get_level_values("right")
     last_rows = frame[frame["ts_min"] == last_ts]
@@ -1694,7 +1720,8 @@ def _spot_at(
 def _opt_vol_series(
     repository: DataRepository, symbol: str, day: dt.date
 ) -> list[dict[str, object]]:
-    """OptVol per minuta: součet minutových přírůstků kumulativního volume přes expirace."""
+    """OptVol per minuta: součet minutových přírůstků kumulativního volume přes
+    expirace; přírůstek proti průběžnému maximu kontraktu (`volume_increments`, #1602)."""
     total: pd.Series | None = None
     for expiry in repository.list_expiries(symbol):
         try:
@@ -1704,19 +1731,16 @@ def _opt_vol_series(
             )
         except PartitionNotFoundError:
             continue
+        # Extended expirace (#616) zapisují volume=None (flows jsou výhradně
+        # IBKR) — řada bez jediného objemu do OptVol nepatří a nesmí přidat
+        # minuty, které IBKR expirace nemají (#827)
+        frame = _contract_frame(frame[["ts_min", "strike", "right", "volume"]]).dropna(
+            subset=["volume"]
+        )
         if frame.empty:
             continue
-        per_contract = frame.pivot_table(
-            index="ts_min", columns=["strike", "right"], values="volume", aggfunc="last"
-        )
-        if per_contract.empty:
-            # Extended expirace (#616) zapisují volume=None (flows jsou výhradně
-            # IBKR), takže pivot nad samými NaN je prázdný. Bez téhle stráže
-            # shodí `iloc[0]` celý endpoint včetně dat z IBKR expirací (#827).
-            continue
-        increments = per_contract.diff().clip(lower=0.0)
-        increments.iloc[0] = 0.0  # první minuta nemá přírůstek
-        series = increments.sum(axis=1)
+        volume = frame.pivot(index=["strike", "right"], columns="ts_min", values="volume")
+        series = volume_increments(volume).sum(axis=0)
         total = series if total is None else total.add(series, fill_value=0.0)
     if total is None:
         return []
