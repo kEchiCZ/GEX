@@ -222,6 +222,32 @@ class EngineRuntime:
         if self.cum_delta is None:
             self.cum_delta = CumDeltaTracker(multiplier=self.multiplier, source=LIVE_SOURCE)
 
+    def take_over(self, secondary: "EngineRuntime") -> None:
+        """Roll v settle (#1460, varianta C): převezme tracker sekundáru téže expirace.
+
+        Sekundár D+1 se stává aktivním řetězem. Jeho tracker drží net v paměti,
+        tisky, které ještě nejsou uzavřené v řádku, i vzorky okna, takže net
+        navazuje bez mezery a první minuta je měřená, když vzorky pokryjí
+        hranici (`CumDeltaTracker.promote`). Navázání netu z partice netflow
+        přechází se sekundárem: proběhlo-li v jeho cyklu, podruhé by uložený
+        základ přičetlo dvakrát; sekundár bez cyklu (pipeline založená těsně
+        před settle) ho nechává na prvním cyklu aktivního runtime. CumΔ symbolu
+        naváže tento runtime z flow partice jako po každém založení pipeline.
+        Jen pod tisky: net sekundáru pod midpointem dává bar větev a navazuje
+        se z partice jako dřív.
+        """
+        tracker = secondary.cum_delta
+        if tracker is None or not tracker.prints:
+            raise ValueError("take_over: předání trackeru v rollu jen pod zdrojem tisků")
+        if (secondary.symbol, secondary.expiry) != (self.symbol, self.expiry):
+            raise ValueError(
+                f"take_over: sekundár {secondary.symbol} {secondary.expiry} "
+                f"není řetěz {self.symbol} {self.expiry}"
+            )
+        tracker.promote()
+        self.cum_delta = tracker
+        self._netflow_seed_pending = secondary._netflow_seed_pending
+
     def fa_alpha(self) -> float:
         """α FA odhadu: kalibrovaná (`flow_alpha`), jinak pod v5 konfigurace.
 
