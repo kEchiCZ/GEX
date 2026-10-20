@@ -118,7 +118,9 @@ class Settings(BaseSettings):
     setup_selfcheck_min_samples: int = Field(default=10, ge=1)
     setup_selfcheck_max_drawdown_r: float = Field(default=-10.0, lt=0)
     # Flow-adjusted OI odhad (ADR-0011, #222): OI_est = OI + α·čistý klasifikovaný
-    # objem. α z validace open-ratio (~0,39 na čistém dni); 0 = vrstva vypnutá
+    # objem. α z validace open-ratio (~0,39 na čistém dni); 0 = vrstva vypnutá.
+    # Jen mechanika v5 bez kalibrace: od v6 bere FA α jen z kalibrace z tisků
+    # s ≥ 5 dny, jinak 0 (ADR-0057 bod 6, `fa_calibration.live_alpha`)
     flow_oi_alpha: float = Field(default=0.4, ge=0, le=1)
     # Vol leadeři (#208): alert, když top strana příští expirace ≥ ratio × medián
     # top-10 a zároveň ≥ min_volume kontraktů (absolutní podlaha proti ránu)

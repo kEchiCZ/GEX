@@ -274,3 +274,102 @@ nepřinášejí, jen popisují, jak kód mezeru měří.
   podíl `null`, ne 0 — nic se neměřilo (#1172); pod midpointem zůstává 0 jako dřív. Součet řádků
   `flow` za den s fallbackem řetězu (`storage/cumdelta_compare.py`) je proto pro podíl tisků jen
   horní odhad.
+
+## Doplněk (20. 10. 2026, #1460 část 1b)
+
+Zpřesnění bodů 3, 4, 6 a 8, která zavádí část 1b. Nové rozhodnutí přinášejí jen volby
+vlastníka v epice #1385: z 19. 10. 2026 E-0.12 varianta C a zobrazení hlasu s vahou 0
+(varianta 1), z 20. 10. 2026 mezera rollu v settle varianta C („chci to přesně“).
+
+- **Tendence verze 5** (body 4 a 8, `compute/tendency.py`, `tendency.py`). Zapíná ji
+  mechanika v6 přes instanční pole `TendencyEngine.cumdelta_prints`, pod v5 počítá dál v4.
+  - **Sklon CumΔ** = `cumdelta.flow_window_sum` nad řádky `flow` (Σ flowΔ za
+    (now − 10 min, now] v seanci). Neúplné okno, mezera nebo okno přes začátek seance =
+    sklon `None`, sklon ani rozchod nehlasují. Rozchod bere cenu v minutě hranice okna
+    bez ohledu na seanci, protože cena je přes pauzu spojitá (#1581 varianta A). Za
+    zavřeného trhu nese řada nuly, sklon je tedy 0 (měřený klid).
+  - **Max Pain** hlasuje jen 0–90 min do settle. Ve v4 chyběla spodní mez a hlasoval
+    po settle až do 00:00 UTC (#1584).
+  - **Hystereze pásma** se resetuje s obchodním dnem (`trading_session_date`, 17:00 CT),
+    ne v 00:00 UTC. **SentIndex** hledá hodnotu před oknem i ve včerejší UTC partici.
+  - **Poloha mezi zdmi má váhu 0** (E-0.12 C, #1113). Hlas se dál počítá a ukládá
+    s `weight` 0, zašednutí v rozpadu je frontend (#1588). Minuta, ve které hlasuje jen
+    složka s vahou 0, nemá výsledek (jako minuta bez dat), ne skóre 0. Badge
+    „nekalibrováno“ zůstává, protože C není kalibrace vah.
+- **Verdikt dne verze 4** (bod 8): pravidla se nemění, verze jen značí zlom vstupu.
+  Golden v3 platí pro obě verze.
+- **Kalibrace α pod tisky** (bod 6, `storage/fa_calibration.py`):
+  - kalibruje se jen řetěz, který byl celou seanci D sekundárem, tedy první expirace
+    po D; náhradní řetěz se nehledá (#1580);
+  - bere se jen netflow se zdrojem `aggressor`.
+- **Den s mezerou** se pozná ze značky `derived/{sym}/{exp}/netgap/`. Runtime aktivního
+  i sekundárního řetězu do ní zapíše minutu, kterou za otevřeného trhu neměřil.
+  - Značka je nutná, protože sekundár řádek `flow` nepíše a jeho netflow chodí jen
+    každý N-tý cyklus (u ES ~3 min, mezery 1–5 min). Chybějící netflow tak mezeru
+    od běžné kadence neodliší.
+  - Den bez bodu je i takový, jehož řada netflow končí víc než 5 min před řezem. Engine
+    spadlý přes konec dne totiž značku do seance D nezapíše.
+  - **Pravidlo platí bez výjimky.** Roll v settle mezeru nedělá, viz následující bod.
+- **Roll v settle předá stav kalibrovaného řetězu** (varianta C, Rozhodnuto 20. 10.; zpřesňuje
+  bod 3 „po rollu v settle až po obnově plánu“ a doplněk 18. 10. „expirace musí sedět na
+  běžící řetěz“).
+  - Řetěz D+1 si nechá tracker sekundáru, mění se jen runtime kolem něj. Nová pipeline ho
+    převezme, je-li D+1 její aktivní expirací (`EngineRuntime.take_over`,
+    `CumDeltaTracker.promote`). Net v paměti, tisky ještě neuzavřené v řádku i vzorky okna
+    zůstávají. Navázání z partice netflow se podruhé nespouští.
+  - **Pásmo řetězu přes roll jen roste** — pod v6 výjimka z ADR-0002 bod 3 („reset na
+    session start“): nový aktivní runtime začne v pásmu kolem spotu rozšířeném o striky
+    sekundáru (`discovery.band_covering`). Strany, které sekundár měřil, tak dostávají tisky
+    i kotace až do řezu dne. Širší pásmo pak drží celou seanci D+1, dokud pipeline žije; dál
+    roste podle ADR-0002 bodů 2 a 4. Náklad: delší je jen sweep křídel jednou za
+    `wings_sweep_every` cyklů, linky ani `batch_size` se nemění. Bez toho by strany mimo nové
+    pásmo tisky ztratily: 19. 10. 2026 u NQ 8 strikových párů (29920–29990), na kterých
+    leželo ~8,5 % lotů tisků D+1 poslední hodiny před settle. Pod v5 se pásmo v rollu
+    resetuje jako dřív.
+  - **Trasy tisků patří trackeru, ne pipeline.** Pod tisky nese každá část tras tracker, pro
+    který se stavěla. Tisk jde do něj (`route_trade`) i mezi zastavením staré a založením nové
+    pipeline, ale jen dokud čeká předání (`pending_handovers`): symbol bez pipeline a bez
+    předání tisky nedoručuje nikam jako v části 1a. Vzorek uzná trasy podle identity trackeru
+    (`owned_universe`), takže trackeru nového aktivního runtime patří sekundární část tras
+    ještě před obnovou plánu. Ostatní trasy nové pipeline přestaví plán subskripcí do sekund
+    po založení (`on_pipeline_created`), spolu s odběrem tisků, ne dřív: trasa, po které
+    tisky ještě nechodí, by neúplnou minutu potvrdila (kotace z účelu extended chodí). Nový
+    tracker (sekundár D+2, pipeline založená znovu nad týmiž expiracemi po přepojení IBKR)
+    má proto mezeru v prvních dvou oknech. Do trackeru jiné expirace tisk nejde ani teď.
+  - **Subskripci tisků řetězu D+1 drží čekající předání.** Plán tasty subskripcí bere účel
+    chain z běžících pipeline a z čekajících předání. Bez toho by v okně mezi zastavením
+    a založením odhlásil TimeAndSale D+1 (19. 10. 2026 pod v5 ticho tisků D+1 ES
+    20:01:44–20:03:34 UTC, NQ 20:02:05–20:03:57 UTC). Vzorek by tu ztrátu nepoznal, protože
+    kotace z účelu extended chodí dál. Předání se proto ze slovníku bere až po založení
+    pipeline.
+  - **Hranice** je vzorek minuty rollu, ve kterém aktivní řetěz D uzavřel poslední řádek.
+    Od ní začínají metriky aktivního řetězu jako u nového trackeru: tok do CumΔ, pokrytí,
+    podíly a rozklady barů. První bar stav objemu jen založí. Tok a pokrytí sekundáru před
+    hranicí do řádku aktivního řetězu nejdou. CumΔ symbolu dál navazuje z flow aktivního
+    řetězu, kumulativ sekundáru do ní nepatří.
+  - **První minuta aktivního D+1 je měřená**, když vzorky pokryjí hranici. Její verdikt
+    zahrnuje i okno, které sekundár ještě neuzavřel (cyklus po N minutách). Výpadek v tomto
+    okně proto udělá mezeru z prvního řádku aktivního řetězu a vrátí celý uzavřený úsek
+    netu. Konzervativní je to jen o pár minut navíc, kalibraci to nemění: den s mezerou bod
+    nedá tak jako tak.
+  - **Mezera rollu v CumΔ** z bodu 3 pod v6 zaniká. Nový sekundár D+2 má nový tracker
+    s mezerou v prvních dvou oknech (viz výše). V seanci D kalibrovaný není (#1580) a jeho
+    net seance D+1 začíná až jejím openem.
+  - **Předání platí jen v první iteraci po rollu.** Nevznikne-li nová pipeline hned
+    (spojení, chyba setupu, cooldown), tracker propadá s varováním a první minuta nového
+    je mezera jako po restartu. Tracker, který vynechal vzorek, by okno potvrdil bez
+    doložení. **Restart procesu zůstává mezerou.**
+  - Pod v5 (midpoint) se nic nepředává. Trasy i vzorky se řídí pozicí a expirací jako
+    v části 1a, pásmo začíná kolem spotu a net sekundáru se po rollu navazuje z partice.
+- **Reset α při bumpu je automatický.** `fa_alpha` i `fa_alpha_history` nesou `source`
+  (aditivní sloupec, NULL = midpoint).
+  - Pod tisky se stav jiného zdroje bere jako nekalibrovaný a první bod jde přímo.
+    Ruční `set_state(symbol, 0.0, 0)` z plánu 1a tím odpadá a nemůže se zapomenout.
+  - FA vrstva dostane α až po 5 dnech kalibrace z tisků (`FA_MIN_DAYS`), do té doby
+    0, i bez stavu. Výchozí α z konfigurace se pod tisky nečte ani bez nastavené α
+    (start, chyba DB; `EngineRuntime.fa_alpha`), takže „výchozí α 0“ z bodu 6 plní
+    tato brána.
+- **Řez dne kalibrace α a FA validace** je 16:00 CT dne D (`marketclock.daily_close_utc`),
+  bez přepínače. Pevných 21:00 UTC by od konce US letního času řízlo v 15:00 CT.
+- **Mimo část 1b** zůstávají dva podklady z dat: číselný práh parity stín ↔ 1A (bod 7)
+  nese #1590 a retro α z recorderu na sucho jako podklad prahů nese #1627.

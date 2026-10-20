@@ -369,3 +369,19 @@ def test_collect_bez_ibkr_mereni_po_publikaci_bod_neulozi(
 
     assert "bez stran změřených po publikaci v obou dnech" in caplog.text
     assert not fa_repo.exists("ES", EXPIRY, DAY)
+
+
+def test_volumes_at_cutoff_zimni_cas_rez_22_utc(tmp_path: Path) -> None:
+    """#1460: v zimě je řez 16:00 CST = 22:00 UTC — poslední hodina Globexu do dne patří."""
+    winter = dt.date(2026, 11, 4)
+    path = tmp_path / "snap.parquet"
+    _write_snapshot(
+        path,
+        winter,
+        [
+            (20, 7000.0, "C", 120.0),
+            (21, 7000.0, "C", 140.0),  # 15:00–16:00 CST: dřív za řezem 21:00 UTC
+            (23, 7000.0, "C", 5.0),  # po resetu counteru v 17:00 CST
+        ],
+    )
+    assert volumes_at_cutoff(path, winter) == {(7000.0, "C"): 140.0}

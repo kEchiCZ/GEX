@@ -291,6 +291,28 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-20 — roll v settle zahodil stav kalibrovaného řetězu a mezera blokovala α každý den (#1460).**
+  Tracker netu řetězu D+1 žil v runtime pipeline, která se v settle zastaví. Nová pipeline
+  začala s novým trackerem: tisky od posledního zápisu sekundáru (každý 3. cyklus) do první
+  měřené minuty se ztratily. Trasy tisků mířily přes pipeline, takže mezi zastavením staré
+  a založením nové nedoručily nic. Pravidlo „den s mezerou bod nedá“ by tak α pod tisky
+  nedalo nikdy. První oprava byla výjimka ve čtenáři (B), měřila ale okno a kadenci a v netu
+  dál chyběly 2–5 min tisků. → Stav, který patří entitě (řetěz), nesmí žít v kontejneru
+  s kratší životností (pipeline). Při přechodu ho předat a cesty k němu (trasy tisků)
+  adresovat stavem, ne kontejnerem. Výjimka ve čtenáři je workaround, ne oprava. Test: celý
+  den se vzorky každou minutu a předáním v rollu (všední den, pátek, nedělní open, zimní čas,
+  zkrácená seance) a mutace „tisky mezi zastavením a založením se ztratí“ (α 0,44 místo 0,40).
+
+- **2026-10-20 — kalibrace α vybírala řetěz pořadím adresářů, ne jeho rolí v seanci (#1580, #1460).**
+  `collect_alpha_calibration` brala nejvzdálenější expiraci s platným bodem. Předpoklad „den má
+  dvě expirace s daty“ přestal platit rollem v settle (#1331): D+2 píše netflow dne D od ~20:05 UTC
+  a jejích 55 minut toku vyhrálo nad celodenním sekundárem D+1 (α ES 0,505 místo 0,263). Při
+  opravě se ukázalo, že chybějící řádek netflow mezeru neprozradí: sekundár ho píše jen každý
+  N-tý cyklus (ES ~3 min). → Vstup kalibrace vybírat podle role v seanci (první expirace po D,
+  bez náhrady) a stav, který čtenář potřebuje rozlišit (mezera × kadence), ukládat výslovně
+  (`netgap`), ne odvozovat z chybějícího řádku. Test: D+1 i D+2 s daty, mezera na začátku seance
+  v předchozí UTC partici.
+
 - **2026-10-18 — netflow vynechával strany s netem 0, α ES vyšla o ~9 % nižší (#1582).**
   Filtr `if net != 0.0` (od #232, bez ADR) slil „naměřená nula“ a „strana se nesleduje“ do
   chybějícího řádku. Strana s návratem na 0 z partice zmizela a čtenáři „poslední řádek ≤ T“

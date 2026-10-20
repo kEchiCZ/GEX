@@ -20,12 +20,24 @@ Není to doporučení k obchodu — popisuje positioning a tok, ne co dělat.
 import datetime as dt
 from dataclasses import dataclass, field
 
+from gexlens_engine.compute.setups import CUMDELTA_PRINTS
+
 # Verze vah (S11) — zvednout při každé změně vah nebo pravidel hlasů
 # v2 (#397): + charm_flow (časová rampa do close) a vanna_flow (× trend IV)
 # v3 (#394): hystereze pásem (margin + dwell) — skóre i hlasy beze změny,
 #            ale uložené pásmo už není čisté band_of(score), takže řádky
 #            v3 nejsou v pásmech srovnatelné s v2
-TENDENCY_WEIGHTS_VERSION = 4
+# v4 (#1241): poloha mezi zdmi nehlasuje u slabé nebo posouvající se zdi,
+#            Max Pain jen ≤ 90 min do close
+# v5 (#1460, zapíná ji mechanika v6 #1403): sklon CumΔ z tisků jako Σ flowΔ
+#            za 10 min v seanci — neúplné okno sklon ani rozchod nehlasuje
+#            (ADR-0057 bod 4, #1581); Max Pain jen 0–90 min do close
+#            a hystereze od otevření seance (#1584); poloha mezi zdmi
+#            váha 0 (E-0.12 varianta C, #1113)
+TENDENCY_RULES_V4 = 4
+TENDENCY_RULES_V5 = 5
+#: Živá verze — zlom nesou řádky (ADR-0057 bod 8), ne datum
+TENDENCY_WEIGHTS_VERSION = TENDENCY_RULES_V5 if CUMDELTA_PRINTS else TENDENCY_RULES_V4
 #: Trendový den (#1241, 21. 9. 2026): hlasy „poloha mezi zdmi“ a „Max Pain“ jsou
 #: mean-reversion — po kvartálním OPEX hlasovaly short celý den při +580 b.
 #: Zeď s dominancí pod tímto prahem není brzda (běžně 0,35–0,56; 21. 9. 0,18)
@@ -57,6 +69,18 @@ WEIGHTS: dict[str, float] = {
     "charm_flow": 1.0,
     "vanna_flow": 1.0,
 }
+#: v5 (E-0.12 varianta C, Rozhodnuto 19. 10. v #1385): poloha mezi zdmi šla
+#: na RTH 14. 9.–16. 10. proti pohybu (r30 ES −0,106*, NQ −0,084; #394
+#: issuecomment-6257078018) a ve v4 ředila skóre i jako nulový hlas. Hlas se dál
+#: počítá a ukládá s vahou 0 — rozpad ho ukáže a další revize ho přepočítá
+#: offline (#394 issuecomment-6266877618)
+WEIGHTS_V5: dict[str, float] = {**WEIGHTS, "walls_distance": 0.0}
+
+
+def weights_for(version: int) -> dict[str, float]:
+    """Váhy složek podle verze pravidel (v5 jen se zlomem mechaniky v6)."""
+    return WEIGHTS_V5 if version >= TENDENCY_RULES_V5 else WEIGHTS
+
 
 # Strop příspěvku jedné složky do výsledného skóre — těsně pod hranicí
 # „Strong" (0,5), aby jediná složka nikdy neudělala Strong sama
@@ -112,9 +136,10 @@ class TendencyInputs:
     # Zdi před oknem (#1241): posun ve směru ceny = mapa jde za cenou
     call_wall_then: float | None = None
     put_wall_then: float | None = None
-    # Sklon/rozchod: hodnota teď a před lookback oknem
-    cum_delta_now: float | None = None
-    cum_delta_then: float | None = None
+    # Sklon CumΔ za okno (počítá ho engine podle verze, `tendency.py`) a cena
+    # před oknem pro rozchod; None = sklon neznámý (krátká historie, v5 i
+    # neúplné okno nebo okno přes začátek seance) — sklon ani rozchod nehlasují
+    cum_delta_slope: float | None = None
     price_then: float | None = None
     # Delta-vážené přírůstky opčního volume za minutu, per strana
     call_flow: float | None = None
@@ -127,7 +152,8 @@ class TendencyInputs:
     # Charm/vanna plochy v místě ceny (#397) — tytéž modely jako Dyn plochy
     charm_at_price: float | None = None
     vanna_at_price: float | None = None
-    # Minuty do close seance (20:00 UTC) — časová rampa charm hlasu
+    # Minuty do settle dnešní seance (16:00 ET) — rampa charm hlasu a okno
+    # Max Pain; po settle záporné
     minutes_to_close: float | None = None
     # ATM IV teď a před oknem — směr pro vanna hlas
     iv_now: float | None = None
@@ -165,11 +191,14 @@ def _sign(value: float) -> float:
     return 0.0
 
 
-def _collect_votes(inputs: TendencyInputs) -> list[ComponentVote]:
+def _collect_votes(
+    inputs: TendencyInputs, version: int = TENDENCY_WEIGHTS_VERSION
+) -> list[ComponentVote]:
     votes: list[ComponentVote] = []
+    weights = weights_for(version)
 
     def add(name: str, vote: float, detail: str) -> None:
-        votes.append(ComponentVote(name=name, vote=vote, weight=WEIGHTS[name], detail=detail))
+        votes.append(ComponentVote(name=name, vote=vote, weight=weights[name], detail=detail))
 
     spot = inputs.spot
     if inputs.flip is not None:
@@ -202,9 +231,7 @@ def _collect_votes(inputs: TendencyInputs) -> list[ComponentVote]:
                 _clamp((inputs.put_wall_dom - inputs.call_wall_dom) / strongest),
                 f"dominance put {inputs.put_wall_dom:.0%} vs. call {inputs.call_wall_dom:.0%}",
             )
-    if inputs.max_pain is not None and (
-        inputs.minutes_to_close is None or inputs.minutes_to_close <= MAX_PAIN_VOTE_MINUTES
-    ):
+    if inputs.max_pain is not None and _max_pain_window(inputs.minutes_to_close, version):
         add(
             "max_pain",
             _sign(inputs.max_pain - spot),
@@ -216,8 +243,8 @@ def _collect_votes(inputs: TendencyInputs) -> list[ComponentVote]:
             _sign(inputs.centroid - spot),
             f"cena {'pod' if spot < inputs.centroid else 'nad' if spot > inputs.centroid else 'na'} těžištěm {inputs.centroid:.0f}",  # noqa: E501
         )
-    if inputs.cum_delta_now is not None and inputs.cum_delta_then is not None:
-        slope = inputs.cum_delta_now - inputs.cum_delta_then
+    if inputs.cum_delta_slope is not None:
+        slope = inputs.cum_delta_slope
         add("cum_delta_slope", _sign(slope), f"Cum Δ {slope:+.0f} za okno")
         if inputs.price_then is not None:
             price_direction = _sign(spot - inputs.price_then)
@@ -285,6 +312,20 @@ def _collect_votes(inputs: TendencyInputs) -> list[ComponentVote]:
             f"vanna {'kladná' if inputs.vanna_at_price > 0 else 'záporná' if inputs.vanna_at_price < 0 else 'nulová'}, ATM IV {iv_change * 100:+.2f} b za okno",  # noqa: E501
         )
     return votes
+
+
+def _max_pain_window(minutes_to_close: float | None, version: int) -> bool:
+    """Hlasuje Max Pain? Jen ≤ 90 min do settle jako T3 (#1241).
+
+    v4 nemá spodní mez: po settle vychází `minutes_to_close` záporně až do
+    00:00 UTC, takže Max Pain hlasoval přes pauzu do nové seance (#1584).
+    v5 bere jen 0 ≤ minuty ≤ 90, stejně jako T3 (`0 < minutes_to_expiry`).
+    """
+    if minutes_to_close is None:
+        return True
+    if version >= TENDENCY_RULES_V5 and minutes_to_close < 0:
+        return False
+    return minutes_to_close <= MAX_PAIN_VOTE_MINUTES
 
 
 def _walls_not_holding(inputs: TendencyInputs, spot: float) -> str | None:
@@ -379,17 +420,23 @@ class BandHysteresis:
 
 
 def evaluate_tendency(
-    inputs: TendencyInputs, hysteresis: BandHysteresis | None = None
+    inputs: TendencyInputs,
+    hysteresis: BandHysteresis | None = None,
+    *,
+    version: int = TENDENCY_WEIGHTS_VERSION,
 ) -> TendencyResult | None:
-    """Skóre a pásmo z dostupných složek; None = žádná složka nemá data.
+    """Skóre a pásmo z dostupných složek; None = žádná složka s vahou nemá data.
 
     S `hysteresis` se pásmo filtruje proti kmitání (#394); bez ní je čisté
     `band_of(score)` — testy a jednorázová vyhodnocení stav nepotřebují.
+    `version` vybírá váhy a pravidla hlasů (v5 jen se zlomem mechaniky v6).
+    Minuta, ve které hlasuje jen složka s vahou 0 (v5 poloha mezi zdmi),
+    nemá skóre — ne nulu, jako minuta bez dat.
     """
-    votes = _collect_votes(inputs)
-    if not votes:
-        return None
+    votes = _collect_votes(inputs, version)
     total_weight = sum(vote.weight for vote in votes)
+    if total_weight <= 0:
+        return None
     # Stropovaný vážený průměr: příspěvek každé složky po normalizaci
     # nesmí sám přesáhnout hranici Strong pásma
     score = sum(
@@ -402,4 +449,5 @@ def evaluate_tendency(
         score=score,
         band=hysteresis.update(score) if hysteresis is not None else band_of(score),
         votes=tuple(votes),
+        weights_version=version,
     )

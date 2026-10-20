@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -11,7 +12,8 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, insert
 
-from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT, CumDeltaTracker
+from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, SOURCE_MIDPOINT, CumDeltaTracker
+from gexlens_engine.compute.facalibration import FA_MIN_DAYS, AlphaCalibrationPoint
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
@@ -359,6 +361,21 @@ def make_pipeline(
         spot=spot,
         oi_available=oi_available,
     )
+
+
+def test_roll_handover_jen_sekundar_pod_tisky(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1460 varianta C: tracker předává jen sekundár pod tisky; v5 a bez sekundáru nic."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    assert pipeline.roll_handover() is None
+    secondary = replace(pipeline.runtime, expiry="20260720", secondary=True)
+    secondary.cum_delta = CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT)
+    pipeline.next_runtime = secondary
+    assert pipeline.roll_handover() is None
+    secondary.cum_delta = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    assert pipeline.roll_handover() is secondary
 
 
 async def test_rozsirena_obalka_doarchivuje_nove_striky(
@@ -1373,6 +1390,34 @@ async def test_kalibrace_alfa_po_oi_archivu_nastavi_runtime(
     fresh.alpha_repository = alpha_repo
     await fresh._run_alpha_calibration(today)
     assert fresh.runtime.flow_alpha == pytest.approx(0.4)
+
+
+async def test_v6_fa_jede_az_po_peti_dnech_kalibrace_z_tisku(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """ADR-0057 bod 6: pod tisky α z midpointu ani výchozí α FA nepustí; až ≥ 5 dnů z tisků."""
+    settings, writer, oi_repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, oi_repository, publisher)
+    pipeline.runtime.cum_delta = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    alpha_repo = FaAlphaRepository(
+        create_engine(f"sqlite+pysqlite:///{settings.data_dir.parent / 'alpha.sqlite'}")
+    )
+    alpha_repo.ensure_schema()
+    pipeline.alpha_repository = alpha_repo
+
+    await pipeline._restore_alpha()  # bez stavu: pod v5 by platila konfigurace (0,4)
+    assert pipeline.runtime.flow_alpha == 0.0
+    point = AlphaCalibrationPoint(samples=20, ratio_median=0.5, ratio_buy=None, ratio_sell=None)
+    day = TS.date() - dt.timedelta(days=1)
+    alpha_repo.record("ES", day, "20260717", point, 0.505, 17, source=SOURCE_MIDPOINT)
+    await pipeline._restore_alpha()
+    assert pipeline.runtime.flow_alpha == 0.0  # stav z midpointu = nekalibrováno
+    alpha_repo.record("ES", day, "20260717", point, 0.3, FA_MIN_DAYS - 1, source=SOURCE_AGGRESSOR)
+    await pipeline._restore_alpha()
+    assert pipeline.runtime.flow_alpha == 0.0
+    alpha_repo.record("ES", day, "20260717", point, 0.3, FA_MIN_DAYS, source=SOURCE_AGGRESSOR)
+    await pipeline._restore_alpha()
+    assert pipeline.runtime.flow_alpha == pytest.approx(0.3)
 
 
 async def test_kalibrace_alfa_az_nad_finalnim_snimkem(

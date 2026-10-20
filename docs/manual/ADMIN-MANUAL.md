@@ -200,7 +200,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_OI_ARCHIVE_EXPIRIES` | 5 | Ranní OI archiv pokrývá N nejbližších expirací (základ ΔOI vs. včera) |
 | `GEXLENS_SWEEP_NEXT_EXPIRY` | true | Sekundární sweep následující expirace (positioning příští seance) |
 | `GEXLENS_NEXT_EXPIRY_SWEEP_EVERY` | 3 | Kadence sekundárního sweepu (každá k-tá minuta) |
-| `GEXLENS_STRIKE_RANGE_POINTS` | 200 | Výchozí denní obálka spot ± X (ADR-0002) |
+| `GEXLENS_STRIKE_RANGE_POINTS` | 200 | Výchozí denní obálka spot ± X (ADR-0002); od mechaniky v6 začne aktivní řetěz po rollu v settle v obálce rozšířené o striky sekundáru (ADR-0057 doplněk 20. 10.) |
 | `GEXLENS_STRIKE_RANGE_EXPAND_THRESHOLD` | 0.25 | Rozšíření při přiblížení k okraji |
 | `GEXLENS_STRIKE_RANGE_MAX_POINTS` | 800 | Strop šířky obálky (≥ 2× base) |
 | `GEXLENS_BATCH_SIZE` | 80 | Dávka rotačních subskripcí |
@@ -379,7 +379,10 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
   sekundár 160 striků, aktivní ~560); součty OI jsou z aktuálního archivu celé.
   O víkendu ukazuje pátek proti čtvrtku.
 - **FA validace a ranní kalibrace α** (#232) běží jen v obchodní den a párují
-  volume/netflow posledního obchodního dne s ΔOI do dneška. Sobotní běh dřív
+  volume/netflow posledního obchodního dne s ΔOI do dneška. Den se řeže začátkem
+  denní přestávky 16:00 CT (`marketclock.daily_close_utc`: v létě 21:00 UTC,
+  od konce US letního času 22:00 UTC; do #1460 pevně 21:00 UTC, takže v zimě by
+  poslední hodina Globexu vypadla). Sobotní běh dřív
   ukládal bod „pátek → sobota" (ΔOI ≈ 0) a dedup dne pak zablokoval poctivý bod
   „pátek → pondělí". Starší bod `fa_validation` s víkendovým `next_day`
   (19 řádků od 24. 7. 2026, naposledy 25. → 26. 9.) dedup nepočítá
@@ -413,7 +416,13 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
     (`captured_ts` NULL) s `tasty_captured_ts ≥ oi_publication_utc(D)`
     (`include_tasty`). Tasty obnoví hodnotu i čas jen při změně OI, takový řádek
     tedy nese publikaci D. Tasty řádky s časem před publikací D (07:00 CT =
-    12:00 UTC v létě, 13:00 UTC v zimě) nesou publikaci D−1 a vypadnou. Na
+    12:00 UTC v létě, 13:00 UTC v zimě) vypadnou. **Limit (#1626, varianta A,
+    vlastník 19. 10. 2026):** `Summary.openInterest` nese publikaci D už kolem
+    01:45–01:55 UTC dne D (měřeno 19. 10. 2026: hodnota po 02:10 UTC = IBKR po
+    publikaci ve všech porovnaných kontraktech) a po 12:00 UTC se obvykle nemění,
+    takže se znovu nezapíše. Strana D z tasty proto projde jen výjimečně (změna
+    OI přes den) a B+ v praxi dává totéž co B — data se nekazí, strana bez
+    měření je „nevíme“. Na
     straně D+1 by stejné pravidlo znamenalo „ΔOI ≠ 0“: vypadly by skutečné nuly
     a α by se vychýlila nahoru. FA validace navíc vyřadí stranu D z tasty, která
     nemá řádek ve snímku D (leží mimo univerzum IBKR, volume je neznámý, ne 0);
@@ -435,6 +444,50 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
   přehrává archiv z konce dne, shodne se proto s večerním bodem. Do #1605 nesly
   takové strany předchozí publikaci a ΔOI přesně 0: NQ měl od 5. 10. 2026
   medián přesně 0 v 7 z 8 bodů.
+- **Kalibrace α a FA vrstva od mechaniky v6** (#1403; ADR-0057 bod 6, #1460,
+  #1580). Pod v5 se nic z toho nemění.
+  - Kalibruje se jen řetěz, který byl **celou seanci D sekundárem**, tedy první
+    expirace po D. Náhradní řetěz se nehledá: D+2 píše netflow dne D až po rollu
+    v settle (~20:05 UTC) a jeho bod by nesl 55 minut toku. Pod v5 vyhrává
+    nejvzdálenější expirace s bodem, od 7. 10. tedy D+2 (#1580).
+  - Netflow jen se zdrojem `aggressor`. Den před bumpem (midpoint) bod nedá.
+  - **Den s mezerou trade větve bod nedá:** runtime aktivního i sekundárního
+    řetězu zapíše minutu, kterou za otevřeného trhu neměřil, do
+    `derived/{sym}/{exp}/netgap/` (i první minutu po restartu). Kalibrace čte
+    seanci D od 17:00 CT předchozího dne (dvě UTC partice) do řezu. Bod nedá ani
+    řada netflow, která končí víc než 5 min před řezem (engine spadlý přes konec
+    dne značku do seance D nezapíše).
+  - Pravidlo platí **bez výjimky**: **roll v settle mezeru nedělá** (varianta C,
+    ADR-0057 doplněk 20. 10.).
+    - Řetěz D+1 si nechá tracker sekundáru. Nová pipeline ho převezme v další
+      iteraci orchestrátoru. Do té doby do něj tečou tisky přes trasy, které pod
+      tisky nesou tracker svého řetězu, a plán tasty subskripcí drží TimeAndSale
+      D+1 dál (čekající předání).
+    - Pásmo nového aktivního D+1 pokryje i striky sekundáru (přes roll jen roste,
+      výjimka z ADR-0002 bod 3), takže tisky chodí na všech stranách, které sekundár
+      měřil. Širší pásmo drží celou seanci D+1; delší je jen sweep křídel.
+    - Net navazuje bez mezery, včetně tisků od posledního zápisu sekundáru (každý
+      N-tý cyklus). První minuta aktivního D+1 je měřená, když vzorky pokryjí
+      hranici; výpadek v neuzavřeném okně sekundáru udělá mezeru z prvního řádku.
+    - CumΔ symbolu navazuje z flow aktivního řetězu a nese tok až od vzorku minuty
+      rollu. Mezera rollu v CumΔ pod v6 zaniká.
+    - Log předání: „Roll ES: aktivní řetěz 20261020 převzal tracker sekundáru
+      (net N stran) — tisky bez mezery (#1460)“.
+    - Nevznikne-li pipeline hned po rollu (spojení, chyba setupu, cooldown), tracker
+      propadá s varováním „pipeline nevznikla hned po rollu — tracker sekundáru …
+      propadá“.
+      První minuta nového trackeru je mezera a den bod nedá, stejně jako po
+      restartu procesu.
+  - `fa_alpha` i `fa_alpha_history` nesou `source` (aditivní ADD COLUMN přes
+    `ensure_schema` enginu i API, na PostgreSQL `IF NOT EXISTS`; NULL = midpoint).
+    Stav jiného zdroje se bere jako nekalibrovaný: první bod z tisků jde přímo
+    (α se při bumpu resetuje sama, bez ručního `set_state`) a historie zůstává.
+    Stav s 0 dny bere první bod přímo i pod v5.
+  - **FA vrstva jede až po 5 dnech kalibrace z tisků** (`FA_MIN_DAYS`,
+    `fa_calibration.live_alpha`), do té doby α 0, i bez stavu. Výchozí
+    `GEXLENS_FLOW_OI_ALPHA` platí jen pod v5; pod v6 bez nastavené α (start
+    před prvním obnovením, chyba DB) platí 0 (`EngineRuntime.fa_alpha`). Log „FA ES vypnutá do kalibrace
+    z tisků: n/5 dnů“, badge „nekalibrováno n/5“ ve frontendu přinese #1588.
 - **Verdikty dne** (#1091, #1595, ADR-0035 dodatek 2026-10-17): zapisuje **jen engine** —
   `DayVerdictWriter` (`verdict_writer.py`) v minutovém cyklu každého symbolu s pipeline,
   v obchodní seanci od jejího začátku (17:00 CT předchozího dne) do US openu: do
@@ -487,7 +540,8 @@ Od ADR-0029 (v1.2) se **`snapshots/` a `derived/` nemažou nikdy** (`GEXLENS_KEE
 | `derived/{sym}/{expiry}/oiwalls/{date}.parquet` | **OI zdi** (#851): oi_call_wall / oi_put_wall + `share` (podíl na OI strany; frontend pod 0,2 nekreslí) |
 | `derived/{sym}/features/{date}.parquet` | **Minutový feature log** (#796): vstupní vektor setup detektoru + ATR + band metriky — trénovací matice smyčky #794; minuta, jejíž dávka cyklu nemá bar, řádek nemá (#1346; dřív O = H = L = C ze spotu) |
 | `trades/{sym}/{YYYY-MM-DD}.parquet` | **Surové opční TimeAndSale printy z dxFeed** (#795): ts, streamer_symbol, price, size, aggressorSide, spread_leg, eth. Mimo retenci; podklad budoucí klasifikace agresora (#615). Flag `GEXLENS_TASTY_TRADES_RECORD` (default true) |
-| `derived/{sym}/{expiry}/netflow/{date}.parquet` | Kumulativní klasifikovaný net objem per strana; sloupec `source` nese zdroj znaménka jako `flow/` (`midpoint` v5, `aggressor` v6, NULL = partice před #1460 = midpoint), navázání po restartu bere jen řádky zdroje běžícího enginu (#1460) — podklad FA odhadu OI a ranní kalibrace α. Řádek má každá sledovaná strana, i s netem 0 (#1582): explicitní 0 = naměřená nula, chybějící řádek = strana se nesleduje. Od mechaniky v6 minuta s mezerou trade větve CumΔ (ADR-0057 bod 3) netflow řádky nemá vůbec — net v ní ještě nese tisky částečné minuty; čtenáři berou poslední měřený řádek strany. Píše **aktivní i sekundární řetěz** (#1182): aktivní ES/NQ je vždy 0DTE bez ΔOI do D+1, kalibrace proto bere netflow sekundáru (expirace po dni netflow); `fa_alpha_history.expiry` říká, ze kterého řetězu bod vznikl. |
+| `derived/{sym}/{expiry}/netflow/{date}.parquet` | Kumulativní klasifikovaný net objem per strana; sloupec `source` nese zdroj znaménka jako `flow/` (`midpoint` v5, `aggressor` v6, NULL = partice před #1460 = midpoint), navázání po restartu bere jen řádky zdroje běžícího enginu (#1460) — podklad FA odhadu OI a ranní kalibrace α. Řádek má každá sledovaná strana, i s netem 0 (#1582): explicitní 0 = naměřená nula, chybějící řádek = strana se nesleduje. Od mechaniky v6 minuta s mezerou trade větve CumΔ (ADR-0057 bod 3) netflow řádky nemá vůbec — net v ní ještě nese tisky částečné minuty; čtenáři berou poslední měřený řádek strany. Píše **aktivní i sekundární řetěz** (#1182): aktivní ES/NQ je vždy 0DTE bez ΔOI do D+1, kalibrace proto bere netflow sekundáru (expirace po dni netflow, od mechaniky v6 jen řetěz, který byl sekundárem celou seanci D, #1580); `fa_alpha_history.expiry` říká, ze kterého řetězu bod vznikl. |
+| `derived/{sym}/{expiry}/netgap/{date}.parquet` | **Minuty mezery trade větve** řetězu (#1460, ADR-0057 bod 6; jen mechanika v6): `ts_min` cyklu, ve kterém aktivní nebo sekundární řetěz za otevřeného trhu neměřil tisky — netflow se tehdy nepíše. Den bez mezery partici nemá. Kalibrace α podle ní vynechá den s mezerou i u sekundáru, jehož řádek `flow` se zahazuje a jehož netflow chodí jen každý N-tý cyklus. |
 | `derived/{sym}/{expiry}/oiest/{date}.parquet` | FA odhad OI (netflow×α, #232) |
 | `derived/{sym}/{expiry}/gexprofile(fa)/…` + `gexfield(fa)/…` | Dyn profily/pole; `…fa` varianty nad FA odhadem |
 | `derived/{sym}/{expiry}/charmprofile/…`, `vannaprofile/…` (+ `…field`) | Dyn Charm/Vanna plochy (#204) |
@@ -506,7 +560,7 @@ Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane č
 | `oi_eod(symbol, expiry, trading_class, strike, right, date, oi, iv, delta, gamma, theta, vega, close_prem, und_price, captured_ts, tasty_captured_ts)` | **Věčný** denní snímek řetězce — od #519 nese vedle OI i IV/greeks/závěrečnou prémii/ref. spot z ranního průchodu (NULL = model nedodal). Od #736 je v klíči **`trading_class`** (série se neslévají — E4C/EW4/EW…; `''` = souhrn/legacy, historie čitelná dál; čtení Σ přes série dává konzumentům stejná čísla jako dřív, `values_for(trading_class=…)` pro kalendář #513). `captured_ts` = čas IBKR čtení (finalita #463), `tasty_captured_ts` = čas poslední změny hodnoty z tasty (#828; nezměněná hodnota ho neposouvá, čerstvost nedokazuje). Původ hodnoty určuje jen `captured_ts`: vyplněný = IBKR (i když řádek předtím zapsal tasty — IBKR zápis `tasty_captured_ts` nemaže, řádek pak nese oba časy), `captured_ts` NULL a `tasty_captured_ts` vyplněný = tasty řádek; oba NULL = IBKR řádek z doby před #463 (srpen 2026) bez času čtení; tasty nikdy nepřepíše řádek s `captured_ts` (#1605). Žádná retence, žádné delete API |
 | `gamma_cliff` | Denní odpad gammy po expiraci + metriky následující seance (#576, fáze měření): `next_range_atr`, `next_setups` a od #1115 `next_outside_share` = podíl minut následující Globex seance (do settle) s `band_depth ≤ 0` (třídy outside/no_zone, totéž pravidlo jako stínová brána #1060) z feature logu `derived/{sym}/features/`; NULL = feature log seance chybí, doplňuje se při dalším běhu |
 | `map_state` | Stav „tenká mapa" per (seance, symbol) (#1245, fáze měření): medián a p10 \|total_gex\|, medián gammy u ceny a dominance zdí v US RTH, `thin_share` = podíl minut ve stavu thin, `sample_minutes`, `version`. Historie pro **relativní prahy** (25. percentil 20 seancí téhož symbolu); backfill z `levels`/`walldom`/`gexprofile`/`bars` partic při prvním běhu (gamma u ceny jen kde je profil). Vypnutí `GEXLENS_MAP_STATE_ENABLED=false` |
-| `briefing_verdicts` | Verdikt dne per (seance, symbol) (#1090, #1091, ADR-0035 §3 a dodatek 2026-10-17): `verdict` (long / short / none / wait_news), `score`, `votes` JSON `[{name, vote, reason}]`, `rules_version`, `missing` JSON (chybějící vstupy výpočtu: `[]` úplný, NULL řádek z Briefingu před #1595; aditivní sloupec přes `ensure_schema` enginu i API, #1595 e1), `created_at` (první zápis), `updated_at` (poslední, vždy před US openem seance); unikátní `uq_briefing_verdicts_session_symbol`. Zapisuje **jen engine** před US openem (kap. 5 „Verdikty dne", #1595); po settle + 15 min doplní `outcome_*` (`open`, `us_open`, `close`, `move_pts`, `move_em`, `hit`, `computed_at` — aditivní sloupce přes `ensure_schema`). Řádky do seance 16. 10. 2026 psal Briefing s jinými vstupy pod touž `rules_version` 3; pět řádků zapsaných po openu před #1585 (id 1, 2, 4, 7, 11) zůstává |
+| `briefing_verdicts` | Verdikt dne per (seance, symbol) (#1090, #1091, ADR-0035 §3 a dodatek 2026-10-17): `verdict` (long / short / none / wait_news), `score`, `votes` JSON `[{name, vote, reason}]`, `rules_version`, `missing` JSON (chybějící vstupy výpočtu: `[]` úplný, NULL řádek z Briefingu před #1595; aditivní sloupec přes `ensure_schema` enginu i API, #1595 e1), `created_at` (první zápis), `updated_at` (poslední, vždy před US openem seance); unikátní `uq_briefing_verdicts_session_symbol`. `rules_version` 4 = mechanika v6 (#1403): pravidla jako v3, vstup tendence verze 5 z CumΔ jen z tisků (ADR-0057 bod 8); statistiky se čtou podle verze. Zapisuje **jen engine** před US openem (kap. 5 „Verdikty dne", #1595); po settle + 15 min doplní `outcome_*` (`open`, `us_open`, `close`, `move_pts`, `move_em`, `hit`, `computed_at` — aditivní sloupce přes `ensure_schema`). Řádky do seance 16. 10. 2026 psal Briefing s jinými vstupy pod touž `rules_version` 3; pět řádků zapsaných po openu před #1585 (id 1, 2, 4, 7, 11) zůstává |
 | `feed_comparison` | Shadow porovnání IBKR × tastytrade per (minuta, kontrakt, pole) — jen po dobu sběru M7 fáze 1 (#613). **Historie do 22. 8. smazána 1. 9.** (#965) |
 | `feed_comparison_daily` | Zhuštěné souhrny shadow sběru (#965): denní řádky + celkové řádky (`session_date IS NULL`) per symbol × pole s `n`, mediánem a p95 |d| — 40 kB místo 2,5 GB |
 | `sentiment_daily`, `sentiment_waves`, `sentiment_episodes`, `news_*`, `signals`, `signal_outcomes`, `track_record` | SentimentLens (per symbol od ADR-0026). `sentiment_episodes` (#565, ADR-0037) = korekční epizody pokus/negace, plně derivované — WavesJob je přepočítává full-replace z `close_z`; sloupec `params_version` nese verzi prahu D / horizontu H (v1 = placeholder 1 σ / 10 dní), změna parametrů = nová verze v `gexlens_engine.compute.sentwaves` a přepočet při příštím běhu jobu. Přeměření: `uv run python scripts/measure_sentiment_episodes.py --era both --out …` (prod DB jen čtení; URL z `GEXLENS_PG_PASSWORD`, port 55432). `news_reactions` je od #998 (ADR-0031) **jeden řádek per event × symbol** se sloupci per okno (`ret_<w>`, `range_<w>`, `vol_z_<w>` jen minutová okna, `cont_<w>`) a per fázi (`deferred_*`, `regime_*`, `computed_at_*`) — 268 → ~56 MB, bez retence (učicí data). Starý tvar (řádek per okno) news-engine při startu odmítne s odkazem na `scripts/migrate_news_reactions_wide.py` (jednorázově, po záloze PG; `--dry-run` napřed); stará tabulka zůstane jako `news_reactions_legacy_<datum>` a maže se ručně až po ověření provozu |
@@ -525,7 +579,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:80
 
 | Endpoint | Popis |
 |---|---|
-| `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline (`lines_utilization` je od #630 měřená špička; `symbols` = symboly s pipeline, např. „ES,NQ“ — Briefing podle něj ukáže „Engine pro tento symbol verdikt nepočítá“, #1595). Pole `chain_source` / `spot_source` nesou aktivní zdroj dat (#614), `feed_crosscheck*` verdikt křížové kontroly (#517 A), `connection_offline_for_s` délku výpadku IBKR (#770), `tasty_rate_limited` / `tasty_heals` / `tasty_budget` stav DXLink subskripce (#863, #936, #982), `tasty_kpi` KPI stability streamu per seance (#1214: výpadky, rate limit, RTH minuty bez eventu, tasty mrtvá strana, podíl greeks; uzavřené seance v `data/reports/tasty-kpi.jsonl` a v logu `tasty KPI …`), `cumdelta_source` (`midpoint`, od mechaniky v6 `aggressor`, ADR-0057) + `cumdelta_coverage[symbol]` (v1.4, ADR-0032: `printed_volume`, `unknown_volume`, `structured_volume`, `fallback_volume`, `dropped_no_delta`, `printed_share`; od #1460 `printed_share_total` = podíl tisků se stranou z celého přírůstku objemu včetně struktury; od v6 oba podíly jen z tisků spárovaných s měřeným přírůstkem objemu, `printed_volume` nese všechny tisky včetně minut bez baru kontraktu, a bez spárovaného objemu (start do fallbacku řetězu) je podíl `null` = neměří se, ne 0 (pod midpointem 0 jako dřív; ADR-0057 doplněk 18. 10.); a `trade_branch` = stav trade větve aktivního řetězu podle ADR-0057 bod 3: `running` / `gap` (otevřený trh, stream odpojený, univerzum mlčí nad práh hlídače 3 min RTH / 10 min Globex nebo trasy tisků patří předchozímu řetězu — od v6 minuta s NULL CumΔ) / `closed` / `off` = bez tasty větve), `map_state[symbol]` stav „tenká mapa" (v1.10, #1245: `thin`, podmínky `thin_gamma`/`weak_walls`/`fused` jako true/false/null = bez dat, `reasons`, `gex_abs`, `gamma_abs`, `spread_pct`). **Chybějící klíč znamená „neměří se"**, ne „je to v pořádku" — od #756 chodí status i bez jediné pipeline a `connection` nese skutečný stav spojení |
+| `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline (`lines_utilization` je od #630 měřená špička; `symbols` = symboly s pipeline, např. „ES,NQ“ — Briefing podle něj ukáže „Engine pro tento symbol verdikt nepočítá“, #1595). Pole `chain_source` / `spot_source` nesou aktivní zdroj dat (#614), `feed_crosscheck*` verdikt křížové kontroly (#517 A), `connection_offline_for_s` délku výpadku IBKR (#770), `tasty_rate_limited` / `tasty_heals` / `tasty_budget` stav DXLink subskripce (#863, #936, #982), `tasty_kpi` KPI stability streamu per seance (#1214: výpadky, rate limit, RTH minuty bez eventu, tasty mrtvá strana, podíl greeks; uzavřené seance v `data/reports/tasty-kpi.jsonl` a v logu `tasty KPI …`), `cumdelta_source` (`midpoint`, od mechaniky v6 `aggressor`, ADR-0057) + `cumdelta_coverage[symbol]` (v1.4, ADR-0032: `printed_volume`, `unknown_volume`, `structured_volume`, `fallback_volume`, `dropped_no_delta`, `printed_share`; od #1460 `printed_share_total` = podíl tisků se stranou z celého přírůstku objemu včetně struktury; od v6 oba podíly jen z tisků spárovaných s měřeným přírůstkem objemu, `printed_volume` nese všechny tisky včetně minut bez baru kontraktu, a bez spárovaného objemu (start do fallbacku řetězu) je podíl `null` = neměří se, ne 0 (pod midpointem 0 jako dřív; ADR-0057 doplněk 18. 10.); a `trade_branch` = stav trade větve aktivního řetězu podle ADR-0057 bod 3: `running` / `gap` (otevřený trh, stream odpojený, univerzum mlčí nad práh hlídače 3 min RTH / 10 min Globex nebo trasy tisků patří předchozímu řetězu — od v6 minuta s NULL CumΔ; od v6 rozhoduje tracker, pro který se trasy stavěly, takže po rollu s předáním běží aktivní D+1 hned, ADR-0057 doplněk 20. 10.) / `closed` / `off` = bez tasty větve), `map_state[symbol]` stav „tenká mapa" (v1.10, #1245: `thin`, podmínky `thin_gamma`/`weak_walls`/`fused` jako true/false/null = bez dat, `reasons`, `gex_abs`, `gamma_abs`, `spread_pct`). **Chybějící klíč znamená „neměří se"**, ne „je to v pořádku" — od #756 chodí status i bez jediné pipeline a `connection` nese skutečný stav spojení |
 | `GET /push/status` | Push na Telegram (#1175, #1284), bez tokenu: `configured`, `quiet_hours`, `daily_cap`, `sent_today`, `last_sent_at`, `last_error`, `enabled` (hlavní vypínač), `master` {`setting`, `label`, `help`} a `groups[]` {`key`, `label`, `topics[]` {`key`, `setting`, `label`, `help` = řádky tooltipu, `enabled` = efektivní hodnota po dědění}}. Token bota ani chat id nevrací. Čte ho Settings → Notifikace i `scripts/lib/OpsAlert.ps1` |
 | `POST /engine/reconnect` `{"target": "ibkr"\|"tasty"\|"both"}` | Ruční přepojení (#950): zapíše razítko do `settings`, engine ho vyřídí při nejbližším pollu (kap. 5). Bez tokenu jako `/settings` — nová třída expozice nevzniká, kdo dosáhne na port, může spojení rozbít už přes `PUT /settings/ibkr_port` |
 | `GET /gexforward/{symbol}` | Forward GEX bloky per budoucí den (#519) |

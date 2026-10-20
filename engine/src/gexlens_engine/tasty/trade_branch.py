@@ -4,9 +4,14 @@ Tisk dxFeed `TimeAndSale` patří kontraktu aktivního nebo sekundárního řet�
 jednoho instrumentu. Trasy (streamer symbol → spec) staví smyčka plánu
 subskripcí z kontraktů obou runtime; tisk jde do trackeru toho řetězu.
 
-Trade větev řetězu „běží" = připojený stream ∧ trasy patří běžícímu řetězu
-(expirace sedí — po rollu v settle až po obnově plánu) ∧ univerzum nemlčí déle
-než práh hlídače ticha (`SILENT_RTH_S` / `SILENT_GLOBEX_S`, bez nové konstanty).
+Trade větev řetězu „běží" = připojený stream ∧ trasy doručují tisky do jeho
+trackeru ∧ univerzum nemlčí déle než práh hlídače ticha (`SILENT_RTH_S` /
+`SILENT_GLOBEX_S`, bez nové konstanty). Pod tisky trasy nesou tracker svého
+řetězu (#1460, varianta C): roll v settle předá tracker sekundáru D+1 novému
+aktivnímu runtime, takže mu sekundární část tras patří i před obnovou plánu
+a tisky D+1 tečou bez přerušení i mezi zastavením staré a založením nové
+pipeline.
+
 Orchestrátor z toho každou minutu dává trackerům vzorek (`observe`) a v témž
 okamžiku řeže jejich tisky (`seal`): interval řádku leží mezi dvěma vzorky,
 takže oba jeho konce pokrývá vzorek. Verdikt minuty ze vzorků zafixuje
@@ -56,6 +61,19 @@ class PipelineLike(Protocol):
     def next_runtime(self) -> RuntimeLike | None: ...
 
 
+def pending_handovers[RuntimeT: RuntimeLike](
+    pipes: Mapping[str, PipelineLike], handovers: Mapping[str, RuntimeT]
+) -> dict[str, RuntimeT]:
+    """Sekundáry, jejichž tracker po rollu v settle čeká na novou pipeline (#1460, varianta C).
+
+    Symbol bez běžící pipeline s předáním v rollu: jeho řetěz D+1 dál drží
+    subskripci tisků (účel chain) i trasy, které tisky doručí do čekajícího
+    trackeru. Symbol, který pipeline už má, nečeká — drží ho pipeline. Bez
+    předání se tisky symbolu bez pipeline nedoručují nikam (jako v části 1a).
+    """
+    return {symbol: runtime for symbol, runtime in handovers.items() if symbol not in pipes}
+
+
 @dataclass(frozen=True)
 class TradeRoutes:
     """Trasy tisků jednoho instrumentu: streamer symbol → spec, zvlášť podle řetězu.
@@ -63,12 +81,16 @@ class TradeRoutes:
     Expirace u každé části říká, kterému řetězu trasy patří — po rollu je aktivní
     část vypršelá a sekundární patří novému aktivnímu řetězu, dokud smyčka plánu
     trasy nepřestaví. Stín `cumdelta_dx` dostává jen aktivní část (ADR-0057 bod 7).
+    Tracker části je ten, pro který se trasy stavěly: pod tisky do něj jde tisk
+    (`route_trade`) a podle něj se pozná, komu trasy patří (`owned_universe`).
     """
 
     active_expiry: str
     active: dict[str, OptionContractSpec]
     next_expiry: str | None = None
     next: dict[str, OptionContractSpec] = field(default_factory=dict)
+    active_tracker: CumDeltaTracker | None = None
+    next_tracker: CumDeltaTracker | None = None
 
 
 def build_routes(
@@ -92,44 +114,66 @@ def build_routes(
         active=part(pipe.runtime),
         next_expiry=secondary.expiry if secondary is not None else None,
         next=part(secondary),
+        active_tracker=pipe.runtime.cum_delta,
+        next_tracker=secondary.cum_delta if secondary is not None else None,
     )
 
 
 def route_trade(
-    routes: TradeRoutes, pipe: PipelineLike, streamer: str
+    routes: TradeRoutes, pipe: PipelineLike | None, streamer: str
 ) -> tuple[CumDeltaTracker, OptionContractSpec] | None:
     """Tracker a kontrakt, kam patří tisk streameru (ADR-0057 bod 6), nebo None.
 
     Řetěz se určuje podle části tras, nikdy podle expirace kontraktu v okamžiku
-    tisku. Zdroj tisků bere jen trasy, které patří běžícímu řetězu: po rollu by
-    zastaralá část doručila tisky do trackeru jiné expirace (tisky D z aktivní
-    části do nového aktivního D+1, tisky D+1 ze sekundární do nového
-    sekundárního D+2) a změnila jeho pokrytí. Ten minutu stejně nepotvrdí
-    (`owned` v `TradeBranchMonitor`), dokud se trasy nepřestaví.
+    tisku. Zdroj tisků doručuje do trackeru, pro který se část stavěla, ne do
+    runtime pipeline (#1460, varianta C). Tracker patří jednomu řetězu, takže
+    zastaralé trasy po rollu nedoručí tisk do trackeru jiné expirace (tisky D
+    do nového aktivního D+1, tisky D+1 do nového sekundárního D+2). Tisky D+1
+    tečou do trackeru, který při rollu převezme nový aktivní runtime, i když
+    pipeline symbolu zrovna neběží (`pipe` None). Tracker zastavené pipeline
+    dostává tisky naprázdno až do přestavby tras, nikdo ho nečte.
 
     Midpoint (v5) doručuje jako před #1460: jen aktivní část do aktivního
-    trackeru, i nad zastaralými trasami; sekundární část nedoručuje nikam.
+    trackeru pipeline, i nad zastaralými trasami; sekundární část nedoručuje nikam.
     """
     spec = routes.active.get(streamer)
-    secondary = spec is None
-    runtime: RuntimeLike | None
-    expiry: str | None
     if spec is not None:
-        runtime, expiry = pipe.runtime, routes.active_expiry
-    else:
-        spec = routes.next.get(streamer)
-        if spec is None:
+        tracker = routes.active_tracker
+        if tracker is not None and tracker.prints:
+            return tracker, spec
+        if pipe is None or pipe.runtime.cum_delta is None:
             return None
-        runtime, expiry = pipe.next_runtime, routes.next_expiry
-    if runtime is None or runtime.cum_delta is None:
-        return None
-    tracker = runtime.cum_delta
-    if tracker.prints:
-        if runtime.expiry != expiry:
-            return None
-    elif secondary:
+        return pipe.runtime.cum_delta, spec
+    spec = routes.next.get(streamer)
+    tracker = routes.next_tracker
+    if spec is None or tracker is None or not tracker.prints:
         return None
     return tracker, spec
+
+
+def owned_universe(
+    routes: TradeRoutes | None, runtime: RuntimeLike, index: int
+) -> dict[str, OptionContractSpec]:
+    """Univerzum tras, které doručují tisky do trackeru runtime; prázdné = trasy mu nepatří.
+
+    Pod tisky rozhoduje identita trackeru jako v `route_trade`: po rollu
+    s předáním patří trackeru nového aktivního runtime sekundární část
+    zastaralých tras, nový sekundár D+2 do přestavby tras nedostává nic.
+    Midpoint (v5) jako v části 1a (#1460): část podle pozice (`index` 0 =
+    aktivní) a expirace musí sedět na běžící řetěz.
+    """
+    if routes is None:
+        return {}
+    tracker = runtime.cum_delta
+    if tracker is not None and tracker.prints:
+        if tracker is routes.active_tracker:
+            return routes.active
+        if tracker is routes.next_tracker:
+            return routes.next
+        return {}
+    if index == 0:
+        return routes.active if runtime.expiry == routes.active_expiry else {}
+    return routes.next if runtime.expiry == routes.next_expiry else {}
 
 
 def trade_branch_running(
@@ -190,23 +234,12 @@ class TradeBranchMonitor:
         states: dict[str, str] = {}
         for symbol, pipe in pipes.items():
             symbol_routes = routes.get(symbol)
-            parts: list[tuple[RuntimeLike | None, str | None, dict[str, OptionContractSpec]]] = [
-                (
-                    pipe.runtime,
-                    symbol_routes.active_expiry if symbol_routes else None,
-                    symbol_routes.active if symbol_routes else {},
-                ),
-                (
-                    pipe.next_runtime,
-                    symbol_routes.next_expiry if symbol_routes else None,
-                    symbol_routes.next if symbol_routes else {},
-                ),
-            ]
             primary_running = False
-            for index, (runtime, expiry, universe) in enumerate(parts):
+            for index, runtime in enumerate((pipe.runtime, pipe.next_runtime)):
                 if runtime is None:
                     continue
-                owned = bool(universe) and runtime.expiry == expiry
+                universe = owned_universe(symbol_routes, runtime, index)
+                owned = bool(universe)
                 running = trade_branch_running(
                     now,
                     connected=connected,

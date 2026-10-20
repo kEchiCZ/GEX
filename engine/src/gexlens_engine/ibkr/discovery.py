@@ -137,6 +137,24 @@ def select_band(strikes: Collection[float], spot: float, range_points: float) ->
     return band_between(strikes, spot - range_points, spot + range_points)
 
 
+def band_covering(
+    strikes: Collection[float], band: StrikeBand, held: Collection[float]
+) -> StrikeBand:
+    """Obálka rozšířená o striky, které řetěz už drží (grow-only, ADR-0002).
+
+    Roll v settle (#1460, varianta C): nový aktivní runtime řetězu D+1 začíná
+    v `initial_band` kolem spotu, sekundár D+1 ale přes den rostl za cenou.
+    Pásmo řetězu proto přes roll jen roste — strany, které sekundár měřil,
+    dostávají tisky i kotace dál až do řezu dne. Prázdné `held` obálku nemění.
+    """
+    if not held:
+        return band
+    low, high = min(band.low, min(held)), max(band.high, max(held))
+    if (low, high) == (band.low, band.high):
+        return band
+    return band_between(strikes, low, high)
+
+
 def should_expand(band: StrikeBand, spot: float, threshold: float) -> bool:
     """True, pokud se spot přiblížil k okraji obálky na méně než threshold × šířka."""
     return (spot - band.low) < threshold * band.width or (band.high - spot) < threshold * band.width

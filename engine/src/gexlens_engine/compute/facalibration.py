@@ -29,6 +29,9 @@ EMA_LAMBDA = 0.3
 # model; nad 1 by odhad tvrdil víc otevřeného zájmu, než kolik se zobchodovalo
 ALPHA_MIN = 0.0
 ALPHA_MAX = 1.0
+# Pod tisky (mechanika v6, ADR-0057 bod 6) je FA vrstva vypnutá, dokud α nemá
+# aspoň tolik platných dnů kalibrace z tisků — jinak by jela na nekalibrované α
+FA_MIN_DAYS = 5
 
 
 @dataclass(frozen=True)

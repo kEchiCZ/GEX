@@ -507,6 +507,7 @@ def test_fa_alpha_endpoint(settings: Settings) -> None:
         alpha_after=0.34,
         days=5,
         now=dt.datetime(2026, 8, 6, 12, 0, tzinfo=dt.UTC),
+        source="midpoint",
     )
 
     payload = client.get("/fa/alpha").json()

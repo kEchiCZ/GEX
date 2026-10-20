@@ -9,8 +9,9 @@ import pyarrow.parquet as pq
 import pytest
 from sqlalchemy import create_engine
 
-from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT
+from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, SOURCE_MIDPOINT
 from gexlens_engine.compute.facalibration import (
+    FA_MIN_DAYS,
     AlphaCalibrationPoint,
     calibrate_alpha,
     update_alpha,
@@ -19,11 +20,13 @@ from gexlens_engine.config import Settings
 from gexlens_engine.storage.fa_calibration import (
     AlphaCalibrationResult,
     FaAlphaRepository,
+    FaAlphaState,
     collect_alpha_calibration,
+    live_alpha,
     netflow_at_cutoff,
 )
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
-from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import NetFlowRow, NetGapRow, SnapshotWriter
 
 PREV = dt.date(2026, 8, 5)
 TODAY = dt.date(2026, 8, 6)
@@ -93,14 +96,18 @@ def test_repository_roundtrip(tmp_path: Path) -> None:
 
     point = AlphaCalibrationPoint(samples=6, ratio_median=0.45, ratio_buy=0.4, ratio_sell=0.5)
     now = dt.datetime(2026, 8, 6, 12, 0, tzinfo=dt.UTC)
-    repo.record("ES", PREV, EXPIRY, point, alpha_after=0.45, days=1, now=now)
+    repo.record(
+        "ES", PREV, EXPIRY, point, alpha_after=0.45, days=1, now=now, source=SOURCE_MIDPOINT
+    )
 
     state = repo.get("ES")
     assert state is not None
     assert state.alpha == 0.45 and state.days == 1
     assert repo.history_exists("ES", PREV)
     # Upsert je idempotentní — opakovaný zápis stejného dne nic nerozbije
-    repo.record("ES", PREV, EXPIRY, point, alpha_after=0.45, days=1, now=now)
+    repo.record(
+        "ES", PREV, EXPIRY, point, alpha_after=0.45, days=1, now=now, source=SOURCE_MIDPOINT
+    )
     assert len(repo.list_all()) == 1
 
 
@@ -267,7 +274,15 @@ def test_collect_zaporny_median_alfu_nemeni(tmp_path: Path) -> None:
     """Medián ≤ 0 jde do historie pro audit, ale α ani počet dnů nemění (#1172)."""
     settings, oi_repo, alpha_repo = _repos(tmp_path)
     point = AlphaCalibrationPoint(samples=6, ratio_median=0.45, ratio_buy=0.45, ratio_sell=None)
-    alpha_repo.record("ES", PREV - dt.timedelta(days=1), EXPIRY, point, alpha_after=0.45, days=1)
+    alpha_repo.record(
+        "ES",
+        PREV - dt.timedelta(days=1),
+        EXPIRY,
+        point,
+        alpha_after=0.45,
+        days=1,
+        source=SOURCE_MIDPOINT,
+    )
     _seed_day(settings, oi_repo, doi=-40.0)
     assert _collect(settings, oi_repo, alpha_repo, TODAY) is None
     state = alpha_repo.get("ES")
@@ -500,4 +515,293 @@ def test_collect_bez_ibkr_mereni_bod_nezamkne_a_zkusi_znovu(
     oi_repo.upsert_many(_records(strikes, TODAY, 1040.0), _after_pub(settings, TODAY))
     result = _collect(settings, oi_repo, alpha_repo)
     assert result is not None
+    assert result.point.ratio_median == pytest.approx(0.4)
+
+
+def test_netflow_at_cutoff_zimni_cas_rez_22_utc(tmp_path: Path) -> None:
+    """#1460: řez 16:00 CT — v zimě 22:00 UTC, kumulativ 21:30 UTC do dne patří."""
+    winter = dt.date(2026, 11, 4)
+    rows = [
+        NetFlowRow(
+            ts_min=dt.datetime.combine(winter, dt.time(hour, minute), tzinfo=dt.UTC),
+            strike=7500.0,
+            right="C",
+            net_volume=net,
+            source=SOURCE_MIDPOINT,
+        )
+        for hour, minute, net in ((20, 59, 80.0), (21, 30, 95.0), (22, 30, 999.0))
+    ]
+    path = SnapshotWriter(Settings(data_dir=tmp_path)).write_netflow("ES", EXPIRY, winter, rows)
+    assert path is not None
+    assert netflow_at_cutoff(path, winter) == {(7500.0, "C"): 95.0}
+
+
+# ── Kalibrace α pod tisky (mechanika v6, ADR-0057 bod 6, #1460) ──────────
+
+EXPIRY_D1 = "20260806"  # sekundár celou seanci PREV (5. 8.)
+EXPIRY_D2 = "20260807"  # netflow dne PREV až po rollu v settle (#1580)
+
+
+def _seed_v6(
+    settings: Settings,
+    oi_repo: OIEodRepository,
+    expiry: str,
+    *,
+    doi: float = 40.0,
+    last: dt.time = dt.time(20, 58),
+    source: str = SOURCE_AGGRESSOR,
+) -> None:
+    """Netflow dne PREV (5 stran po 100, poslední řádek v `last`) + IBKR archivy obou dnů."""
+    writer = SnapshotWriter(settings)
+    strikes = [7500.0 + 10 * i for i in range(5)]
+    for at in (dt.time(14, 0), last):
+        writer.write_netflow(
+            "ES",
+            expiry,
+            PREV,
+            [
+                NetFlowRow(
+                    ts_min=dt.datetime.combine(PREV, at, tzinfo=dt.UTC),
+                    strike=strike,
+                    right="C",
+                    net_volume=100.0,
+                    source=source,
+                )
+                for strike in strikes
+            ],
+        )
+    oi_repo.upsert_many(
+        [OIRecord("ES", expiry, strike, "C", PREV, 1000.0) for strike in strikes],
+        _after_pub(settings, PREV),
+    )
+    oi_repo.upsert_many(
+        [OIRecord("ES", expiry, strike, "C", TODAY, 1000.0 + doi) for strike in strikes],
+        _after_pub(settings, TODAY),
+    )
+
+
+def _collect_v6(
+    settings: Settings, oi_repo: OIEodRepository, alpha_repo: FaAlphaRepository
+) -> AlphaCalibrationResult | None:
+    return collect_alpha_calibration(
+        "ES",
+        settings.derived_dir,
+        oi_repo,
+        alpha_repo,
+        TODAY,
+        publication_utc=settings.oi_publication_utc,
+        cumdelta_prints=True,
+    )
+
+
+def test_v6_kalibruje_retez_sekundaru_cele_seance_ne_d2(tmp_path: Path) -> None:
+    """#1580: v5 bere nejvzdálenější expiraci (D+2, tok jen po rollu), v6 jen D+1."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_v6(settings, oi_repo, EXPIRY_D1, doi=40.0)
+    _seed_v6(settings, oi_repo, EXPIRY_D2, doi=90.0)
+    result = _collect_v6(settings, oi_repo, alpha_repo)
+    assert result is not None and result.expiry == EXPIRY_D1 and result.day == PREV
+    assert result.point.ratio_median == pytest.approx(0.4)
+    state = alpha_repo.get("ES")
+    assert state is not None and state.source == SOURCE_AGGRESSOR
+
+    (tmp_path / "v5").mkdir()
+    settings_v5, oi_v5, alpha_v5 = _repos(tmp_path / "v5")
+    _seed_v6(settings_v5, oi_v5, EXPIRY_D1, doi=40.0, source=SOURCE_MIDPOINT)
+    _seed_v6(settings_v5, oi_v5, EXPIRY_D2, doi=90.0, source=SOURCE_MIDPOINT)
+    legacy = _collect(settings_v5, oi_v5, alpha_v5)
+    assert legacy is not None and legacy.expiry == EXPIRY_D2  # past D+2 pod v5 zůstává
+    state_v5 = alpha_v5.get("ES")
+    assert state_v5 is not None and state_v5.source == SOURCE_MIDPOINT
+
+
+def test_v6_bez_d1_nehleda_nahradni_retez(tmp_path: Path) -> None:
+    """Chybí-li řetěz D+1, bod nevznikne — D+2 s tokem 55 minut ho nenahradí (#1580)."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_v6(settings, oi_repo, EXPIRY_D2)
+    (settings.derived_dir / "ES" / EXPIRY_D1).mkdir(parents=True)  # adresář bez netflow
+    assert _collect_v6(settings, oi_repo, alpha_repo) is None
+    assert not alpha_repo.history_exists("ES", PREV)
+
+
+def test_v6_netflow_z_midpointu_bod_neda(tmp_path: Path) -> None:
+    """Den před bumpem nese netflow midpointu — pod tisky se nekalibruje (ADR-0057 bod 8)."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_v6(settings, oi_repo, EXPIRY_D1, source=SOURCE_MIDPOINT)
+    assert _collect_v6(settings, oi_repo, alpha_repo) is None
+    assert alpha_repo.get("ES") is None
+
+
+@pytest.mark.parametrize(
+    ("gap_day", "gap_time", "blocks"),
+    [
+        (PREV - dt.timedelta(days=1), dt.time(22, 30), True),  # začátek seance v partici D−1
+        (PREV, dt.time(14, 5), True),  # RTH
+        (PREV, dt.time(21, 30), False),  # po řezu 16:00 CT = 21:00 UTC (pauza a další seance)
+        (PREV - dt.timedelta(days=1), dt.time(21, 30), False),  # pauza před seancí D
+    ],
+)
+def test_v6_den_s_mezerou_trade_vetve_bod_neda(
+    tmp_path: Path, gap_day: dt.date, gap_time: dt.time, blocks: bool
+) -> None:
+    """ADR-0057 bod 6: mezera nad kalibrovaným řetězem v seanci D do řezu = den bez bodu."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_v6(settings, oi_repo, EXPIRY_D1)
+    SnapshotWriter(settings).write_netgap(
+        "ES",
+        EXPIRY_D1,
+        gap_day,
+        [NetGapRow(ts_min=dt.datetime.combine(gap_day, gap_time, tzinfo=dt.UTC))],
+    )
+    result = _collect_v6(settings, oi_repo, alpha_repo)
+    assert (result is None) is blocks
+    assert alpha_repo.history_exists("ES", PREV) is not blocks
+
+
+def test_v6_rada_ukoncena_pred_rezem_bod_neda(tmp_path: Path) -> None:
+    """Engine spadlý přes konec dne značku mezery do seance D nezapíše — řada končí brzy."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_v6(settings, oi_repo, EXPIRY_D1, last=dt.time(20, 50))  # řez 21:00 UTC, tolerance 5 min
+    assert _collect_v6(settings, oi_repo, alpha_repo) is None
+    assert not alpha_repo.history_exists("ES", PREV)
+
+
+def test_v6_stav_z_midpointu_se_resetuje(tmp_path: Path) -> None:
+    """ADR-0057 bod 6: α z midpointu je jiná veličina — první bod z tisků začíná znovu."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    old = AlphaCalibrationPoint(samples=20, ratio_median=0.5, ratio_buy=None, ratio_sell=None)
+    alpha_repo.record(
+        "ES", PREV - dt.timedelta(days=1), EXPIRY, old, 0.505, 17, source=SOURCE_MIDPOINT
+    )
+    _seed_v6(settings, oi_repo, EXPIRY_D1, doi=40.0)
+    result = _collect_v6(settings, oi_repo, alpha_repo)
+    assert result is not None
+    assert result.alpha_after == pytest.approx(0.4)  # přímo, ne EMA od 0,505
+    assert result.days == 1
+    state = alpha_repo.get("ES")
+    assert state is not None and state.days == 1 and state.source == SOURCE_AGGRESSOR
+
+
+def test_stav_s_nula_dny_bere_prvni_bod_primo(tmp_path: Path) -> None:
+    """Ruční reset `set_state(α 0, 0 dnů)` nemá α k vyhlazení — bod 0,4 jde přímo, ne 0,12."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    alpha_repo.set_state("ES", 0.0, 0)
+    _seed_day(settings, oi_repo)
+    result = _collect(settings, oi_repo, alpha_repo)
+    assert result is not None and result.alpha_after == pytest.approx(0.4) and result.days == 1
+
+
+def test_live_alpha_brana_fa_pod_tisky() -> None:
+    """v5: uložená α (bez stavu konfigurace); v6: jen stav z tisků s ≥ FA_MIN_DAYS, jinak 0."""
+    now = dt.datetime(2026, 11, 2, 12, 0, tzinfo=dt.UTC)
+
+    def state(days: int, source: str | None) -> FaAlphaState:
+        return FaAlphaState("ES", alpha=0.3, days=days, updated_at=now, source=source)
+
+    assert live_alpha(None, prints=False) is None
+    assert live_alpha(state(17, None), prints=False) == 0.3
+    assert live_alpha(None, prints=True) == 0.0
+    assert live_alpha(state(17, SOURCE_MIDPOINT), prints=True) == 0.0
+    assert live_alpha(state(17, None), prints=True) == 0.0  # NULL = midpoint
+    assert live_alpha(state(FA_MIN_DAYS - 1, SOURCE_AGGRESSOR), prints=True) == 0.0
+    assert live_alpha(state(FA_MIN_DAYS, SOURCE_AGGRESSOR), prints=True) == 0.3
+
+
+def test_ensure_schema_doplni_sloupec_source_do_stare_tabulky(tmp_path: Path) -> None:
+    """Migrace (#1460): tabulky bez `source` dostanou sloupec, staré řádky čtou NULL = midpoint."""
+    from sqlalchemy import text
+
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    with db.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE fa_alpha (symbol VARCHAR(16) PRIMARY KEY, alpha FLOAT NOT NULL, "
+                "days INTEGER NOT NULL, updated_at TIMESTAMP NOT NULL)"
+            )
+        )
+        conn.execute(text("INSERT INTO fa_alpha VALUES ('ES', 0.505, 17, '2026-10-19 12:00:00')"))
+    repo = FaAlphaRepository(db)
+    repo.ensure_schema()
+    repo.ensure_schema()  # idempotentní
+    state = repo.get("ES")
+    assert state is not None and state.alpha == 0.505 and state.source is None
+    assert live_alpha(state, prints=True) == 0.0
+
+
+def _gaps(settings: Settings, expiry: str, day: dt.date, *times: dt.time) -> None:
+    SnapshotWriter(settings).write_netgap(
+        "ES",
+        expiry,
+        day,
+        [NetGapRow(ts_min=dt.datetime.combine(day, at, tzinfo=dt.UTC)) for at in times],
+    )
+
+
+@pytest.mark.parametrize(
+    "times",
+    [
+        (dt.time(20, 2),),  # první minuta po rollu (dřív výjimka B)
+        (dt.time(20, 1), dt.time(20, 2)),
+        (dt.time(20, 59),),  # poslední minuta před řezem
+    ],
+)
+def test_v6_mezera_po_settle_bod_neda_bez_vyjimky(
+    tmp_path: Path, times: tuple[dt.time, ...]
+) -> None:
+    """Varianta C (#1460): roll v settle mezeru nedělá, každá značka do řezu den blokuje.
+
+    Výjimka B pro mezeru rollu (`ROLL_GAP_WINDOW_MIN`) je pryč — značku v okně
+    rollu zapíše jen restart nebo pipeline, která nevznikla hned po rollu.
+    """
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_v6(settings, oi_repo, EXPIRY_D1)
+    _gaps(settings, EXPIRY_D1, PREV, *times)
+    assert _collect_v6(settings, oi_repo, alpha_repo) is None
+    assert not alpha_repo.history_exists("ES", PREV)
+
+
+def test_v6_pondeli_proti_patku_a_vikend(tmp_path: Path) -> None:
+    """Obchodní den (#1309): pondělí kalibruje pátek nad pondělním řetězem, víkend nic."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    friday, saturday, monday = dt.date(2026, 8, 7), dt.date(2026, 8, 8), dt.date(2026, 8, 10)
+    expiry = "20260810"  # sekundár celou páteční seanci = první expirace po pátku
+    strikes = [7500.0 + 10 * i for i in range(5)]
+    writer = SnapshotWriter(settings)
+    for at in (dt.time(14, 0), dt.time(20, 58)):
+        writer.write_netflow(
+            "ES",
+            expiry,
+            friday,
+            [
+                NetFlowRow(
+                    ts_min=dt.datetime.combine(friday, at, tzinfo=dt.UTC),
+                    strike=strike,
+                    right="C",
+                    net_volume=100.0,
+                    source=SOURCE_AGGRESSOR,
+                )
+                for strike in strikes
+            ],
+        )
+    for day, oi in ((friday, 1000.0), (saturday, 1000.0), (monday, 1040.0)):
+        oi_repo.upsert_many(
+            [OIRecord("ES", expiry, strike, "C", day, oi) for strike in strikes],
+            _after_pub(settings, day),
+        )
+
+    def collect(today: dt.date) -> AlphaCalibrationResult | None:
+        return collect_alpha_calibration(
+            "ES",
+            settings.derived_dir,
+            oi_repo,
+            alpha_repo,
+            today,
+            publication_utc=settings.oi_publication_utc,
+            cumdelta_prints=True,
+        )
+
+    assert collect(saturday) is None
+    assert collect(dt.date(2026, 8, 9)) is None  # neděle
+    result = collect(monday)
+    assert result is not None and result.day == friday and result.expiry == expiry
     assert result.point.ratio_median == pytest.approx(0.4)

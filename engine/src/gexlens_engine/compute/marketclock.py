@@ -45,6 +45,7 @@ from gexlens_engine.compute.settle import (
     is_globex_closed_holiday,
     is_trading_session,
     is_us_market_holiday,
+    session_time_utc,
 )
 
 # Rozvrh Globexu je definovaný v čase burzy, ne v UTC
@@ -61,6 +62,17 @@ _FRIDAY = 4
 HOLIDAY_HALT = dt.time(12, 0)
 # Zkrácená seance: Globex indexových futures končí v 12:15 CT
 EARLY_CLOSE_CT = dt.time(12, 15)
+
+
+def daily_close_utc(day: dt.date) -> dt.datetime:
+    """Začátek denní přestávky Globexu (16:00 CT) kalendářního dne `day` v UTC.
+
+    Konec obchodního dne pro řez kumulativů dne (kalibrace α, FA validace):
+    v létě 21:00 UTC, v zimě 22:00 UTC. Pevných 21:00 UTC by po konci US
+    letního času řízlo v 15:00 CT a poslední hodina Globexu by z čistého
+    objemu i z volume vypadla (#1460, dřív `CUTOFF_HOUR_UTC`).
+    """
+    return session_time_utc(day, CLOSE_HOUR, 0, CME_TZ)
 
 
 def is_market_closed(ts: dt.datetime) -> bool:

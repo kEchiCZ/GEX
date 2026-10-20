@@ -771,6 +771,7 @@ def _prints_runtime(
 async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
     """ADR-0057 bod 3–4: minuta s mezerou má ve flow NULL, netflow ani FA vrstvu nepíše."""
     engine_runtime, publisher, settings, tracker = _prints_runtime(tmp_path)
+    engine_runtime.flow_alpha = 0.4  # kalibrovaná α z tisků — bez ní FA pod v6 nejede
     c = _spec(7600.0, "C")
     tracker.add_dx_trade(c, 3.0, "BUY", 0.5)  # tisk před prvním cyklem: částečná minuta
     _sample(tracker, running=True)
@@ -792,6 +793,9 @@ async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
     netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
     assert netflow["ts_min"].tolist() == [measured]
     assert netflow[["strike", "right", "net_volume"]].values.tolist() == [[7600.0, "C", 2.0]]
+    # Značka mezery pro kalibraci α (ADR-0057 bod 6): jen minuta bez měření
+    netgap = pd.read_parquet(base / "netgap" / f"{day}.parquet")
+    assert netgap["ts_min"].tolist() == [TS]
     for series in ("levelsfa", "gexprofilefa", "oiest"):
         assert pd.read_parquet(base / series / f"{day}.parquet")["ts_min"].tolist() == [measured], (
             series
@@ -808,6 +812,7 @@ async def test_v6_zavreny_trh_zapise_nulu_ne_mezeru(tmp_path: Path) -> None:
 
     flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{PAUSE.date()}.parquet")
     assert flow[["flow_delta", "cum_delta"]].values.tolist() == [[0.0, 0.0]]
+    assert not (settings.derived_dir / "ES" / "20260716" / "netgap").exists()
 
 
 async def test_v6_sekundar_uzavre_minutu_a_vrati_net_mezery(tmp_path: Path) -> None:
@@ -832,6 +837,89 @@ async def test_v6_sekundar_uzavre_minutu_a_vrati_net_mezery(tmp_path: Path) -> N
     assert netflow["ts_min"].tolist() == [TS + dt.timedelta(minutes=3)]
     assert netflow["net_volume"].tolist() == [-2.0]
     assert not (settings.derived_dir / "ES" / "flow" / f"{day}.parquet").exists()
+    # Sekundár flow nepíše — mezeru pro kalibraci α nese jen značka netgap (#1460)
+    netgap = pd.read_parquet(settings.derived_dir / "ES" / "20260716" / "netgap" / f"{day}.parquet")
+    assert netgap["ts_min"].tolist() == [TS]
+
+
+def _netflow_at(settings: Settings, ts: dt.datetime) -> list[list[object]]:
+    netflow = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "netflow" / f"{ts.date().isoformat()}.parquet"
+    )
+    rows = netflow[netflow["ts_min"] == ts]
+    values: list[list[object]] = rows[["strike", "right", "net_volume"]].values.tolist()
+    return values
+
+
+async def test_v6_roll_predani_sekundaru_net_a_tisky_bez_mezery(tmp_path: Path) -> None:
+    """Varianta C (#1460): nový aktivní runtime převezme tracker sekundáru téže expirace.
+
+    Net navazuje i s tisky mezi posledním zápisem sekundáru a novou pipeline
+    (bez druhého seedu z partice), první minuta je měřená a CumΔ symbolu
+    navazuje z flow partice aktivního řetězu, ne z kumulativu sekundáru.
+    """
+    secondary, _pub, settings, tracker = _prints_runtime(tmp_path, secondary=True)
+    c = _spec(7600.0, "C")
+    tracker.add_dx_trade(c, 3.0, "BUY", 0.5)
+    _sample(tracker, running=True, market_closed=True)  # hranice prvního okna známá
+    await secondary.run_cycle(TS, SPOT, [])  # zápis sekundáru K
+    tracker.add_dx_trade(c, 2.0, "BUY", 0.5)
+    _sample(tracker, running=True)
+    tracker.add_dx_trade(c, 1.0, "BUY", 0.5)
+    _sample(tracker, running=True)  # vzorek minuty rollu = hranice
+    tracker.add_dx_trade(c, 4.0, "SELL", 0.5)  # po zastavení staré pipeline
+    roll = TS + dt.timedelta(minutes=2)
+    # Poslední řádek aktivního řetězu D v minutě rollu
+    SnapshotWriter(settings).write_flow(
+        "ES", TS.date(), [FlowRow(roll, 10.0, 300.0, source=SOURCE_AGGRESSOR)]
+    )
+
+    active, _pub2, _settings2, _fresh = _prints_runtime(tmp_path)
+    active.take_over(secondary)
+    assert active.cum_delta is tracker
+    tracker.add_dx_trade(c, 5.0, "BUY", 0.5)  # po založení nové pipeline
+    _sample(tracker, running=True)
+    await active.run_cycle(roll + dt.timedelta(minutes=1), SPOT, [])
+
+    assert _netflow_at(settings, TS) == [[7600.0, "C", 3.0]]
+    assert _netflow_at(settings, roll + dt.timedelta(minutes=1)) == [[7600.0, "C", 7.0]]
+    assert not (settings.derived_dir / "ES" / "20260716" / "netgap").exists()
+    flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{TS.date()}.parquet")
+    first = flow[flow["ts_min"] == roll + dt.timedelta(minutes=1)]
+    # Tok jen po hranici (−4 + 5 kontraktů × Δ 0,5 × 50), CumΔ od řádku D
+    assert first[["flow_delta", "cum_delta"]].values.tolist() == [[25.0, 325.0]]
+
+
+async def test_v6_roll_predani_sekundaru_bez_cyklu_navaze_net_z_partice(tmp_path: Path) -> None:
+    """Sekundár založený těsně před settle neproběhl cyklem: seed z partice přejde s ním."""
+    SnapshotWriter(Settings(data_dir=tmp_path / "data")).write_netflow(
+        "ES",
+        "20260716",
+        TS.date(),
+        [NetFlowRow(TS - dt.timedelta(minutes=30), 7600.0, "C", 100.0, SOURCE_AGGRESSOR)],
+    )
+    secondary, _pub, settings, tracker = _prints_runtime(tmp_path, secondary=True)
+    c = _spec(7600.0, "C")
+    _sample(tracker, running=True, market_closed=True)
+    tracker.add_dx_trade(c, 2.0, "BUY", 0.5)
+    active, _pub2, _settings2, _fresh = _prints_runtime(tmp_path)
+    active.take_over(secondary)
+    _sample(tracker, running=True)
+    await active.run_cycle(TS, SPOT, [])
+
+    assert _netflow_at(settings, TS) == [[7600.0, "C", 102.0]]
+
+
+async def test_take_over_jen_pod_tisky_a_nad_tymz_retezem(tmp_path: Path) -> None:
+    active, _pub, _settings, _tracker = _prints_runtime(tmp_path)
+    midpoint, _pub2, _settings2 = build_runtime(tmp_path, MockQuoteStreamer())
+    midpoint.secondary = True
+    with pytest.raises(ValueError, match="jen pod zdrojem tisků"):
+        active.take_over(midpoint)
+    other, _pub3, _settings3, _tracker3 = _prints_runtime(tmp_path, secondary=True)
+    other.expiry = "20260717"
+    with pytest.raises(ValueError, match="není řetěz"):
+        active.take_over(other)
 
 
 @pytest.mark.parametrize("mechanics", ["v5", "v6"])
@@ -876,6 +964,31 @@ async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path, mechanics: str)
     for series in ("levelsfa", "oiest", "gexprofilefa", "gexfieldfa"):
         assert not (base / series / f"{day}.parquet").exists(), series
         assert f"{series}.ES.20260716" not in channels, series
+
+
+async def test_v6_bez_kalibrace_fa_nejede_ani_s_vychozi_alfou(tmp_path: Path) -> None:
+    """Nález kontroly 1b: pod tisky bez `flow_alpha` (start, chyba DB) platí α 0, ne 0,4."""
+    engine_runtime, publisher, settings = build_runtime(tmp_path, RisingVolumeStreamer())
+    assert settings.flow_oi_alpha > 0
+    prints = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    engine_runtime.cum_delta = prints
+    assert engine_runtime.flow_alpha is None and engine_runtime.fa_alpha() == 0.0
+    prints.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+    for minute in range(2):
+        if minute == 1:
+            prints.add_dx_trade(_spec(7600.0, "C"), 3.0, "BUY", 0.5)
+        _sample(prints, running=True)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    day = TS.date().isoformat()
+    base = settings.derived_dir / "ES" / "20260716"
+    assert (base / "netflow" / f"{day}.parquet").exists()  # měřená data se píší dál
+    for series in ("levelsfa", "oiest", "gexprofilefa", "gexfieldfa"):
+        assert not (base / series / f"{day}.parquet").exists(), series
+    # Pod v5 zůstává výchozí α z konfigurace
+    (tmp_path / "v5").mkdir()
+    v5_runtime, _publisher, v5_settings = build_runtime(tmp_path / "v5", RisingVolumeStreamer())
+    assert v5_runtime.fa_alpha() == v5_settings.flow_oi_alpha
 
 
 async def test_forming_bar_published_and_written_as_provisional(

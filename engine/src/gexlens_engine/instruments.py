@@ -21,6 +21,8 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
+from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.facalibration import FA_MIN_DAYS
 from gexlens_engine.compute.gexforward import ForwardContract, forward_field
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import (
@@ -61,7 +63,12 @@ from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.scenario_auto import ScenarioGenerator
 from gexlens_engine.scenarios import ScenarioCollector
 from gexlens_engine.setups import SetupEngine
-from gexlens_engine.storage.fa_calibration import FaAlphaRepository, collect_alpha_calibration
+from gexlens_engine.storage.fa_calibration import (
+    FaAlphaRepository,
+    FaAlphaState,
+    collect_alpha_calibration,
+    live_alpha,
+)
 from gexlens_engine.storage.fa_validation import FaValidationRepository, collect_fa_validation
 from gexlens_engine.storage.meta import ensure_meta_schema, settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
@@ -854,13 +861,44 @@ class InstrumentPipeline:
         except Exception:
             logger.exception("α %s se nepodařilo načíst — platí konfigurace", self.symbol)
             return
-        if state is not None and self.runtime.flow_alpha != state.alpha:
-            self.runtime.flow_alpha = state.alpha
+        self._apply_alpha(state)
+
+    def _cum_tracker(self) -> CumDeltaTracker:
+        """CumΔ tracker aktivního runtime — jeho zdroj je jediná pravda o v5/v6."""
+        tracker = self.runtime.cum_delta
+        assert tracker is not None  # nastaven v EngineRuntime.__post_init__
+        return tracker
+
+    def _apply_alpha(self, state: FaAlphaState | None) -> None:
+        """α pro FA vrstvu podle stavu kalibrace (`live_alpha`).
+
+        Pod mechanikou v5 se propíše uložená α (bez stavu platí konfigurace).
+        Pod tisky (v6, ADR-0057 bod 6) jen stav z tisků s ≥ `FA_MIN_DAYS` dny,
+        jinak α 0 = FA vypnutá („nekalibrováno n/5“), i bez stavu.
+        """
+        prints = self._cum_tracker().prints
+        alpha = live_alpha(state, prints=prints)
+        if alpha is None or self.runtime.flow_alpha == alpha:
+            return
+        self.runtime.flow_alpha = alpha
+        if state is not None and alpha == state.alpha:
             logger.info(
                 "α %s obnovena z kalibrace: %.3f (%d dnů)",
                 self.symbol,
                 state.alpha,
                 state.days,
+            )
+        else:
+            days = (
+                state.days
+                if state is not None and state.source == self._cum_tracker().source
+                else 0
+            )
+            logger.info(
+                "FA %s vypnutá do kalibrace z tisků: %d/%d dnů (ADR-0057 bod 6)",
+                self.symbol,
+                days,
+                FA_MIN_DAYS,
             )
 
     async def _run_fa_validation(self, today: dt.date) -> None:
@@ -916,10 +954,8 @@ class InstrumentPipeline:
             )
 
     def _current_alpha(self) -> float:
-        """Aktuálně platná α symbolu: kalibrovaná z runtime, jinak konfigurace."""
-        if self.runtime.flow_alpha is not None:
-            return self.runtime.flow_alpha
-        return self.settings.flow_oi_alpha
+        """Aktuálně platná α symbolu: kalibrovaná z runtime, jinak konfigurace (v6: 0)."""
+        return self.runtime.fa_alpha()
 
     async def _run_alpha_calibration(self, today: dt.date) -> None:
         """Ranní kalibrace α (#232 fáze 2): včerejší netflow vs. skutečné ΔOI.
@@ -940,6 +976,7 @@ class InstrumentPipeline:
                 self.alpha_repository,
                 today,
                 publication_utc=self.settings.oi_publication_utc,
+                cumdelta_prints=self._cum_tracker().prints,
             )
         except Exception:
             logger.exception("Kalibrace α %s selhala — zkusí se při dalším OI cyklu", self.symbol)
@@ -947,7 +984,17 @@ class InstrumentPipeline:
         if result is None:
             await self._restore_alpha()
             return
-        self.runtime.flow_alpha = result.alpha_after
+        # Pod tisky jde α do FA až po FA_MIN_DAYS dnech (ADR-0057 bod 6)
+        self.runtime.flow_alpha = live_alpha(
+            FaAlphaState(
+                symbol=self.symbol,
+                alpha=result.alpha_after,
+                days=result.days,
+                updated_at=dt.datetime.now(dt.UTC),
+                source=self._cum_tracker().source,
+            ),
+            prints=self._cum_tracker().prints,
+        )
         point = result.point
         logger.info(
             "Kalibrace α %s %s (%s): medián %.3f (buy %s / sell %s, %d stran) → α %.3f (%d dnů)",
@@ -1569,6 +1616,18 @@ class InstrumentPipeline:
         exc = task.exception()
         if exc is not None:
             logger.error("Re-backfill %s po výpadku barů selhal: %s", self.symbol, exc)
+
+    def roll_handover(self) -> EngineRuntime | None:
+        """Sekundár, jehož tracker v rollu v settle převezme nová pipeline (#1460, varianta C).
+
+        Jen pod tisky (ADR-0057 bod 6, doplněk 20. 10.): pod midpointem dává
+        net sekundáru bar větev a navazuje se z partice, předání by `take_over`
+        odmítl. None = pipeline bez sekundáru nebo mechanika v5.
+        """
+        secondary = self.next_runtime
+        if secondary is None or secondary.cum_delta is None or not secondary.cum_delta.prints:
+            return None
+        return secondary
 
     def stop(self) -> None:
         """Odhlášení market dat podkladu (kontrakty řetězce rotuje scheduler sám)."""

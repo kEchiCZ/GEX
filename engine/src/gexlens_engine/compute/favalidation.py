@@ -1,7 +1,8 @@
 """Denní validace flow-adjusted OI (#232, ADR-0011): open-ratio a rank korelace.
 
-Porovnává klasifikovaný denní volume řetězce (řez 21:00 UTC — konec trade date,
-volume counter IBKR se resetuje ve 22:00 UTC) s ranním ΔOI z CME archivu.
+Porovnává klasifikovaný denní volume řetězce (řez 16:00 CT — konec trade date,
+v létě 21:00 UTC, v zimě 22:00 UTC; volume counter IBKR se resetuje s novou
+seancí v 17:00 CT) s ranním ΔOI z CME archivu.
 Každý den tak přibude jeden kalibrační bod pro α (dnes 0.4, ADR-0011) bez
 ručního spouštění skriptů. Tady je jen čistý výpočet nad mapami
 (strike, right) → hodnota; sběr dat a uložení dělá `storage.fa_validation`.
@@ -66,7 +67,7 @@ def compute_fa_validation(
     oi_before: Mapping[Key, float],
     oi_after: Mapping[Key, float],
 ) -> FaValidationPoint | None:
-    """Metriky dne: volumes = poslední kumulativní volume stran k řezu 21:00 UTC,
+    """Metriky dne: volumes = poslední kumulativní volume stran k řezu 16:00 CT,
     oi_before/oi_after = archivní OI ráno téhož a následujícího dne.
 
     Vrací None při nedostatečném vzorku (málo obchodovaných stran nebo volume) —

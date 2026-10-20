@@ -8,6 +8,8 @@ from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
     ExpiryInfo,
     Underlying,
+    band_between,
+    band_covering,
     build_contracts,
     option_sec_type,
     select_band,
@@ -61,6 +63,18 @@ async def test_discover_stock_filters_smart_and_empty_fop_exchange() -> None:
     assert infos[0].exchange == "SMART"
     # OPT discovery posílá prázdný futFopExchange (SPEC 3.2)
     assert client.sec_def_requests == [("SPY", "", "STK", 2)]
+
+
+def test_band_covering_jen_roste_o_drzene_striky() -> None:
+    """#1460 varianta C: pásmo nového aktivního D+1 pokryje striky sekundáru (NQ 19. 10.)."""
+    strikes = [29400.0 + 10 * i for i in range(70)]
+    band = band_between(strikes, 29520.0, 29910.0)
+    held = [29600.0 + 10 * i for i in range(40)]  # sekundár 29600–29990
+    wider = band_covering(strikes, band, held)
+    assert (wider.low, wider.high) == (29520.0, 29990.0)
+    assert wider.strikes == tuple(k for k in strikes if 29520.0 <= k <= 29990.0)
+    assert band_covering(strikes, band, []) is band
+    assert band_covering(strikes, band, [29600.0, 29700.0]) is band
 
 
 def test_select_band_takes_strikes_within_range() -> None:

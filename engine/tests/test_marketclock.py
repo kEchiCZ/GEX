@@ -6,7 +6,11 @@ na převodu se láme DST, kvůli kterému se rozvrh nesmí aproximovat konstanto
 
 import datetime as dt
 
-from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
+from gexlens_engine.compute.marketclock import (
+    daily_close_utc,
+    is_market_closed,
+    outside_us_rth,
+)
 
 
 def utc(year: int, month: int, day: int, hour: int, minute: int = 0) -> dt.datetime:
@@ -100,3 +104,11 @@ def test_konec_dst_posouva_nedelni_otevreni() -> None:
     """1. 11. 2026 končí DST: nedělní otevření 17:00 CST = 23:00 UTC (#1307)."""
     assert is_market_closed(utc(2026, 11, 1, 22, 59))  # neděle 16:59 CST
     assert not is_market_closed(utc(2026, 11, 1, 23))  # neděle 17:00 CST
+
+
+def test_daily_close_utc_16_ct_podle_letniho_casu_usa() -> None:
+    """#1460: řez dne = 16:00 CT; týden 26. 10.–1. 11. má Evropa zimní čas, USA ještě letní."""
+    assert daily_close_utc(dt.date(2026, 10, 19)) == utc(2026, 10, 19, 21)  # CDT
+    assert daily_close_utc(dt.date(2026, 10, 30)) == utc(2026, 10, 30, 21)  # CDT, SEČ v Evropě
+    assert daily_close_utc(dt.date(2026, 11, 2)) == utc(2026, 11, 2, 22)  # CST od 1. 11.
+    assert daily_close_utc(dt.date(2026, 1, 15)) == utc(2026, 1, 15, 22)

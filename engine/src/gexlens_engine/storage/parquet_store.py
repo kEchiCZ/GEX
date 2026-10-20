@@ -398,6 +398,13 @@ NETFLOW_SCHEMA = pa.schema(
     ]
 )
 
+# Mezery trade větve řetězu (#1460, ADR-0057 body 3 a 6): minuty cyklu, ve
+# kterých řetěz za otevřeného trhu neměřil tisky — netflow se tehdy nepíše.
+# Kalibrace α podle nich pozná den s mezerou i u sekundáru, jehož řádek flow se
+# zahazuje a jehož netflow chodí jen každý N-tý cyklus. Jen minuty mezery:
+# den bez mezery partici nemá.
+NETGAP_SCHEMA = pa.schema([("ts_min", pa.timestamp("us", tz="UTC"))])
+
 # Podíl objemu mimo tisk (#1007): přírůstek objemu kontraktu za bar rozložený
 # na tisky TimeAndSale (`printed`) a zbytek bez tisku (`structured` — nohy
 # spreadů a bloky, CME je jako trade nevysílá). NULL = trade větev pro
@@ -609,6 +616,13 @@ class PrintVolRow:
     volume_delta: float
     printed: float | None
     structured: float | None
+
+
+@dataclass(frozen=True)
+class NetGapRow:
+    """Minuta cyklu řetězu s mezerou trade větve (ADR-0057 bod 3, #1460)."""
+
+    ts_min: dt.datetime
 
 
 @dataclass(frozen=True)
@@ -1145,6 +1159,18 @@ class SnapshotWriter:
         buffer = self._buffer(path, NETFLOW_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
+    def write_netgap(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[NetGapRow]
+    ) -> Path | None:
+        """Přidá minutu mezery trade větve do derived/{sym}/{exp}/netgap (#1460)."""
+        if not rows:
+            return None
+        path = (
+            self._settings.derived_dir / symbol / expiry / "netgap" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, NETGAP_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
     def write_printvol(
         self, symbol: str, expiry: str, day: dt.date, rows: Sequence[PrintVolRow]
     ) -> Path | None:
@@ -1444,6 +1470,37 @@ class SnapshotWriter:
                 "partitions": len(self._buffers),
                 "bytes": sum(buf.nbytes for buf in self._buffers.values()),
             }
+
+
+def read_netgap_minutes(path: Path) -> list[dt.datetime]:
+    """Minuty mezery trade větve z partice netgap (#1460); bez partice prázdný seznam."""
+    if not path.exists():
+        return []
+    table = pq.read_table(path, schema=NETGAP_SCHEMA)
+    return [ts for ts in table.column("ts_min").to_pylist() if ts is not None]
+
+
+def read_netflow_last_minute(
+    path: Path, *, end: dt.datetime, sources: frozenset[str | None] | None
+) -> dt.datetime | None:
+    """Poslední minuta s ne-NULL řádkem netflow před `end` (zdroj jako `read_netflow_latest`).
+
+    Kalibrace α pod tisky (#1460) podle ní pozná den, jehož řada skončila před
+    řezem — engine spadlý přes konec dne nemá v partici ani značku mezery.
+    """
+    if not path.exists():
+        return None
+    table = pq.read_table(path, columns=["ts_min", "net_volume", "source"], schema=NETFLOW_SCHEMA)
+    last: dt.datetime | None = None
+    columns = [table.column(name).to_pylist() for name in ("ts_min", "net_volume", "source")]
+    for ts, net, source in zip(*columns, strict=True):
+        if ts is None or net is None or ts >= end:
+            continue
+        if sources is not None and source not in sources:
+            continue
+        if last is None or ts > last:
+            last = ts
+    return last
 
 
 def read_netflow_latest(

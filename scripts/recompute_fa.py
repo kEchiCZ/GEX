@@ -46,6 +46,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT
 from gexlens_engine.compute.facalibration import AlphaCalibrationPoint
 from gexlens_engine.compute.favalidation import FaValidationPoint
 from gexlens_engine.compute.settle import is_trading_session
@@ -328,11 +329,18 @@ def apply(results: Sequence[SymbolReplay], prod: Engine) -> int:
                 ),
                 row.alpha_after,
                 item.new_days,
+                # Bod nese zdroj přehrání (#1460); NULL = bod z doby před sloupcem
+                source=row.source or SOURCE_MIDPOINT,
                 update_state=False,
             )
             written += 1
             if last and item.new_alpha is not None:
-                alpha_prod.set_state(item.symbol, item.new_alpha, item.new_days)
+                alpha_prod.set_state(
+                    item.symbol,
+                    item.new_alpha,
+                    item.new_days,
+                    source=row.source or SOURCE_MIDPOINT,
+                )
     return written
 
 
