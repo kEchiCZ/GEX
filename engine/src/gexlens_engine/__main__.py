@@ -2088,15 +2088,14 @@ async def main() -> None:
                 # Živé CumΔ (ADR-0057 bod 6): tisk patří kontraktu jednoho řetězu
                 # jednoho instrumentu — aktivního, nebo pod tisky sekundárního (vstup α);
                 # midpoint (v5) jen aktivní část jako dřív, pravidla v `route_trade`.
+                # Pod tisky jde tisk do trackeru tras i bez běžící pipeline: po
+                # rollu v settle ho převezme nová pipeline (#1460, varianta C).
                 # Seance podle času příjmu (jako vzorek trade větve): roll trackeru
                 # v `run_cycle` přijde až po sweepu a tisky od openu do té doby
                 # čekají stranou, místo aby je reset smazal (#1460)
                 trade_session = trading_session_date(dt.datetime.now(dt.UTC))
                 for dx_symbol, routes in trade_routes.items():
-                    dx_pipe = pipelines.get(dx_symbol)
-                    if dx_pipe is None:
-                        continue
-                    target = route_trade(routes, dx_pipe, streamer)
+                    target = route_trade(routes, pipelines.get(dx_symbol), streamer)
                     if target is not None:
                         dx_tracker, dx_spec = target
                         dx_tracker.add_dx_trade(

@@ -354,6 +354,38 @@ def test_po_rollu_zastarale_trasy_jsou_mezera_do_obnovy() -> None:
         assert tracker_of(rt).minute_measured
 
 
+def test_po_rollu_s_predanim_patri_sekundarni_cast_novemu_aktivnimu() -> None:
+    """Varianta C (#1460): tracker sekundáru D+1 převzal nový aktivní runtime.
+
+    Sekundární část zastaralých tras mu patří i před obnovou plánu, takže jeho
+    okno navazuje bez mezery; nový sekundár D+2 je do přestavby tras mezera.
+    """
+    old = pipeline(active=ACTIVE, nxt=NEXT)
+    stale = {"ES": build_routes(old, streamer_of)}
+    branch = Branch()
+    monitor = TradeBranchMonitor()
+    warm_up(monitor, RTH, {"ES": old}, stale, branch)
+    handed = tracker_of(old.next_runtime)
+    rolled = pipeline(active=NEXT, nxt=AFTER_NEXT)
+    rolled.runtime.cum_delta = handed
+    pipes = {"ES": rolled}
+
+    branch.touch(stale["ES"], RTH + 2 * MIN)
+    assert sample(monitor, RTH + 2 * MIN, pipes, stale, branch) == {"ES": BRANCH_RUNNING}
+    handed.begin_cycle()
+    assert handed.minute_measured
+    after_next = tracker_of(rolled.next_runtime)
+    after_next.begin_cycle()
+    assert not after_next.minute_measured
+
+    fresh = {"ES": build_routes(rolled, streamer_of)}
+    assert fresh["ES"].active_tracker is handed
+    branch.touch(fresh["ES"], RTH + 3 * MIN)
+    assert sample(monitor, RTH + 3 * MIN, pipes, fresh, branch) == {"ES": BRANCH_RUNNING}
+    handed.begin_cycle()
+    assert handed.minute_measured
+
+
 def test_sekundar_meri_vlastni_univerzum_a_and_pres_okno() -> None:
     """Sekundár dostává vzorek každou minutu; jeho čerstvost je z jeho univerza."""
     pipe = pipeline()
@@ -456,16 +488,22 @@ def test_route_trade_v6_aktivni_i_sekundarni_retez() -> None:
     assert primary.net_volumes() == {}
 
 
-def test_route_trade_v6_zastarale_trasy_po_rollu_zahodi() -> None:
-    """Po rollu nesmí zastaralé trasy doručit tisky do trackeru jiné expirace.
+def test_route_trade_v6_zastarale_trasy_doruci_jen_do_trackeru_sveho_retezu() -> None:
+    """Po rollu jde tisk jen do trackeru, pro který se trasy stavěly (varianta C).
 
-    Tisky D z aktivní části by šly do nového aktivního D+1, tisky D+1 ze
-    sekundární části do nového sekundárního D+2 (`route_trade`).
+    Nikdy do trackeru jiné expirace: tisky D z aktivní části ne do nového
+    aktivního D+1, tisky D+1 ze sekundární části ne do nového sekundárního D+2.
+    Tisky D+1 tečou do trackeru sekundáru i bez běžící pipeline (mezi zastavením
+    staré a založením nové), který při rollu převezme nový aktivní runtime.
     """
-    stale = build_routes(pipeline(active=ACTIVE, nxt=NEXT), streamer_of)
+    old = pipeline(active=ACTIVE, nxt=NEXT)
+    stale = build_routes(old, streamer_of)
     rolled = pipeline(active=NEXT, nxt=AFTER_NEXT)
-    assert route_trade(stale, rolled, streamer_of(spec(ACTIVE, "C")) or "") is None
-    assert route_trade(stale, rolled, streamer_of(spec(NEXT, "C")) or "") is None
+    for pipe in (rolled, None):
+        target = route_trade(stale, pipe, streamer_of(spec(ACTIVE, "C")) or "")
+        assert target == (tracker_of(old.runtime), spec(ACTIVE, "C"))
+        target = route_trade(stale, pipe, streamer_of(spec(NEXT, "C")) or "")
+        assert target == (tracker_of(old.next_runtime), spec(NEXT, "C"))
 
 
 def test_route_trade_v5_doruci_jako_pred_1460() -> None:
@@ -479,6 +517,7 @@ def test_route_trade_v5_doruci_jako_pred_1460() -> None:
     target = route_trade(stale, rolled, streamer_of(spec(ACTIVE, "C")) or "")
     assert target == (tracker_of(rolled.runtime), spec(ACTIVE, "C"))
     assert route_trade(stale, rolled, streamer_of(spec(NEXT, "C")) or "") is None
+    assert route_trade(stale, None, streamer_of(spec(ACTIVE, "C")) or "") is None
 
     pipe = pipeline(source=SOURCE_MIDPOINT)
     routes = build_routes(pipe, streamer_of)
@@ -498,7 +537,11 @@ def test_route_trade_neznamy_streamer_a_bez_sekundaru() -> None:
     routes = build_routes(pipe, streamer_of)
     assert route_trade(routes, pipe, "./neznamy") is None
     alone = pipeline(nxt=None)
-    assert route_trade(routes, alone, streamer_of(spec(NEXT, "C")) or "") is None
+    alone_routes = build_routes(alone, streamer_of)
+    assert route_trade(alone_routes, alone, streamer_of(spec(NEXT, "C")) or "") is None
     no_tracker = pipeline()
     no_tracker.runtime.cum_delta = None
-    assert route_trade(routes, no_tracker, streamer_of(spec(ACTIVE, "C")) or "") is None
+    no_tracker_routes = build_routes(no_tracker, streamer_of)
+    assert no_tracker_routes.active_tracker is None
+    target = route_trade(no_tracker_routes, no_tracker, streamer_of(spec(ACTIVE, "C")) or "")
+    assert target is None
