@@ -56,14 +56,21 @@ export function slicePanels(full: PanelSeries, position: number): PanelSeries {
     vol: sliceSeries(full.vol, position),
     optVolCall: sliceSeries(full.optVolCall, position),
     optVolPut: sliceSeries(full.optVolPut, position),
-    cumDelta: sliceSeries(full.cumDelta, position),
+    // Cum Δ s mezerami (ADR-0057 bod 3): po pozici null — plocha končí na
+    // pozici, nula by po ní kreslila vyrovnaný tok
+    cumDelta: sliceLine(full.cumDelta, position),
+    // Zdroj znaménka a mezery dne jsou vlastnost minut/dne, ne pozice
+    cumDeltaMidpoint: full.cumDeltaMidpoint,
+    cumDeltaGapMinutes: full.cumDeltaGapMinutes,
     // Ruční výčet tu dřív vynechal CVD podkladu i Evo OI — v playbacku obojí
     // zmizelo (#1578); úplnost hlídá test se sadou klíčů PanelSeries
     futuresCvd: full.futuresCvd && sliceLine(full.futuresCvd, position),
     deltaFlowCall: sliceSeries(full.deltaFlowCall, position),
     deltaFlowPut: sliceSeries(full.deltaFlowPut, position),
-    evoOiCall: full.evoOiCall && sliceSeries(full.evoOiCall, position),
-    evoOiPut: full.evoOiPut && sliceSeries(full.evoOiPut, position),
+    // Evo OI je úroveň: po pozici null, schod končí na pozici — nula by
+    // tvrdila „pozice zmizely" (#1591)
+    evoOiCall: full.evoOiCall && sliceLine(full.evoOiCall, position),
+    evoOiPut: full.evoOiPut && sliceLine(full.evoOiPut, position),
     // Popisek „od HH:MM" (#518) je vlastnost dne, ne pozice — přetáčením nemizí
     cumDeltaFromIso: full.cumDeltaFromIso,
   }

@@ -42,12 +42,7 @@ function sumSeries(values: number[], plan: BucketPlan): number[] {
   return result
 }
 
-/** Kumulativní řada (CumΔ): poslední hodnota koše. */
-function lastSeries(values: number[], plan: BucketPlan): number[] {
-  return Array.from({ length: plan.buckets }, (_, bucketIdx) => values[plan.ends[bucketIdx]] ?? 0)
-}
-
-/** Řada s dírami (levels, spot): poslední ne-null hodnota koše. */
+/** Řada s dírami (levels, spot, CumΔ s mezerou, Evo OI): poslední ne-null hodnota koše. */
 function lastNonNull<T>(values: (T | null)[], plan: BucketPlan): (T | null)[] {
   return Array.from({ length: plan.buckets }, (_, bucketIdx) => {
     for (let index = plan.ends[bucketIdx]; index >= plan.starts[bucketIdx]; index -= 1) {
@@ -263,15 +258,23 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       vol: sumSeries(day.panels.vol, plan),
       optVolCall: sumSeries(day.panels.optVolCall, plan),
       optVolPut: sumSeries(day.panels.optVolPut, plan),
-      cumDelta: lastSeries(day.panels.cumDelta, plan),
+      // Mezera trade větve (ADR-0057 bod 3): koš nese poslední měřenou úroveň,
+      // koš celý v mezeře zůstane null — žádná spojnice ani nula (#1588)
+      cumDelta: lastNonNull(day.panels.cumDelta, plan),
+      // Zdroj znaménka koše = zdroj jeho poslední minuty (ADR-0057 bod 8)
+      cumDeltaMidpoint:
+        day.panels.cumDeltaMidpoint &&
+        Array.from({ length: plan.buckets }, (_, bucketIdx) => day.panels.cumDeltaMidpoint?.[plan.ends[bucketIdx]] ?? false), // prettier-ignore
+      // Daily-only (počet minut bez tisků za den) — intraday koše ho nenesou
+      cumDeltaGapMinutes: day.panels.cumDeltaGapMinutes,
       // CVD podkladu (#829) je kumulativ s dírami — poslední ne-null hodnota
       // koše; koš bez dat zůstane null, ne nula (#1578)
       futuresCvd: day.panels.futuresCvd && lastNonNull(day.panels.futuresCvd, plan),
       deltaFlowCall: sumSeries(day.panels.deltaFlowCall, plan),
       deltaFlowPut: sumSeries(day.panels.deltaFlowPut, plan),
       // Evo OI (#573) je úroveň, ne tok — koš přebírá poslední hodnotu
-      evoOiCall: lastSeries(day.panels.evoOiCall ?? [], plan),
-      evoOiPut: lastSeries(day.panels.evoOiPut ?? [], plan),
+      evoOiCall: lastNonNull(day.panels.evoOiCall ?? [], plan),
+      evoOiPut: lastNonNull(day.panels.evoOiPut ?? [], plan),
       // Popisek „od HH:MM" (#518) je vlastnost dne, ne koše
       cumDeltaFromIso: day.panels.cumDeltaFromIso,
     },

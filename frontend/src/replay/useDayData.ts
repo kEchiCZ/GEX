@@ -574,9 +574,12 @@ export function useDayData(
     }
     const onFlow = (data: ChannelData) => {
       part(minuteKey(data.ts_min)).flow = {
-        cum_delta: Number(data.cum_delta) || 0,
+        // null = mezera trade větve (ADR-0057 bod 3), ne nula
+        cum_delta: numOrNull(data.cum_delta),
         // CVD podkladu (#829) — starší engine pole neposílá, pak zůstává null
         futures_cvd: numOrNull(data.futures_cvd),
+        // Zdroj znaménka (ADR-0057 bod 8) — starší engine pole neposílá
+        source: data.source == null ? null : String(data.source),
       }
       scheduleFlush()
     }

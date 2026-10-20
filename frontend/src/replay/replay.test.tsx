@@ -51,7 +51,8 @@ test('sliceSeries a slicePanels drží délku (stabilní osa X)', () => {
     0,
   )
   expect(panels.vol).toEqual([1, 0, 0])
-  expect(panels.cumDelta).toEqual([5, 0, 0])
+  // Cum Δ po pozici null (#1588): plocha končí na pozici, nula by kreslila vyrovnaný tok
+  expect(panels.cumDelta).toEqual([5, null, null])
 })
 
 test('slicePanels nese CVD podkladu (po pozici null) a Evo OI — žádná řada nevypadne (#1578)', () => {
@@ -62,7 +63,9 @@ test('slicePanels nese CVD podkladu (po pozici null) a Evo OI — žádná řada
     vol: [1, 2, 3, 4],
     optVolCall: [1, 1, 1, 1],
     optVolPut: [2, 2, 2, 2],
-    cumDelta: [5, -5, 9, 12],
+    cumDelta: [5, null, 9, 12],
+    cumDeltaMidpoint: [false, false, false, false],
+    cumDeltaGapMinutes: [0, 0, 0, 0],
     futuresCvd: [null, 100, -20, -50],
     deltaFlowCall: [1, 2, 3, 4],
     deltaFlowPut: [4, 3, 2, 1],
@@ -78,8 +81,11 @@ test('slicePanels nese CVD podkladu (po pozici null) a Evo OI — žádná řada
   expect(sliced.futuresCvd).toEqual([null, 100, -20, null])
   expect(cvdLinePoints(sliced.futuresCvd ?? [], 400, 80).split(' ')).toHaveLength(2)
   // Evo OI se v playbacku kreslí jen s neprázdnou řadou — dřív zmizel celý panel
-  expect(sliced.evoOiCall).toEqual([10, 11, 12, 0])
-  expect(sliced.evoOiPut).toEqual([20, 21, 22, 0])
+  // Evo OI je úroveň: po pozici null, schod končí na pozici (#1591), ne nula
+  expect(sliced.evoOiCall).toEqual([10, 11, 12, null])
+  expect(sliced.evoOiPut).toEqual([20, 21, 22, null])
+  // Cum Δ s mezerou (#1588): mezera zůstává, po pozici null
+  expect(sliced.cumDelta).toEqual([5, null, 9, null])
   expect(sliced.cumDeltaFromIso).toBe('2026-07-16T15:00:00.000Z')
   expect(full.futuresCvd).toEqual([null, 100, -20, -50]) // původní data netknutá
 })

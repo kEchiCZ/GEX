@@ -39,7 +39,7 @@ export interface PipelineStatus {
   subscription_errors_after_cancel?: number
   subscription_errors_excused?: number
   // Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615 krok 5)
-  cumdelta_source?: 'midpoint' | 'dxfeed'
+  cumdelta_source?: 'midpoint' | 'aggressor'
   cumdelta_coverage?: Record<
     string,
     {
