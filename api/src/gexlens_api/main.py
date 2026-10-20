@@ -69,7 +69,9 @@ from gexlens_api.security import (
 )
 from gexlens_api.sentiment_routes import build_sentiment_router
 from gexlens_api.status import StatusStore
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT
 from gexlens_engine.compute.expiry_calendar import expiry_calendar
+from gexlens_engine.compute.facalibration import FA_MIN_DAYS
 from gexlens_engine.compute.gammacliff import build_cliff
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.paper import POINT_VALUES
@@ -413,21 +415,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Frontend z toho kreslí badge „FA α=0.34 · 5 dní". Před prvním
         kalibračním bodem je seznam prázdný — engine jede na defaultu
         z konfigurace a UI to přizná („FA α default").
+
+        `source` = zdroj netu kalibrace (ADR-0057 bod 8, NULL ve stavu před #1460
+        = midpoint). Pod tisky (v6) FA jede až od `min_days` dnů kalibrace téhož
+        zdroje, jaký hlásí engine v `/status.cumdelta_source` (bod 6) — frontend
+        z toho ukáže „nekalibrováno n/5" (#1588).
         """
         try:
             states = alpha_repository().list_all()
         except Exception:
             states = []  # DB nedostupná — UI drží tvar
         return {
+            "min_days": FA_MIN_DAYS,
             "alphas": [
                 {
                     "symbol": state.symbol,
                     "alpha": state.alpha,
                     "days": state.days,
+                    "source": state.source or SOURCE_MIDPOINT,
                     "updated_at": state.updated_at.isoformat(),
                 }
                 for state in states
-            ]
+            ],
         }
 
     # Katalog CME produktů pro vyhledávání (#521): roots + lidské názvy.
