@@ -43,6 +43,8 @@ function makeInputs(): ReplayInputs {
     hasPrintVol: false,
     callVolume: new Float32Array([10]),
     putVolume: new Float32Array([5]),
+    callVolumeKnown: new Float32Array([1]),
+    putVolumeKnown: new Float32Array([1]),
     callDelta: new Float32Array([0.5]),
     putDelta: new Float32Array([-0.4]),
     callVega: new Float32Array([0]),
@@ -669,6 +671,64 @@ test('živá minuta z WS nese mid pro P/C v prémiích (#835)', async () => {
   const row = rows.find((r) => r.strike === 7600)!
   expect(row.callMid).toBe(12.5)
   expect(row.putMid).toBe(8.25)
+})
+
+test('živá minuta s volume null (tasty fallback) nezaloží referenci nulou (#1602)', async () => {
+  // Strike 7610 se poprvé objeví za fallbacku (volume null), pak z IBKR s denním
+  // kumulativem 500 — přírůstek musí být 0, ne 500, a fallback minuta nese
+  // volumeMissing (#1067), ne objem 0
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  await act(async () => {
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [{ strike: 7610, right: 'C', oi: 100, volume: null, delta: 0.5 }],
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  await act(async () => {
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:02:00Z',
+      rows: [{ strike: 7610, right: 'C', oi: 100, volume: 500, delta: 0.5 }],
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  expect(result.current.day.panels.optVolCall).toEqual([0, 0, 0])
+  expect(result.current.day.profileByMinute!.rowsAt(1)[0].volumeMissing).toBe(true)
+})
+
+test('opožděná minuta jiné seance se do dne nevsune (#1602)', async () => {
+  // Seance 16. 7. = [15. 7. 22:00 UTC, 16. 7. 22:00 UTC) v letním čase: minuta
+  // staré seance by jinak dala průběžné maximum z cizího kumulativu
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  await act(async () => {
+    for (const ts of ['2026-07-15T21:59:00Z', '2026-07-16T22:00:00Z']) {
+      socket.emit('snapshot.ES.20260716', {
+        ts_min: ts,
+        rows: [{ strike: 7600, right: 'C', oi: 100, volume: 9000, delta: 0.5 }],
+      })
+    }
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  expect(result.current.day.grid.minutes).toBe(2)
+  expect(result.current.day.panels.optVolCall).toEqual([0, 20])
 })
 
 // ── Rekonstruované minuty (#617) ───────────────────────────────────

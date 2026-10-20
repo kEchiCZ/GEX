@@ -185,3 +185,56 @@ def test_replay_cache_hlavicky(client: TestClient, settings: Settings) -> None:
         f"/replay/ES/20260720/{live_session.isoformat()}", headers={"If-None-Match": etag}
     )
     assert cached.status_code == 304
+
+
+def test_daily_prubezne_maximum_nepretece_pres_hranici_seance(settings: Settings) -> None:
+    """#1602: reference přírůstku žije jen v seanci — kumulativ 999 z doby před
+    nedělním openem (21:30 UTC) ani 5 z úterní seance (pondělí 22:30 UTC) Daily
+    pondělka nepotlačí ani nenafouknou; první výskyt v seanci (10) jen založí stav."""
+    from gexlens_api import main as api_main
+
+    api_main._DAILY_BUNDLE_CACHE.clear()  # uzavřený den z jiného testu by vrátila cache
+    client = TestClient(create_app(settings))
+    version = api_main.DAILY_BUNDLE_VERSION
+
+    def daily(day: dt.date) -> dict[str, float]:
+        url = f"/replay/ES/20260720/{day.isoformat()}?resolution=daily&v={version}"
+        payload: dict[str, float] = client.get(url).json()["daily"]
+        return payload
+
+    assert daily(MONDAY)["opt_vol_call"] == pytest.approx(30.0)  # 10 → 40
+    assert daily(MONDAY + dt.timedelta(days=1))["opt_vol_call"] == pytest.approx(0.0)
+    flow = client.get(f"/flow/ES?date={MONDAY.isoformat()}").json()
+    assert [row["opt_vol"] for row in flow["opt_vol"]] == pytest.approx([0.0, 30.0])
+
+
+def test_daily_immutable_jen_s_aktualni_verzi(client: TestClient) -> None:
+    """#1602: uzavřený Daily balík jde `immutable` jen s `v` = DAILY_BUNDLE_VERSION.
+    Starý frontend (bez `v`) nebo návrat jen jedné služby (jiné `v`) dostane
+    `no-cache`, takže si prohlížeč cizí verzi součtů nezapeče na rok."""
+    from gexlens_api import main as api_main
+
+    api_main._DAILY_BUNDLE_CACHE.clear()
+    url = f"/replay/ES/20260720/{MONDAY.isoformat()}?resolution=daily"
+    current = client.get(f"{url}&v={api_main.DAILY_BUNDLE_VERSION}")
+    assert current.headers["cache-control"] == "public, max-age=31536000, immutable"
+    for stale in (url, f"{url}&v={api_main.DAILY_BUNDLE_VERSION - 1}"):
+        response = client.get(stale)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.json()["daily"] == current.json()["daily"]
+
+
+def test_daily_verze_sedi_s_frontendem() -> None:
+    """#1602: API a frontend nesou touž verzi Daily balíku — rozjetá čísla by
+    vrátila buď staré součty z cache prohlížeče, nebo Daily bez cache."""
+    import re
+
+    from gexlens_api.main import DAILY_BUNDLE_VERSION
+
+    loader = Path(__file__).parents[2] / "frontend" / "src" / "replay" / "loader.ts"
+    match = re.search(
+        r"^export const DAILY_BUNDLE_VERSION = (\d+)$", loader.read_text("utf-8"), re.M
+    )
+    assert match is not None, "DAILY_BUNDLE_VERSION ve frontend/src/replay/loader.ts chybí"
+    assert int(match.group(1)) == DAILY_BUNDLE_VERSION

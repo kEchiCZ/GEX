@@ -21,7 +21,7 @@ import {
   fetchReplayInputs,
 } from './loader'
 import { bundleCacheKey, getCachedBundle, storeCachedBundle } from './bundleCache'
-import { sessionDateIso } from '../instrument/tz'
+import { sessionBoundsUtc, sessionDateIso } from '../instrument/tz'
 import { perfBegin, perfEnd, perfStart } from '../perf/meter'
 import type { GexFieldRow, GexProfileRow, LadderMinuteRow, LiveMinute, LiveMinuteRow, ProfileSource, ReplayDay, ReplayInputs } from './loader' // prettier-ignore
 
@@ -452,8 +452,19 @@ export function useDayData(
         // takže by ji zahodil (chybějící svíčka i sloupec gridu, #143).
         const applied: LiveMinute[] = []
         const known = new Set(current.minutes)
+        // Jen minuty seance zobrazeného dne (#1602): fronta přežije překlopení
+        // dne v 17:00 CT a opožděná minuta staré seance by se vsunula na začátek
+        // osy nového dne — její kumulativ volume by se stal průběžným maximem
+        // a Opt Vol nového dne by stál na nule. Minuty další seance přinese
+        // balík nového dne, který se po překlopení stahuje celý.
+        const session = sessionBoundsUtc(current.date)
         for (const ts of [...pending.keys()].sort((a, b) => (a < b ? -1 : 1))) {
           const partial = pending.get(ts)!
+          const tsMs = Date.parse(ts)
+          if (tsMs < session.openMs || tsMs >= session.closeMs) {
+            pending.delete(ts)
+            continue
+          }
           // Aplikuj minutu, když má snapshot řez (nová/aktualizace mřížky) NEBO už existuje
           // (dorazil jen bar/levels/flow k uzavřené minutě — jinak by svíčka chyběla, #133)
           // NEBO nese aspoň bar: osa X = sjednocení minut ze snapshotů a barů (#459),
@@ -498,7 +509,12 @@ export function useDayData(
         strike: Number(row.strike),
         right: String(row.right) === 'C' ? 'C' : 'P',
         oi: Number(row.oi) || 0,
-        volume: Number(row.volume) || 0,
+        // NULL = řetěz z tasty fallbacku bez objemu (#1067): nula by se stala
+        // referencí přírůstků a první minuta IBKR by nesla celý kumulativ (#1602)
+        volume:
+          row.volume === null || row.volume === undefined || !Number.isFinite(Number(row.volume))
+            ? null
+            : Number(row.volume),
         delta: Number(row.delta) || 0,
         // Vega pro VEX módy (#201) — starší engine pole neposílá → 0
         vega: Number(row.vega) || 0,

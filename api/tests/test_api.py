@@ -350,49 +350,49 @@ def test_replay_bundle(client: TestClient) -> None:
 
 
 def _naive_daily_totals(rows: list[SnapshotRow]) -> dict[str, float]:
-    """Referenční smyčka = přesně algoritmus frontendu `ensureDerived` (#1206):
-    přírůstek vůči předchozí MĚŘENÉ minutě, chybějící strike = 0, jen kladné."""
-    by_minute: dict[dt.datetime, dict[tuple[float, str], tuple[float, float]]] = {}
-    for row in rows:
-        by_minute.setdefault(row.ts_min, {})[(row.strike, row.right)] = (
-            row.volume or 0.0,
-            row.delta or 0.0,
-        )
+    """Referenční smyčka = algoritmus frontendu `ensureDerived` (#1206, #1602):
+    přírůstek proti průběžnému maximu kontraktu, řádek bez objemu referenci
+    nemění, první výskyt kontraktu jen založí stav. Duplicitní řádek ze sešití
+    partic se nepočítá dvakrát: tady a v API vyhrává první, frontend v plném
+    balíku přepíše buňku posledním — u shodných řádků (fixture) bez rozdílu."""
     totals = {
         "opt_vol_call": 0.0,
         "opt_vol_put": 0.0,
         "delta_flow_call": 0.0,
         "delta_flow_put": 0.0,
     }
-    previous: dict[tuple[float, str], float] | None = None
-    for ts_min in sorted(by_minute):
-        current = by_minute[ts_min]
-        if previous is not None:
-            for key in set(current) | set(previous):
-                volume, delta = current.get(key, (0.0, 0.0))
-                increment = volume - previous.get(key, 0.0)
-                if increment > 0:
-                    side = "call" if key[1] == "C" else "put"
-                    totals[f"opt_vol_{side}"] += increment
-                    totals[f"delta_flow_{side}"] += increment * abs(delta)
-        previous = {key: volume for key, (volume, _) in current.items()}
+    seen: set[tuple[dt.datetime, float, str]] = set()
+    reference: dict[tuple[float, str], float] = {}
+    for row in sorted(rows, key=lambda r: r.ts_min):
+        cell = (row.ts_min, row.strike, row.right)
+        if cell in seen:
+            continue
+        seen.add(cell)
+        if row.volume is None:
+            continue
+        key = (row.strike, row.right)
+        previous = reference.get(key)
+        reference[key] = row.volume if previous is None else max(previous, row.volume)
+        if previous is not None and row.volume > previous:
+            increment = row.volume - previous
+            side = "call" if row.right == "C" else "put"
+            totals[f"opt_vol_{side}"] += increment
+            totals[f"delta_flow_{side}"] += increment * abs(row.delta or 0.0)
     return totals
 
 
 def test_daily_totals_ridka_data_jako_frontend() -> None:
     """Řídká matice (strike chybí uprostřed dne, NaN volume, duplicitní minuta ze sešití):
     součty musí sedět s referenční smyčkou — `pivot_table` tu dával jiné hodnoty."""
-    from dataclasses import replace
-
     from gexlens_api.main import daily_totals
 
     rows: list[SnapshotRow] = []
     for minute in range(4):
         for row in snapshot_rows(minute):
             if minute == 1 and row.strike == STRIKES[1]:
-                continue  # strike v minutě 1 chybí → v minutě 2 se počítá od nuly
+                continue  # strike v minutě 1 chybí → v minutě 2 přírůstek za 2 minuty
             if minute == 2 and row.strike == STRIKES[0] and row.right == "P":
-                row = replace(row, volume=None)  # NaN volume = 0
+                row = replace(row, volume=None)  # NULL volume (tasty fallback) není 0
             rows.append(row)
     rows.append(rows[-1])  # duplicitní řádek (sešití partic) nesmí nic přičíst
     frame = pd.DataFrame([r.__dict__ for r in rows])
@@ -401,7 +401,78 @@ def test_daily_totals_ridka_data_jako_frontend() -> None:
     assert last_ts == ts(3)
     for key, expected in reference.items():
         assert totals[key] == pytest.approx(expected), key
+    # Volume roste per strike o 10·(i+1) za minutu, 3 přírůstky → Σ 30·(1+2+3) na stranu.
+    # Mezera ani NULL nic nepřidají (dřív strike po mezeře a NULL nesly celý kumulativ).
+    assert totals["opt_vol_call"] == pytest.approx(180.0)
+    assert totals["opt_vol_put"] == pytest.approx(180.0)
+    assert totals["delta_flow_call"] == pytest.approx(180.0 * 0.5)
+    assert totals["delta_flow_put"] == pytest.approx(180.0 * 0.4)
     assert totals["evo_oi_call"] == pytest.approx(600.0)
+
+
+#: Řady z #1602: propad a návrat k maximu, kmitání IBKR o 1 kontrakt, NULL
+#: uprostřed seance a první výskyt kontraktu až v průběhu seance
+VOLUME_SERIES: list[tuple[list[float | None], list[float]]] = [
+    ([1000.0, 800.0, 760.0, 1000.0, 1010.0], [0.0, 0.0, 0.0, 0.0, 10.0]),
+    ([862.0, 863.0, 862.0, 863.0, 864.0], [0.0, 1.0, 0.0, 0.0, 1.0]),
+    ([100.0, None, 130.0], [0.0, 0.0, 30.0]),
+    ([None, None, 500.0, 510.0], [0.0, 0.0, 0.0, 10.0]),
+]
+
+
+@pytest.mark.parametrize(("series", "expected"), VOLUME_SERIES)
+def test_volume_increments_proti_prubeznemu_maximu(
+    series: list[float | None], expected: list[float]
+) -> None:
+    """#1602: reference přírůstku je průběžné maximum seance, ne poslední hodnota."""
+    from gexlens_api.main import volume_increments
+
+    volume = pd.DataFrame(
+        [series],
+        index=pd.MultiIndex.from_tuples([(7600.0, "C")], names=["strike", "right"]),
+        columns=[ts(m) for m in range(len(series))],
+        dtype=float,
+    )
+    assert volume_increments(volume).iloc[0].tolist() == expected
+
+
+@pytest.mark.parametrize(("series", "expected"), VOLUME_SERIES)
+def test_daily_totals_kmitani_a_null(series: list[float | None], expected: list[float]) -> None:
+    """Daily (#1602): kmitání, propad ani NULL se do Opt Vol a Δ Flow nezapočtou znovu."""
+    from gexlens_api.main import daily_totals
+
+    template = snapshot_rows(0)[0]
+    rows = [
+        replace(template, ts_min=ts(m), strike=7600.0, right="C", volume=v, delta=0.5)
+        for m, v in enumerate(series)
+    ]
+    totals, _ = daily_totals(pd.DataFrame([r.__dict__ for r in rows]))
+    assert totals["opt_vol_call"] == pytest.approx(sum(expected))
+    assert totals["delta_flow_call"] == pytest.approx(sum(expected) * 0.5)
+    assert totals["opt_vol_put"] == 0.0
+
+
+def test_flow_opt_vol_proti_prubeznemu_maximu(settings: Settings) -> None:
+    """`/flow` OptVol (#1602): tentýž vzorec jako Daily — kmitání a propad se
+    nezapočtou znovu a NULL uprostřed seance nespolkne přírůstek za mezeru."""
+    writer = SnapshotWriter(settings)
+    template = snapshot_rows(0)[0]
+    falling, null_gap = VOLUME_SERIES[0][0], VOLUME_SERIES[2][0]
+    for minute, volume in enumerate(falling):
+        rows = [replace(template, ts_min=ts(minute), strike=7600.0, right="C", volume=volume)]
+        if minute < len(null_gap):
+            rows.append(
+                replace(
+                    template, ts_min=ts(minute), strike=7610.0, right="P", volume=null_gap[minute]
+                )
+            )
+        writer.write_minute("ES", "20260717", DAY, rows)
+
+    payload = TestClient(create_app(settings)).get("/flow/ES", params={"date": DAY.isoformat()})
+    opt_vol = [row["opt_vol"] for row in payload.json()["opt_vol"]]
+    # Fixture 20260716 dává 120 v minutách 1 a 2; 20260717 jen +30 za NULL
+    # v minutě 2 a +10 nad maximem v minutě 4
+    assert opt_vol == pytest.approx([0.0, 120.0, 150.0, 0.0, 10.0])
 
 
 def test_replay_bundle_daily_resolution(client: TestClient) -> None:
@@ -442,7 +513,9 @@ def test_daily_and_flow_window_with_print_gap(settings: Settings) -> None:
         [_Flow(ts(3), None, None), _Flow(ts(4), 20.0, 170.0), _Flow(ts(5), None, None)],
     )
     client = TestClient(create_app(settings))
-    url = f"/replay/ES/20260716/{DAY.isoformat()}?resolution=daily"
+    url = (
+        f"/replay/ES/20260716/{DAY.isoformat()}?resolution=daily&v={api_main.DAILY_BUNDLE_VERSION}"
+    )
     for _ in range(2):  # druhé čtení jde z cache uzavřeného dne
         response = client.get(url)
         assert response.status_code == 200
