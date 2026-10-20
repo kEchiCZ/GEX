@@ -1,6 +1,7 @@
 """Vyhodnocení verdiktů dne po settle (#1091): OHLC seance, zásah, kolektor, statistiky."""
 
 import datetime as dt
+import os
 from pathlib import Path
 from typing import Any
 
@@ -323,6 +324,65 @@ def test_ensure_schema_doplni_sloupec_missing(settings: Settings) -> None:
     assert "missing" not in columns()
     repository.ensure_schema()
     assert "missing" in columns()
+
+
+@pytest.mark.skipif(
+    not os.environ.get("GEXLENS_TEST_PG_DSN"),
+    reason="GEXLENS_TEST_PG_DSN nenastaveno (integrace s reálným PostgreSQL)",
+)
+def test_ensure_schema_prevede_outcome_computed_at_na_zonu_postgres() -> None:
+    """#1598: stav produkce — `outcome_computed_at` z ALTERu před #1598 je TIMESTAMP bez
+    zóny s hodnotami v UTC. Migrace převede typ, okamžik zachová a je idempotentní."""
+    engine = create_engine(os.environ["GEXLENS_TEST_PG_DSN"])
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS briefing_verdicts"))
+    repository = BriefingVerdictRepository(engine)
+    try:
+        repository.ensure_schema()
+        computed = dt.datetime(2026, 10, 16, 20, 15)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE briefing_verdicts ALTER COLUMN outcome_computed_at "
+                    "TYPE TIMESTAMP WITHOUT TIME ZONE"
+                )
+            )
+            conn.execute(
+                insert(briefing_verdicts_table).values(
+                    session_date=dt.date(2026, 10, 16),
+                    symbol="ES",
+                    verdict="long",
+                    score=4,
+                    votes=[],
+                    rules_version=3,
+                    created_at=dt.datetime(2026, 10, 16, 12, 0, tzinfo=dt.UTC),
+                    updated_at=dt.datetime(2026, 10, 16, 12, 0, tzinfo=dt.UTC),
+                    outcome_computed_at=computed,
+                )
+            )
+
+        def column_type() -> str:
+            with engine.connect() as conn:
+                return str(
+                    conn.execute(
+                        text(
+                            "SELECT data_type FROM information_schema.columns WHERE "
+                            "table_name = 'briefing_verdicts' "
+                            "AND column_name = 'outcome_computed_at'"
+                        )
+                    ).scalar_one()
+                )
+
+        assert column_type() == "timestamp without time zone"
+        for _ in range(2):  # idempotence
+            repository.ensure_schema()
+            assert column_type() == "timestamp with time zone"
+            with engine.connect() as conn:
+                stored = conn.execute(select(briefing_verdicts_table.c.outcome_computed_at)).one()
+            assert stored[0] == computed.replace(tzinfo=dt.UTC)
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS briefing_verdicts"))
 
 
 def test_upsert_nesaha_na_radek_s_vysledkem(settings: Settings) -> None:

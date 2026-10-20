@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.dayverdict import VERDICT_RULES_VERSION
 from gexlens_engine.compute.scenario import (
     Bar,
     PathPoint,
@@ -18,7 +19,7 @@ from gexlens_engine.compute.scenario import (
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.scenarios import ScenarioCollector, load_bars_between
 from gexlens_engine.storage.emrespect_store import EmRespectRepository, em_respect_table
-from gexlens_engine.storage.scenarios_store import ScenariosRepository
+from gexlens_engine.storage.scenarios_store import ScenariosRepository, scenarios_table
 
 T0 = dt.datetime(2026, 9, 15, 12, 0, tzinfo=dt.UTC)
 
@@ -169,7 +170,7 @@ def test_kolektor_hodnoti_jen_po_terminu_a_jen_bary_po_vzniku(tmp_path: Path) ->
     assert stored is not None and stored.evaluated_at is not None and stored.result == result
     # Druhý průchod už nic nehodnotí; statistiky a disk
     assert collector.run(deadline_ts + dt.timedelta(hours=2)) == []
-    stats = repo.stats("ES")
+    stats = repo.stats("ES", rules_version=VERDICT_RULES_VERSION)
     assert stats["n"] == 1 and stats["hit1_rate"] == 1.0 and stats["n_second"] == 0
     assert repo.disk_usage() == {"bytes": 0, "scenarios": 1, "images": 0}
     bars = load_bars_between(tmp_path, "ES", T0, deadline_ts)
@@ -193,6 +194,7 @@ def _create_at(repo: ScenariosRepository, created_at: dt.datetime, deadline: dt.
         annotation_id=None,
         note=None,
         source="auto",
+        rationale={"rules_version": VERDICT_RULES_VERSION},
     )
 
 
@@ -251,7 +253,7 @@ def test_kolektor_v_nedeli_nic_nevyhodnoti_termin_mimo_seanci_uzavre_bez_upozorn
     evaluated = repo.get(monday_id)
     assert evaluated is not None and evaluated.result is not None
     assert evaluated.result["hit1"] is True
-    assert repo.stats("ES")["n"] == 1
+    assert repo.stats("ES", rules_version=VERDICT_RULES_VERSION)["n"] == 1
 
 
 def test_stats_nezapocita_scenar_s_terminem_mimo_seanci(tmp_path: Path) -> None:
@@ -278,6 +280,45 @@ def test_stats_nezapocita_scenar_s_terminem_mimo_seanci(tmp_path: Path) -> None:
     )
     for scenario_id in (weekday_id, sunday_id, manual_sunday_id):
         repo.record_result(scenario_id, hit, friday + dt.timedelta(hours=8))
-    assert repo.stats("ES")["n"] == 1
-    assert repo.stats("ES", source="auto")["n"] == 1
-    assert repo.stats("ES", source="manual")["n"] == 0
+    assert repo.stats("ES", rules_version=VERDICT_RULES_VERSION)["n"] == 1
+    assert repo.stats("ES", source="auto", rules_version=VERDICT_RULES_VERSION)["n"] == 1
+    assert repo.stats("ES", source="manual", rules_version=VERDICT_RULES_VERSION)["n"] == 0
+
+
+def test_stats_automaticke_jen_aktualni_verze_pravidel(tmp_path: Path) -> None:
+    """#1588 (Rozhodnuto 20. 10.: C): automatický scénář jiné verze pravidel verdiktu
+    nebo bez ní (před #1173 A) do track recordu nejde; ruční verzi nemá a počítá se."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    repo = ScenariosRepository(db)
+    repo.ensure_schema()
+    hit = {"hit1": True, "hit2": None, "order_ok": None, "max_dev_em": 0.2, "verdict": "hit"}
+    friday = dt.datetime(2026, 9, 25, 13, 15, tzinfo=dt.UTC)
+    current_id = _create_at(repo, friday, friday.date())
+    older_id = _create_at(repo, friday, friday.date())
+    bare_id = _create_at(repo, friday, friday.date())
+    manual_id = repo.create(
+        symbol="ES",
+        day=friday.date(),
+        created_at=friday,
+        deadline=friday.date(),
+        deadline_ts=settle_ts(friday.date()),
+        entry=7600.0,
+        targets=[7680.0],
+        path=[{"ts": friday.isoformat(), "price": 7600}],
+        annotation_id=None,
+        note=None,
+    )
+    with db.begin() as conn:
+        for scenario_id, rationale in ((older_id, {"rules_version": 1}), (bare_id, None)):
+            conn.execute(
+                scenarios_table.update()
+                .where(scenarios_table.c.id == scenario_id)
+                .values(rationale=rationale)
+            )
+    for scenario_id in (current_id, older_id, bare_id, manual_id):
+        repo.record_result(scenario_id, hit, friday + dt.timedelta(hours=8))
+    version = VERDICT_RULES_VERSION
+    assert repo.stats("ES", rules_version=version)["n"] == 2  # aktuální auto + ruční
+    assert repo.stats("ES", source="auto", rules_version=version)["n"] == 1
+    assert repo.stats("ES", source="manual", rules_version=version)["n"] == 1
+    assert repo.stats("ES", source="auto", rules_version=1)["n"] == 1  # řádky zůstávají

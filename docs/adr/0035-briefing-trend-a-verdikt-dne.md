@@ -2,7 +2,7 @@
 
 **Stav:** navrženo (2026-09-09, issues #1089, #1090, #1091 — zadal uživatel; pravidla
 a váhy níže jsou volba implementace, čeká na potvrzení, PR nesou `needs-decision`).
-Implementováno: §1–2 v PR #1092 (#1089), §3–4 v PR #1093 (#1090); vyhodnocení §3 = #1091 (engine doplní po settle výsledek US open → settle v bodech i EM, `GET /briefing/verdicts/stats`, karta ve Stats; brána n ≥ 30, pak návrh vah); zmrazení verdiktu od US openu = #1585; verdikt počítá a zapisuje jen engine = #1595 (dodatek 2026-10-17).
+Implementováno: §1–2 v PR #1092 (#1089), §3–4 v PR #1093 (#1090); vyhodnocení §3 = #1091 (engine doplní po settle výsledek US open → settle v bodech i EM, `GET /briefing/verdicts/stats`, karta ve Stats; brána n ≥ 30, pak návrh vah); zmrazení verdiktu od US openu = #1585; verdikt počítá a zapisuje jen engine = #1595 (dodatek 2026-10-17); track record jen z aktuální verze pravidel a zápisů před openem = #1588 (dodatek 2026-10-20).
 **Kontext:** Briefing (#674) říká TYP dne (gamma režim, volatilita), ale ne **v jakém
 trendu trh je**, a nenabízí odpověď na „čekat spíš long, nebo short den". SPEC v2.0
 pojem trendu podkladu nezná — jediné směrové čtení je indikátor tendence (#350),
@@ -136,3 +136,17 @@ opačný hlas overnight; v pondělí PDC nemělo vůbec (nedělní partice, #159
    samotný starý engine by nezapisoval vůbec. Řez v bodě 6 předpokládá nasazení před
    otevřením Globexu v ne 18. 10. 2026 22:00 UTC; při posunu se data v bodě 6, v manuálu 11f
    a v textu track recordu ve Stats opraví.
+
+## Dodatek 2026-10-20: track record jen z aktuální verze pravidel a zápisů před openem (#1588)
+
+Rozhodnuto vlastníkem 20. 10. 2026 (epika #1385, Rozhodnuto, varianty C a B).
+1. **Jen aktuální verze pravidel (C):** `GET /briefing/verdicts/stats` čte jen řádky
+   s `rules_version` = `VERDICT_RULES_VERSION` (3 do bumpu v6, pak 4) a verzi vrací
+   v odpovědi. Totéž platí pro automatické scénáře v `GET /scenarios/stats`
+   (`rationale.rules_version`); ruční scénáře verzi nemají a počítají se vždy. Verze se
+   nesčítají ani nepřepínají. Výsledky starších pravidel o současných nevypovídají a mají
+   n 3–5. Po změně verze začíná track record od nuly, řádky zůstávají v DB i ve výpisu.
+2. **Jen zápisy před US openem (B):** do statistiky jde jen řádek s `updated_at` <
+   `settle.us_open_ts(session_date)`. Jeho hlasy tak neviděly hodnocený pohyb. Od #1585
+   a #1595 jiný řádek vzniknout nejde. Vypadnou staré zápisy Briefingu po openu (id 1, 2, 4,
+   7, 11 z 9. 9.–2. 10. 2026). Nic se nemaže.

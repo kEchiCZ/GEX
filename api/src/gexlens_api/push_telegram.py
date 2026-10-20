@@ -41,6 +41,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from gexlens_engine.compute.setups import CUMDELTA_PRINTS
+
 logger = logging.getLogger(__name__)
 
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/sendMessage"
@@ -122,6 +124,15 @@ class PushTopic:
             lines.append(f"• Ve zvonku: {', '.join(self.kinds)}")
         lines.append(f"• Výchozí: {'zapnuto' if self.default else 'vypnuto'}")
         return lines
+
+
+def fallback_cumdelta_bullet(cumdelta_prints: bool) -> str:
+    """Dopad fallbacku řetězu na CumΔ podle zdroje znaménka — týž obsah jako text
+    alertu v enginu (`tasty/chain_fallback.fallback_alert_message`, #1588): pod
+    midpointem (v5) řady stojí, pod tisky (v6, ADR-0057) běží dál."""
+    if cumdelta_prints:
+        return "Během fallbacku běží CumΔ a net objem dál z tisků, chybí jen rozklad objemu"
+    return "Během fallbacku stojí CumΔ a net objem"
 
 
 PUSH_TOPICS: tuple[PushTopic, ...] = (
@@ -352,7 +363,7 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         (
             "Cena podkladu z tastytrade",
             "Opční řetěz z tastytrade a návrat na IBKR",
-            "Během fallbacku stojí CumΔ a net objem",
+            fallback_cumdelta_bullet(CUMDELTA_PRINTS),
         ),
     ),
     PushTopic(

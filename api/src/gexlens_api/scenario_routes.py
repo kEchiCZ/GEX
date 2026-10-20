@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from gexlens_engine.compute.dayverdict import VERDICT_RULES_VERSION
 from gexlens_engine.compute.scenario import PathPoint, targets_from_path
 from gexlens_engine.compute.settle import is_trading_session, settle_ts, trading_session_date
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -178,11 +179,17 @@ def build_scenario_router(
     @router.get("/scenarios/stats")
     def scenarios_stats(symbol: str | None = None) -> dict[str, Any]:
         """Track record scénářů per zdroj (auto = verdikt dne, manual = nakreslené);
-        `preliminary` dokud n < 30 (stejná brána jako verdikt dne)."""
-        total = repo().stats(symbol)
-        by_source = {source: repo().stats(symbol, source=source) for source in ("auto", "manual")}
+        `preliminary` dokud n < 30 (stejná brána jako verdikt dne). Automatické jen
+        z aktuální verze pravidel verdiktu (#1588)."""
+        version = VERDICT_RULES_VERSION
+        total = repo().stats(symbol, rules_version=version)
+        by_source = {
+            source: repo().stats(symbol, source=source, rules_version=version)
+            for source in ("auto", "manual")
+        }
         return {
             "symbol": symbol,
+            "rules_version": version,
             "preliminary": total["n"] < 30,
             **total,
             "by_source": {

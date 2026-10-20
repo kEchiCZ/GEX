@@ -33,7 +33,8 @@ ADDED_COLUMNS: dict[str, str] = {
     "outcome_move_pts": "FLOAT",
     "outcome_move_em": "FLOAT",
     "outcome_hit": "BOOLEAN",
-    "outcome_computed_at": "TIMESTAMP",
+    # S časovou zónou jako model (`meta.py`); do #1598 ALTER zakládal TIMESTAMP bez ní
+    "outcome_computed_at": "TIMESTAMP WITH TIME ZONE",
 }
 
 #: Brána vzorku jako u signálů (SPEC 6.2): pod ní se hit-rate nevykládá
@@ -77,13 +78,28 @@ class BriefingVerdictRepository:
         table = briefing_verdicts_table.name
         if not inspector.has_table(table):
             return
-        columns = {col["name"] for col in inspector.get_columns(table)}
+        columns = {col["name"]: col for col in inspector.get_columns(table)}
         added = {name: sql for name, sql in ADDED_COLUMNS.items() if name not in columns}
-        if not added:
+        # Sloupec z ALTERu před #1598 je na PG `TIMESTAMP` bez zóny; SQLite zónu nenese
+        naive = (
+            self._engine.dialect.name == "postgresql"
+            and "outcome_computed_at" in columns
+            and getattr(columns["outcome_computed_at"]["type"], "timezone", True) is False
+        )
+        if not added and not naive:
             return
         with self._engine.begin() as conn:
             for name, sql_type in added.items():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+            if naive:
+                # Hodnoty jsou UTC (engine zapisuje UTC, TimeZone serveru Etc/UTC) —
+                # převod drží okamžik, data se nemění (#1598)
+                conn.execute(
+                    text(
+                        f"ALTER TABLE {table} ALTER COLUMN outcome_computed_at "
+                        "TYPE TIMESTAMP WITH TIME ZONE USING outcome_computed_at AT TIME ZONE 'UTC'"
+                    )
+                )
 
     def upsert_verdict(
         self,
@@ -188,20 +204,39 @@ class BriefingVerdictRepository:
                 )
             )
 
-    def evaluated(self, symbol: str | None, *, since: dt.date) -> list[dict[str, Any]]:
-        """Verdikty s výsledkem od `since` (podklad statistik)."""
+    def evaluated(
+        self, symbol: str | None, *, since: dt.date, rules_version: int
+    ) -> list[dict[str, Any]]:
+        """Verdikty s výsledkem od `since` jedné verze pravidel (podklad statistik).
+
+        Verze se nesčítají — výsledky starších pravidel o současných nevypovídají
+        (ADR-0057 bod 8; Rozhodnuto 20. 10.: jen aktuální verze). Řádek zapsaný
+        od US openu seance vypadne: jeho hlasy už viděly část hodnoceného pohybu
+        (#1585, Rozhodnuto 20. 10.: B). Nic se nemaže.
+        """
         stmt = (
             select(briefing_verdicts_table)
             .where(
                 briefing_verdicts_table.c.session_date >= since,
                 briefing_verdicts_table.c.outcome_computed_at.is_not(None),
+                briefing_verdicts_table.c.rules_version == rules_version,
             )
             .order_by(briefing_verdicts_table.c.session_date)
         )
         if symbol is not None:
             stmt = stmt.where(briefing_verdicts_table.c.symbol == symbol)
         with self._engine.connect() as conn:
-            return [dict(row._mapping) for row in conn.execute(stmt)]
+            rows = [dict(row._mapping) for row in conn.execute(stmt)]
+        return [row for row in rows if _written_before_open(row)]
+
+
+def _written_before_open(row: dict[str, Any]) -> bool:
+    """Zapsal se řádek před US openem své seance? Od #1595 jinak vzniknout nejde
+    (stráž zápisu), po openu jsou jen řádky z Briefingu do 16. 10. 2026."""
+    written: dt.datetime = row["updated_at"]
+    if written.tzinfo is None:  # SQLite vrací naivní čas, ukládá se UTC
+        written = written.replace(tzinfo=dt.UTC)
+    return written < us_open_ts(row["session_date"])
 
 
 def verdict_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:

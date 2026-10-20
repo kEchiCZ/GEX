@@ -13,6 +13,7 @@ import datetime as dt
 from fastapi import APIRouter, Query
 
 from gexlens_api.meta_repo import MetaRepository
+from gexlens_engine.compute.dayverdict import VERDICT_RULES_VERSION
 from gexlens_engine.storage.briefing_verdicts_store import BriefingVerdictRepository, verdict_stats
 
 
@@ -33,10 +34,18 @@ def build_briefing_router(repository: MetaRepository) -> APIRouter:
     def verdicts_stats(
         symbol: str | None = None, days: int = Query(120, ge=1, le=400)
     ) -> dict[str, object]:
-        """Track record verdiktů (#1091): hit-rate per verdikt a per složka hlasování."""
+        """Track record verdiktů (#1091): hit-rate per verdikt a per složka hlasování,
+        jen aktuální verze pravidel a řádky zapsané před US openem (#1588)."""
         since = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=days)
-        rows = verdicts_repository().evaluated(symbol, since=since)
-        return {"symbol": symbol, "days": days, **verdict_stats(rows)}
+        rows = verdicts_repository().evaluated(
+            symbol, since=since, rules_version=VERDICT_RULES_VERSION
+        )
+        return {
+            "symbol": symbol,
+            "days": days,
+            "rules_version": VERDICT_RULES_VERSION,
+            **verdict_stats(rows),
+        }
 
     @router.get("/briefing/verdicts")
     def verdicts_list(

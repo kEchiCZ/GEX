@@ -69,7 +69,9 @@ from gexlens_api.security import (
 )
 from gexlens_api.sentiment_routes import build_sentiment_router
 from gexlens_api.status import StatusStore
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT
 from gexlens_engine.compute.expiry_calendar import expiry_calendar
+from gexlens_engine.compute.facalibration import FA_MIN_DAYS
 from gexlens_engine.compute.gammacliff import build_cliff
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.paper import POINT_VALUES
@@ -413,21 +415,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Frontend z toho kreslí badge „FA α=0.34 · 5 dní". Před prvním
         kalibračním bodem je seznam prázdný — engine jede na defaultu
         z konfigurace a UI to přizná („FA α default").
+
+        `source` = zdroj netu kalibrace (ADR-0057 bod 8, NULL ve stavu před #1460
+        = midpoint). Pod tisky (v6) FA jede až od `min_days` dnů kalibrace téhož
+        zdroje, jaký hlásí engine v `/status.cumdelta_source` (bod 6) — frontend
+        z toho ukáže „nekalibrováno n/5" (#1588).
         """
         try:
             states = alpha_repository().list_all()
         except Exception:
             states = []  # DB nedostupná — UI drží tvar
         return {
+            "min_days": FA_MIN_DAYS,
             "alphas": [
                 {
                     "symbol": state.symbol,
                     "alpha": state.alpha,
                     "days": state.days,
+                    "source": state.source or SOURCE_MIDPOINT,
                     "updated_at": state.updated_at.isoformat(),
                 }
                 for state in states
-            ]
+            ],
         }
 
     # Katalog CME produktů pro vyhledávání (#521): roots + lidské názvy.
@@ -1319,7 +1328,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         S from=&to= (#483) navíc okenní souhrn: CumΔ_okno = CumΔ(t2) − CumΔ(t1)
         (kotva na open seance se rozdílem odečte), Vol podkladu a OptVol jako
-        součty přes minuty okna (t1, t2].
+        součty přes minuty okna (t1, t2]. Minuta bez tisků v (t1, t2] dá
+        CumΔ_okno null — rozdíl přes mezeru je neúplný (ADR-0057 bod 4, #1588).
         """
         flow_frame = repository.session_frame(lambda d: repository.flow(symbol, d), date)
         flow_records = _records(flow_frame)
@@ -1331,11 +1341,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(422, "Okenní mód vyžaduje from ≤ to")
 
             def cum_at(limit: dt.datetime) -> float:
-                eligible = flow_frame[flow_frame["ts_min"] <= limit]
-                if eligible.empty:
-                    return 0.0  # před prvním záznamem = od začátku seance
-                value = eligible.iloc[-1]["cum_delta"]
-                return 0.0 if pd.isna(value) else float(value)
+                # Poslední měřená úroveň ≤ limit: po mezeře CumΔ pokračuje od ní
+                # (ADR-0057 bod 3), NULL není 0
+                measured = flow_frame.loc[flow_frame["ts_min"] <= limit, "cum_delta"].dropna()
+                if measured.empty:
+                    return 0.0  # před prvním měřením = od začátku seance
+                return float(measured.iloc[-1])
+
+            stamps = flow_frame["ts_min"]
+            in_window = flow_frame[(stamps > from_ts) & (stamps <= to_ts)]
+            window_gap = bool(in_window["cum_delta"].isna().any())
 
             def series_sum(records: list[dict[str, object]], key: str) -> float:
                 total = 0.0
@@ -1353,7 +1368,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload["window"] = {
                 "from_ts": from_ts.isoformat(),
                 "to_ts": to_ts.isoformat(),
-                "cum_delta": cum_at(to_ts) - cum_at(from_ts),
+                "cum_delta": None if window_gap else cum_at(to_ts) - cum_at(from_ts),
                 "vol": series_sum(vol, "vol"),
                 "opt_vol": series_sum(opt_vol, "opt_vol"),
             }
@@ -1488,7 +1503,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                 elif key == "flow":
                     if not frame.empty:
-                        daily["cum_delta"] = float(frame["cum_delta"].iloc[-1])
+                        # Minuta bez tisků je NULL (ADR-0057 bod 3): CumΔ dne je
+                        # poslední měřená úroveň, mezera se jen spočítá — NaN by
+                        # JSON shodil na 500 uložené v cache až do restartu (#1588)
+                        cum = frame["cum_delta"]
+                        measured = cum.dropna()
+                        daily["cum_delta"] = (
+                            float(measured.iloc[-1]) if not measured.empty else None
+                        )
+                        daily["cum_delta_gap_minutes"] = int(cum.isna().sum())
                     frame = _last_state(frame)
                 else:
                     frame = _last_state(frame)
@@ -1497,6 +1520,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             daily.setdefault("bar", None)
             daily.setdefault("vol", 0.0)
             daily.setdefault("cum_delta", None)
+            daily.setdefault("cum_delta_gap_minutes", 0)
             bundle["daily"] = daily
             if immutable:
                 if len(_DAILY_BUNDLE_CACHE) >= _DAILY_BUNDLE_CACHE_MAX:

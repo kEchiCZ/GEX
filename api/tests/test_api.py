@@ -31,7 +31,9 @@ MINUTES = 3
 class _Flow:
     """Minimální FlowRowLike pro fixture (bez závislosti na compute)."""
 
-    def __init__(self, ts_min: dt.datetime, flow_delta: float, cum_delta: float) -> None:
+    def __init__(
+        self, ts_min: dt.datetime, flow_delta: float | None, cum_delta: float | None
+    ) -> None:
         self.ts_min = ts_min
         self.flow_delta = flow_delta
         self.cum_delta = cum_delta
@@ -426,6 +428,43 @@ def test_replay_bundle_daily_resolution(client: TestClient) -> None:
     assert "daily" not in full and len(full["bars"]) == MINUTES
 
 
+def test_daily_and_flow_window_with_print_gap(settings: Settings) -> None:
+    """Mezera trade větve = NULL minuta (ADR-0057 bod 3, #1588): Daily i okno /flow
+    vrací 200 — CumΔ dne je poslední měřená úroveň, okno přes mezeru je null."""
+    from gexlens_api import main as api_main
+
+    api_main._DAILY_BUNDLE_CACHE.clear()  # uzavřený den z jiného testu by vrátila cache
+    # Za minutou 2 (CumΔ 150): mezera uprostřed (3), měření (4) pokračuje od 150,
+    # mezera na konci (5)
+    SnapshotWriter(settings).write_flow(
+        "ES",
+        DAY,
+        [_Flow(ts(3), None, None), _Flow(ts(4), 20.0, 170.0), _Flow(ts(5), None, None)],
+    )
+    client = TestClient(create_app(settings))
+    url = f"/replay/ES/20260716/{DAY.isoformat()}?resolution=daily"
+    for _ in range(2):  # druhé čtení jde z cache uzavřeného dne
+        response = client.get(url)
+        assert response.status_code == 200
+        daily = response.json()["daily"]
+        assert daily["cum_delta"] == pytest.approx(170.0)
+        assert daily["cum_delta_gap_minutes"] == 2
+
+    def window(start: int, end: int) -> float | None:
+        params = {"date": DAY.isoformat(), "from": ts(start).isoformat(), "to": ts(end).isoformat()}
+        response = client.get("/flow/ES", params=params)
+        assert response.status_code == 200
+        value: float | None = response.json()["window"]["cum_delta"]
+        return value
+
+    assert window(0, 2) == pytest.approx(100.0)  # bez mezery beze změny
+    assert window(2, 4) is None  # mezera v minutě 3
+    assert window(4, 5) is None  # mezera na konci okna
+    # Hranice okna v mezeře: úroveň k minutě 3 je poslední měřená (150), ne 0
+    assert window(3, 4) == pytest.approx(20.0)
+    assert window(5, 5) == pytest.approx(0.0)  # prázdné okno
+
+
 def test_replay_bundle_oiest(settings: Settings) -> None:
     """OI odhad z toku (#232): /replay nese řadu oiest + FA Dyn GEX profil."""
     from gexlens_engine.storage.parquet_store import GexProfileRow, OiEstRow
@@ -491,12 +530,13 @@ def test_fa_alpha_endpoint(settings: Settings) -> None:
     from sqlalchemy import create_engine as sa_create_engine
 
     from gexlens_engine.compute.facalibration import AlphaCalibrationPoint
-    from gexlens_engine.storage.fa_calibration import FaAlphaRepository
+    from gexlens_engine.storage.fa_calibration import FaAlphaRepository, fa_alpha_table
 
     client = TestClient(create_app(settings))
-    assert client.get("/fa/alpha").json() == {"alphas": []}
+    assert client.get("/fa/alpha").json() == {"min_days": 5, "alphas": []}
 
-    repo = FaAlphaRepository(sa_create_engine(settings.database_url))
+    repo_engine = sa_create_engine(settings.database_url)
+    repo = FaAlphaRepository(repo_engine)
     repo.ensure_schema()
     point = AlphaCalibrationPoint(samples=8, ratio_median=0.34, ratio_buy=0.4, ratio_sell=0.31)
     repo.record(
@@ -516,6 +556,24 @@ def test_fa_alpha_endpoint(settings: Settings) -> None:
     assert row["symbol"] == "ES"
     assert row["alpha"] == 0.34
     assert row["days"] == 5
+    assert row["source"] == "midpoint"
+    # Stav před #1460 nemá zdroj (NULL) — čte se jako midpoint (ADR-0057 bod 8, #1588)
+    repo.record(
+        "NQ",
+        DAY,
+        "20260716",
+        point,
+        alpha_after=0.3,
+        days=2,
+        now=dt.datetime(2026, 8, 6, 12, 0, tzinfo=dt.UTC),
+        source="midpoint",
+    )
+    with repo_engine.begin() as conn:
+        conn.execute(
+            fa_alpha_table.update().where(fa_alpha_table.c.symbol == "NQ").values(source=None)
+        )
+    sources = {row["symbol"]: row["source"] for row in client.get("/fa/alpha").json()["alphas"]}
+    assert sources == {"ES": "midpoint", "NQ": "midpoint"}
 
 
 def test_profile_aggregate_sums_expiries(settings: Settings) -> None:

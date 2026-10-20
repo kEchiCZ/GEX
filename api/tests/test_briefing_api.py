@@ -11,17 +11,19 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import text, update
 
 from gexlens_api.briefing_routes import build_briefing_router
 from gexlens_api.main import create_app
 from gexlens_api.meta_repo import MetaRepository
+from gexlens_engine.compute.dayverdict import VERDICT_RULES_VERSION
 from gexlens_engine.compute.settle import is_trading_session, us_open_ts
 from gexlens_engine.config import Settings
 from gexlens_engine.storage.briefing_verdicts_store import (
     BriefingVerdictRepository,
     VerdictOutcome,
 )
+from gexlens_engine.storage.meta import briefing_verdicts_table
 
 
 def _trading_day_on_or_before(day: dt.date) -> dt.date:
@@ -70,7 +72,7 @@ def _write(meta: MetaRepository, session: dt.date = TODAY, **overrides: Any) -> 
         "verdict": "long",
         "score": 4,
         "votes": VOTES,
-        "rules_version": 3,
+        "rules_version": VERDICT_RULES_VERSION,
     }
     values.update(overrides)
     repository.upsert_verdict(session_date=session, **values)
@@ -143,3 +145,52 @@ def test_verdict_stats_prazdne_a_po_vyhodnoceni(client: TestClient, meta: MetaRe
     assert stats["by_verdict"]["long"]["hits"] == 1
     assert stats["by_vote"]["trend_higher"] == {"n": 1, "hits": 1, "hit_rate": 1.0, "wilson_lb": pytest.approx(0.207, abs=0.01), "gate_open": False}  # fmt: skip  # noqa: E501
     assert client.get("/briefing/verdicts/stats", params={"symbol": "NQ"}).json()["evaluated"] == 0
+
+
+def _evaluate(meta: MetaRepository, verdict_id: int, hit: bool) -> None:
+    BriefingVerdictRepository(meta.engine()).update_outcome(
+        verdict_id,
+        VerdictOutcome(
+            open=7000.0, us_open=7010.0, close=7040.0, move_pts=30.0, move_em=0.75, hit=hit
+        ),
+        dt.datetime.now(dt.UTC),
+    )
+
+
+def _past_session(month: int) -> dt.date:
+    """Obchodní den kolem 15. dne `month` do dneška — do 400 dní okna `days` (le=400)."""
+    year = TODAY.year if dt.date(TODAY.year, month, 15) <= TODAY else TODAY.year - 1
+    return _trading_day_on_or_before(dt.date(year, month, 15))
+
+
+@pytest.mark.parametrize(
+    "session",
+    [_past_session(7), _past_session(1)],  # US letní čas (open 13:30 UTC) a zimní (14:30 UTC)
+)
+def test_verdict_stats_jen_aktualni_verze_a_zapis_pred_openem(
+    client: TestClient, meta: MetaRepository, session: dt.date
+) -> None:
+    """#1588 (Rozhodnuto 20. 10.: C a B): statistiky čtou jen aktuální verzi pravidel
+    a vyřadí řádek zapsaný od US openu (řádky z Briefingu do 16. 10.); nic se nemaže."""
+    days = (dt.datetime.now(dt.UTC).date() - session).days + 30
+    _write(meta, session, symbol="ES", rules_version=VERDICT_RULES_VERSION)
+    _write(meta, session, symbol="NQ", rules_version=VERDICT_RULES_VERSION)
+    _write(meta, session, symbol="RTY", rules_version=VERDICT_RULES_VERSION - 1)
+    rows = client.get("/briefing/verdicts", params={"days": days}).json()["verdicts"]
+    ids = {row["symbol"]: row["id"] for row in rows}
+    for verdict_id in ids.values():
+        _evaluate(meta, verdict_id, hit=True)
+    # NQ přepsaný Briefingem až v okamžiku openu (vzor id 1 z 9. 9.) — look-ahead
+    with meta.engine().begin() as conn:
+        conn.execute(
+            update(briefing_verdicts_table)
+            .where(briefing_verdicts_table.c.id == ids["NQ"])
+            .values(updated_at=us_open_ts(session))
+        )
+
+    stats = client.get("/briefing/verdicts/stats", params={"days": days}).json()
+    assert stats["rules_version"] == VERDICT_RULES_VERSION
+    assert stats["evaluated"] == 1  # jen ES: NQ po openu, RTY starší verze
+    assert stats["by_verdict"]["long"]["n"] == 1
+    # Řádky zůstávají ve výpisu
+    assert len(client.get("/briefing/verdicts", params={"days": days}).json()["verdicts"]) == 3
