@@ -238,3 +238,18 @@ def test_daily_verze_sedi_s_frontendem() -> None:
     )
     assert match is not None, "DAILY_BUNDLE_VERSION ve frontend/src/replay/loader.ts chybí"
     assert int(match.group(1)) == DAILY_BUNDLE_VERSION
+
+
+def test_zdroj_cumdelta_sedi_s_frontendem() -> None:
+    """#1588: frontend skrývá midpointovou historii podle `source` řádků flow —
+    hodnota zdroje tisků musí sedět s enginem, jinak by skryl i dny z tisků."""
+    import re
+
+    from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR
+
+    loader = Path(__file__).parents[2] / "frontend" / "src" / "replay" / "loader.ts"
+    match = re.search(
+        r"^export const CUMDELTA_SOURCE_AGGRESSOR = '(\w+)'$", loader.read_text("utf-8"), re.M
+    )
+    assert match is not None, "CUMDELTA_SOURCE_AGGRESSOR ve frontend/src/replay/loader.ts chybí"
+    assert match.group(1) == SOURCE_AGGRESSOR

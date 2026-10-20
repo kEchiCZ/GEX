@@ -56,6 +56,15 @@ function dailyBar(dayIdx: number, bars: PriceBar[], previousClose: number): Pric
   )
 }
 
+/** Poslední ne-null hodnota řady (kumulativ s mezerami); prázdná = null. */
+function lastMeasured(series: (number | null)[]): number | null {
+  for (let index = series.length - 1; index >= 0; index -= 1) {
+    const value = series[index]
+    if (value !== null && value !== undefined) return value
+  }
+  return null
+}
+
 /** Složení Daily datasetu z denních replay balíků (seřazených vzestupně dle data). */
 export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): DayData {
   // Díry v ose (#516): dny bez zaznamenaných dat dostávají prázdný sloupec
@@ -75,7 +84,11 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
   const vol = Array.from({ length: columns }, () => 0)
   const optVolCall = Array.from({ length: columns }, () => 0)
   const optVolPut = Array.from({ length: columns }, () => 0)
-  const cumDelta = Array.from({ length: columns }, () => 0)
+  // Cum Δ dne = poslední měřená úroveň (ADR-0057 bod 3); den bez měření
+  // nebo chybějící den = null (mezera), ne nula
+  const cumDelta: (number | null)[] = Array.from({ length: columns }, () => null)
+  const cumDeltaMidpoint = Array.from({ length: columns }, () => false)
+  const cumDeltaGapMinutes = Array.from({ length: columns }, () => 0)
   const deltaFlowCall = Array.from({ length: columns }, () => 0)
   const deltaFlowPut = Array.from({ length: columns }, () => 0)
   const evoOiCall = Array.from({ length: columns }, () => 0)
@@ -111,7 +124,9 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
     vol[dayIdx] = totals ? totals.vol : sum(day.panels.vol)
     optVolCall[dayIdx] = totals ? totals.optVolCall : sum(day.panels.optVolCall)
     optVolPut[dayIdx] = totals ? totals.optVolPut : sum(day.panels.optVolPut)
-    cumDelta[dayIdx] = totals ? (totals.cumDelta ?? 0) : (day.panels.cumDelta.at(-1) ?? 0)
+    cumDelta[dayIdx] = totals ? totals.cumDelta : lastMeasured(day.panels.cumDelta)
+    cumDeltaMidpoint[dayIdx] = day.panels.cumDeltaMidpoint?.at(-1) ?? false
+    cumDeltaGapMinutes[dayIdx] = totals?.cumDeltaGapMinutes ?? 0
     deltaFlowCall[dayIdx] = totals ? totals.deltaFlowCall : sum(day.panels.deltaFlowCall)
     deltaFlowPut[dayIdx] = totals ? totals.deltaFlowPut : sum(day.panels.deltaFlowPut)
     // Evo OI (#573): úroveň posledního sloupce dne — Σ přes striky z raw matic
@@ -164,7 +179,11 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
       sessions: [],
       timestamp: entries.at(-1)?.date ?? '',
     },
-    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut }, // prettier-ignore
+    // Popisek „od HH:MM" (#518) je intradenní: sloupec Daily je celý den
+    // CVD podkladu (#829) Daily nekreslí: balík nese stav poslední minuty seance,
+    // ta leží v pauze Globexu a CVD tam je 0 — hodnota z konce obchodování
+    // chce pole z API (#1633)
+    panels: { vol, optVolCall, optVolPut, cumDelta, cumDeltaMidpoint, cumDeltaGapMinutes, futuresCvd: [], deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut, cumDeltaFromIso: null }, // prettier-ignore
     profileByMinute: profileSourceOf(profileByMinute),
     demoProfileRows: null,
     spotSeries,

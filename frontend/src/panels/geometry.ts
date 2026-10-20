@@ -1,8 +1,8 @@
 /** Geometrie spodních panelů (SPEC 7.3) — čisté helpery pro SVG. */
 
 /** Vrchol (max |hodnota|) řady pro normalizaci; 1e-9 chrání před dělením nulou. */
-export function seriesPeak(values: number[]): number {
-  return Math.max(1e-9, ...values.map((value) => Math.abs(value)))
+export function seriesPeak(values: (number | null)[]): number {
+  return Math.max(1e-9, ...values.map((value) => Math.abs(value ?? 0)))
 }
 
 /** Výšky sloupců normalizované vrcholem (0..maxHeight).
@@ -27,35 +27,66 @@ dlouhé úseky „jede po hraně" a vypadá uříznutě (#169). */
 export const CUM_DELTA_PAD = 6
 
 /** Cum Δ jako plocha nad/pod nulou (SPEC 7.3); symetrická škála kolem středu,
-extrém končí `pad` px od okraje pásu. */
+extrém končí `pad` px od okraje pásu. Řada bez děr = jeden úsek. */
 export function cumDeltaAreas(
   values: number[],
   width: number,
   height: number,
   pad = CUM_DELTA_PAD,
 ): CumDeltaGeometry {
-  const zeroY = height / 2
-  if (values.length === 0) {
-    return { positive: '', negative: '', zeroY }
+  const { segments, zeroY } = cumDeltaSegments(values, width, height, pad)
+  return {
+    positive: segments[0]?.positive ?? '',
+    negative: segments[0]?.negative ?? '',
+    zeroY,
   }
-  const peak = Math.max(1e-9, ...values.map((value) => Math.abs(value)))
+}
+
+/** Úsek plochy Cum Δ mezi dvěma mezerami (body polygonů nad a pod nulou). */
+export interface CumDeltaSegment {
+  positive: string
+  negative: string
+}
+
+/** Cum Δ s mezerami (ADR-0057 bod 3): null = minuta bez měření, plocha se
+přeruší a souvislé úseky se kreslí zvlášť — spojnice přes díru by tvrdila tok,
+který nikdo neměřil. Škála a pozice X jsou společné celé řadě, takže úseky
+na sebe sedí jako jedna plocha. */
+export function cumDeltaSegments(
+  values: (number | null)[],
+  width: number,
+  height: number,
+  pad = CUM_DELTA_PAD,
+): { segments: CumDeltaSegment[]; zeroY: number } {
+  const zeroY = height / 2
+  const measured = values.filter((value): value is number => value !== null)
+  if (measured.length === 0) return { segments: [], zeroY }
+  const peak = Math.max(1e-9, ...measured.map((value) => Math.abs(value)))
   const scale = Math.max(0, zeroY - pad) / peak
   const step = width / values.length
   const x = (index: number) => (index + 0.5) * step
-
-  const positivePoints = values.map(
-    (value, index) => `${x(index)},${zeroY - Math.max(0, value) * scale}`,
-  )
-  const negativePoints = values.map(
-    (value, index) => `${x(index)},${zeroY - Math.min(0, value) * scale}`,
-  )
-  const baselineEnd = `${x(values.length - 1)},${zeroY}`
-  const baselineStart = `${x(0)},${zeroY}`
-  return {
-    positive: `${baselineStart} ${positivePoints.join(' ')} ${baselineEnd}`,
-    negative: `${baselineStart} ${negativePoints.join(' ')} ${baselineEnd}`,
-    zeroY,
+  const segments: CumDeltaSegment[] = []
+  let start = -1
+  for (let index = 0; index <= values.length; index += 1) {
+    const value = index < values.length ? values[index] : null
+    if (value !== null && start < 0) start = index
+    if (value !== null || start < 0) continue
+    const part = values.slice(start, index) as number[]
+    // Osamocená měřená minuta mezi mezerami: úsek široký jeden krok, jinak by
+    // polygon nulové šířky nebyl vidět
+    const xs = part.length === 1 ? [x(start) - step / 2, x(start) + step / 2] : part.map((_, offset) => x(start + offset)) // prettier-ignore
+    const ys = part.length === 1 ? [part[0], part[0]] : part
+    const positivePoints = ys.map((v, offset) => `${xs[offset]},${zeroY - Math.max(0, v) * scale}`) // prettier-ignore
+    const negativePoints = ys.map((v, offset) => `${xs[offset]},${zeroY - Math.min(0, v) * scale}`) // prettier-ignore
+    const baselineStart = `${xs[0]},${zeroY}`
+    const baselineEnd = `${xs[xs.length - 1]},${zeroY}`
+    segments.push({
+      positive: `${baselineStart} ${positivePoints.join(' ')} ${baselineEnd}`,
+      negative: `${baselineStart} ${negativePoints.join(' ')} ${baselineEnd}`,
+    })
+    start = -1
   }
+  return { segments, zeroY }
 }
 
 /** CVD podkladu jako linka přes plochu opčního toku (#829).
@@ -63,29 +94,36 @@ export function cumDeltaAreas(
 Vlastní normalizace, ne sdílená s plochou: opční delta tok je v deltách ×
 multiplikátor, CVD v kontraktech futures — společná škála by jednu z řad
 zploštila k nule. Čte se proto tvar a poloha vůči nule, ne absolutní výška;
-proto taky vlastní hodnota v hlavičce panelu. Prázdná řada → prázdný path. */
-export function cvdLinePoints(
+proto taky vlastní hodnota v hlavičce panelu. Vrací body úseků (jeden
+`<polyline>` na úsek); prázdná řada → žádný úsek. */
+export function cvdLineSegments(
   values: (number | null)[],
   width: number,
   height: number,
   pad = CUM_DELTA_PAD,
-): string {
+): string[] {
   const zeroY = height / 2
   const known = values.filter((value): value is number => value !== null)
   if (known.length === 0) {
-    return ''
+    return []
   }
   const peak = Math.max(1e-9, ...known.map((value) => Math.abs(value)))
   const scale = Math.max(0, zeroY - pad) / peak
   const step = width / values.length
-  // Minuty bez CVD (výpadek tasty větve) se přeskočí — linka se přeruší,
-  // místo aby propadla k nule a předstírala vyrovnaný tok
-  return values
-    .map((value, index) =>
-      value === null ? null : `${(index + 0.5) * step},${zeroY - value * scale}`,
-    )
-    .filter((point): point is string => point !== null)
-    .join(' ')
+  // Minuty bez CVD (výpadek tasty větve, za pozicí přetáčení) linku přeruší —
+  // úsečka přes díru by předstírala tok, který nikdo neměřil (#1579)
+  const segments: string[] = []
+  let points: string[] = []
+  values.forEach((value, index) => {
+    if (value === null) {
+      if (points.length > 0) segments.push(points.join(' '))
+      points = []
+      return
+    }
+    points.push(`${(index + 0.5) * step},${zeroY - value * scale}`)
+  })
+  if (points.length > 0) segments.push(points.join(' '))
+  return segments
 }
 
 /** Svíčka sentimentu v Daily pohledu (#296, SPEC 7.1); null = den bez dat. */
@@ -175,16 +213,16 @@ export function sentimentThresholdPoints(
 
 /** Zobrazovaná řada Evo OI: Δ od začátku osy (default — absolutní OI se mění
 málo a byl by opticky plochý), nebo absolutní úroveň. */
-export function evoOiDisplay(series: number[], mode: 'delta' | 'abs'): number[] {
+export function evoOiDisplay(series: (number | null)[], mode: 'delta' | 'abs'): (number | null)[] {
   if (mode === 'abs') return series
-  const base = series.find((value) => value > 0) ?? 0
-  return series.map((value) => (value > 0 || base === 0 ? value - base : 0))
+  const base = series.find((value): value is number => value !== null && value > 0) ?? 0
+  return series.map((value) => (value === null ? null : value > 0 || base === 0 ? value - base : 0))
 }
 
 /** SVG path schodovité křivky (H → V úseky) — OI se mezi aktualizacemi tick 101
 NEinterpoluje: šikmá čára by si vymýšlela průběh, který jsme nenaměřili. */
 export function evoOiStepPath(
-  series: number[],
+  series: (number | null)[],
   width: number,
   toY: (value: number) => number,
 ): string {
@@ -192,6 +230,11 @@ export function evoOiStepPath(
   let path = ''
   let previousY: number | null = null
   series.forEach((value, index) => {
+    // null = za pozicí přetáčení (#1591): schod končí, nepadá k nule
+    if (value === null) {
+      previousY = null
+      return
+    }
     const y = toY(value)
     if (previousY === null) {
       path += `M${(index * step).toFixed(1)},${y.toFixed(1)}`
@@ -202,4 +245,31 @@ export function evoOiStepPath(
     previousY = y
   })
   return path
+}
+
+/** Důvod, proč panel Cum Δ minutu nekreslí (ADR-0057 bod 8). */
+export const CUMDELTA_MIDPOINT_REASON = 'midpoint, obrácené znaménko (#1018)'
+
+/** Řada Cum Δ k vykreslení (ADR-0057 bod 8): s `hideMidpoint` (běžící engine
+nese tok z tisků) jsou minuty s midpoint znaménkem null a `hiddenReason` nese
+důvod pro legendu; mezery (null) zůstávají mezerami. Sdílí panel i chip okna. */
+export function visibleCumDelta(
+  values: (number | null)[],
+  midpoint: boolean[] | undefined,
+  hideMidpoint: boolean,
+): {
+  values: (number | null)[]
+  hiddenReason: string | null
+  hiddenAt: (index: number) => boolean
+} {
+  const hidden = (index: number): boolean =>
+    hideMidpoint && midpoint !== undefined && midpoint[index] === true
+  if (!hideMidpoint || midpoint === undefined || !midpoint.some(Boolean)) {
+    return { values, hiddenReason: null, hiddenAt: () => false }
+  }
+  return {
+    values: values.map((value, index) => (hidden(index) ? null : value)),
+    hiddenReason: CUMDELTA_MIDPOINT_REASON,
+    hiddenAt: hidden,
+  }
 }

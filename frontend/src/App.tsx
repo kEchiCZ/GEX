@@ -73,7 +73,7 @@ import { sessionBoundsUtc, sessionDateIso } from './instrument/tz'
 import { EM_COLOR, EM_DASH, REF_COLOR, REF_DASH, SETUP_COLORS, VWAP_COLOR, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
 import { computeExpectedMove, emUsage } from './instrument/expectedmove'
 import { vwapSeriesForAxis } from './instrument/referencelevels'
-import { decodeRange, encodeRange, followUpRange, prePostWindows, rangeBuckets, rangeLabel, reactionWindow, windowProfileRows } from './instrument/rangeselect' // prettier-ignore
+import { decodeRange, encodeRange, followUpRange, panelWindowCumDelta, prePostWindows, rangeBuckets, rangeLabel, reactionWindow, windowProfileRows } from './instrument/rangeselect' // prettier-ignore
 import { diffProfileRows } from './profile/diff'
 import type { RangeSelection } from './instrument/rangeselect'
 import { RANGE_PRESETS, presetDisabledReason, presetRange } from './instrument/rangepresets'
@@ -102,7 +102,8 @@ import type { RidgePoint, WallsMode } from './heatmap/wallsModes'
 import { projectedSessions } from './instrument/sessions'
 import { aggregateDay, aggregateLive } from './replay/aggregate'
 import { buildHistoryView } from './replay/history'
-import { outrightShareAt } from './replay/loader'
+import { CUMDELTA_SOURCE_AGGRESSOR, outrightShareAt } from './replay/loader'
+import { visibleCumDelta } from './panels/geometry'
 import { useHistoryBars } from './hooks/useHistoryBars'
 import { sliceGrid, sliceOverlays, slicePanels, sliceSeries } from './replay/slice'
 import { useAggregateProfile } from './replay/useAggregateProfile'
@@ -1542,21 +1543,25 @@ function MainContent() {
         : null,
     [rangeMode, rangeWindowRows, rangeWindowRowsB],
   )
-  // CumΔ okna do chipu — kumulativ per 1m minutu z panelů (kotva se odečte)
-  const rangeCum = useMemo(() => {
-    if (!rangeSpan) return null
-    const cum = rawDay.panels.cumDelta
-    if (cum.length === 0) return null
-    const at = (idx: number) => cum[Math.max(0, Math.min(idx, cum.length - 1))] ?? 0
-    return at(rangeSpan.toIdx) - (rangeSpan.fromIdx > 0 ? at(rangeSpan.fromIdx - 1) : 0)
-  }, [rangeSpan, rawDay.panels.cumDelta])
-  const rangeCumB = useMemo(() => {
-    if (!rangeSpanB) return null
-    const cum = rawDay.panels.cumDelta
-    if (cum.length === 0) return null
-    const at = (idx: number) => cum[Math.max(0, Math.min(idx, cum.length - 1))] ?? 0
-    return at(rangeSpanB.toIdx) - (rangeSpanB.fromIdx > 0 ? at(rangeSpanB.fromIdx - 1) : 0)
-  }, [rangeSpanB, rawDay.panels.cumDelta])
+  // Běžící engine nese CumΔ z tisků → minuty s midpoint znaménkem se
+  // nekreslí ani nesčítají (ADR-0057 bod 8); pod v5 netečné
+  const hideMidpointCumDelta = pipelineStatus.cumdelta_source === CUMDELTA_SOURCE_AGGRESSOR
+  // CumΔ okna do chipu — kumulativ per 1m minutu z panelů (kotva se odečte);
+  // mezera v okně = „—" (ADR-0057 bod 4), stejná řada jako v panelu
+  const rangeCumSeries = useMemo(
+    () =>
+      visibleCumDelta(rawDay.panels.cumDelta, rawDay.panels.cumDeltaMidpoint, hideMidpointCumDelta)
+        .values,
+    [rawDay.panels.cumDelta, rawDay.panels.cumDeltaMidpoint, hideMidpointCumDelta],
+  )
+  const rangeCum = useMemo(
+    () => (rangeSpan ? panelWindowCumDelta(rangeCumSeries, rangeSpan.fromIdx, rangeSpan.toIdx) : null), // prettier-ignore
+    [rangeSpan, rangeCumSeries],
+  )
+  const rangeCumB = useMemo(
+    () => (rangeSpanB ? panelWindowCumDelta(rangeCumSeries, rangeSpanB.fromIdx, rangeSpanB.toIdx) : null), // prettier-ignore
+    [rangeSpanB, rangeCumSeries],
+  )
   // Okno má přednost před Σ agregací; v duálním režimu vybírá mód A/B
   // (diff kreslí vlastní vrstvu, profil drží A jako kontext)
   const activeWindowRows = rangeMode === 'b' ? (rangeWindowRowsB ?? rangeWindowRows) : rangeWindowRows // prettier-ignore
@@ -2161,10 +2166,8 @@ function MainContent() {
                 {rangeB && ` · B ${rangeLabel(rangeB)}`}
                 {rangeNote && ` · ⏳ ${rangeNote}`}
                 {rangeCum !== null &&
-                  ` · CumΔ${rangeB ? ' A' : ' okna'} ${rangeCum >= 0 ? '+' : ''}${Math.round(rangeCum).toLocaleString('cs-CZ')}`}
-                {rangeB &&
-                  rangeCumB !== null &&
-                  ` · B ${rangeCumB >= 0 ? '+' : ''}${Math.round(rangeCumB).toLocaleString('cs-CZ')}`}
+                  ` · CumΔ${rangeB ? ' A' : ' okna'} ${windowCumLabel(rangeCum)}`}
+                {rangeB && rangeCumB !== null && ` · B ${windowCumLabel(rangeCumB)}`}
                 {/* Duální rozsah (#489): +B vytvoří navazující okno, mód přepíná profil */}
                 {!rangeB && (
                   <button
@@ -2346,6 +2349,7 @@ function MainContent() {
             onTimePan={(dx) => setChartView((view) => ({ ...view, offsetX: view.offsetX + dx }))}
             range={rangeSpan ? { startBucket: rangeSpan.startBucket, endBucket: rangeSpan.endBucket } : null} // prettier-ignore
             rangeB={rangeSpanB ? { startBucket: rangeSpanB.startBucket, endBucket: rangeSpanB.endBucket } : null} // prettier-ignore
+            hideMidpointCumDelta={hideMidpointCumDelta}
           />
         </div>
         <div
@@ -2433,6 +2437,12 @@ function Shell() {
       </div>
     </div>
   )
+}
+
+/** CumΔ okna do chipu (#483): mezera v okně (ADR-0057 bod 4) = „—", jinak se znaménkem. */
+function windowCumLabel(value: number | 'gap'): string {
+  if (value === 'gap') return '— (neměřeno)'
+  return `${value >= 0 ? '+' : ''}${Math.round(value).toLocaleString('cs-CZ')}`
 }
 
 export default function App({ socket }: { socket?: LiveSocket }) {

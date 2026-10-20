@@ -167,6 +167,9 @@ test('aggregateDay nese CVD podkladu a popisek „od HH:MM" — žádná řada n
   // přidává až v App.tsx po agregaci, proto tu není.
   const panels: Required<Omit<PanelSeries, 'sentiment' | 'sentimentCandles'>> = {
     ...base.panels,
+    cumDelta: [5, null, null, null],
+    cumDeltaMidpoint: [true, true, false, false],
+    cumDeltaGapMinutes: [0, 0, 0, 0],
     futuresCvd: [null, null, 300, null],
     evoOiCall: [10, 11, 12, 13],
     evoOiPut: [20, 21, 22, 23],
@@ -175,6 +178,10 @@ test('aggregateDay nese CVD podkladu a popisek „od HH:MM" — žádná řada n
   const day = aggregateDay({ ...base, panels }, 2)
 
   expect(Object.keys(day.panels).sort()).toEqual(Object.keys(panels).sort())
+  // Mezera trade větve (ADR-0057 bod 3, #1588): koš nese poslední měřenou
+  // úroveň, koš celý v mezeře null; zdroj koše = zdroj jeho poslední minuty
+  expect(day.panels.cumDelta).toEqual([5, null])
+  expect(day.panels.cumDeltaMidpoint).toEqual([true, false])
   // Koš bez CVD zůstane null (mezera, ne nula); jinak poslední ne-null minuta
   // koše — kumulativ jako u spotSeries
   expect(day.panels.futuresCvd).toEqual([null, 300])

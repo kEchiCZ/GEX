@@ -70,22 +70,28 @@ export function rangeBuckets(
   }
 }
 
-/** CumΔ okna z flow řady dne: cum(≤t2) − cum(≤t1); kotva open se odečte. */
-export function windowCumDelta(
-  cumSeries: Array<{ tsIso: string; cumDelta: number | null }>,
-  range: RangeSelection,
-): number | null {
-  const at = (limitIso: string): number => {
-    const limit = Date.parse(limitIso)
-    let value = 0
-    for (const point of cumSeries) {
-      if (Date.parse(point.tsIso) > limit) break
-      if (point.cumDelta !== null) value = point.cumDelta
+/** CumΔ okna z minutové řady panelu (#483): úroveň(t2) − úroveň(t1 − 1).
+Mezera (null) uvnitř okna = `'gap'` — rozdíl přes ni je neúplný (ADR-0057
+bod 4, shodně s API `/flow` okna); hranice v mezeře bere poslední měřenou
+úroveň ≤ hranice, před prvním měřením 0 (kotva seance). */
+export function panelWindowCumDelta(
+  cum: (number | null)[],
+  fromIdx: number,
+  toIdx: number,
+): number | 'gap' | null {
+  if (cum.length === 0) return null
+  const clamp = (idx: number) => Math.max(0, Math.min(idx, cum.length - 1))
+  const levelAt = (idx: number): number => {
+    for (let index = clamp(idx); index >= 0; index -= 1) {
+      const value = cum[index]
+      if (value !== null) return value
     }
-    return value
+    return 0
   }
-  if (cumSeries.length === 0) return null
-  return at(range.toIso) - at(range.fromIso)
+  for (let index = clamp(fromIdx); index <= clamp(toIdx); index += 1) {
+    if (cum[index] === null) return 'gap'
+  }
+  return levelAt(toIdx) - (fromIdx > 0 ? levelAt(fromIdx - 1) : 0)
 }
 
 /** URL serializace (?range=fromIso~toIso) — share/restore při reloadu. */

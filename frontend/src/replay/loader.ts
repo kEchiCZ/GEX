@@ -113,6 +113,8 @@ export interface DailyTotals {
   evoOiCall: number
   evoOiPut: number
   cumDelta: number | null
+  /** Minuty seance bez tisků (NULL, ADR-0057 bod 3); 0 = den bez mezer nebo starší API. */
+  cumDeltaGapMinutes: number
   bar: { open: number; high: number; low: number; close: number } | null
 }
 
@@ -150,10 +152,19 @@ interface LevelsInput {
 }
 interface FlowInput {
   tsIso: string
-  cum_delta: number
+  /** null = mezera trade větve (ADR-0057 bod 3): minutu nic neměřilo. */
+  cum_delta: number | null
   /** CVD podkladu (#829); chybí/null = minuta bez dat (běh bez tasty větve). */
   futures_cvd?: number | null
+  /** Zdroj znaménka (ADR-0057 bod 8): `aggressor` = tisky od burzy, jinak
+  (midpoint, NULL u partic před #615) midpoint test s obráceným znaménkem (#1018). */
+  source?: string | null
 }
+
+/** Zdroj znaménka CumΔ z tisků od burzy (ADR-0057) — musí sedět s enginem
+(`compute/cumdelta.SOURCE_AGGRESSOR`). */
+export const CUMDELTA_SOURCE_AGGRESSOR = 'aggressor'
+
 interface OiPrevInput {
   strike: number
   right: string
@@ -338,7 +349,7 @@ export interface LiveMinute {
     final?: boolean
   }
   levels?: Record<string, number | null>
-  flow?: { cum_delta: number; futures_cvd?: number | null }
+  flow?: { cum_delta: number | null; futures_cvd?: number | null; source?: string | null }
   /** Dyn GEX profil minuty z WS kanálu gexprofile.* (ADR-0009). */
   gexProfile?: { grid_start: number; grid_step: number; values: number[] }
   /** OI odhady minuty z WS kanálu oiest.* (#232) — jen strany lišící se od měření. */
@@ -428,6 +439,7 @@ export interface ReplayBundle {
     evo_oi_call: number
     evo_oi_put: number
     cum_delta: number | null
+    cum_delta_gap_minutes?: number
     bar: { open: number; high: number; low: number; close: number } | null
   }
 }
@@ -751,8 +763,9 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const levels = [...levelsByTs.values()]
   const flow: FlowInput[] = bundle.flow.map((row) => ({
     tsIso: canonicalTs(row.ts_min),
-    cum_delta: Number(row.cum_delta) || 0,
+    cum_delta: numOrNull(row.cum_delta),
     futures_cvd: numOrNull(row.futures_cvd),
+    source: row.source == null ? null : String(row.source),
   }))
 
   // Dyn GEX profily (ADR-0009) — starší API klíč neposílá; FA varianta (#232)
@@ -894,6 +907,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
           evoOiCall: Number(bundle.daily.evo_oi_call) || 0,
           evoOiPut: Number(bundle.daily.evo_oi_put) || 0,
           cumDelta: numOrNull(bundle.daily.cum_delta),
+          cumDeltaGapMinutes: Number(bundle.daily.cum_delta_gap_minutes) || 0,
           bar: bundle.daily.bar
             ? {
                 open: Number(bundle.daily.bar.open),
@@ -1425,11 +1439,14 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   const evoOiPut = series.evoOiPut.slice(0, minutes)
   const deltaFlowCall = series.deltaFlowCall.slice(0, minutes)
   const deltaFlowPut = series.deltaFlowPut.slice(0, minutes)
-  // CumΔ je kumulativní: v díře držíme poslední známou hodnotu. Nula by tvrdila,
-  // že se tok vynuloval a zase vrátil — plochý úsek říká „nevíme o přírůstku",
-  // což je stav, ve kterém jsme opravdu byli.
-  const cumDelta = Array.from({ length: minutes }, () => 0)
-  const cumDeltaByMinute = new Map<number, number>()
+  // CumΔ je kumulativní: v díře ve sběru (minuta bez flow řádku, #459) držíme
+  // poslední stav. Nula by tvrdila, že se tok vynuloval a zase vrátil — plochý
+  // úsek říká „nevíme o přírůstku", což je stav, ve kterém jsme opravdu byli.
+  // Řádek s cum_delta NULL je mezera trade větve (ADR-0057 bod 3): minuta je
+  // null a panel přes ni nekreslí spojnici; další měřený řádek pokračuje od
+  // poslední měřené úrovně (engine ji nese sám).
+  const cumDelta: (number | null)[] = Array.from({ length: minutes }, () => 0)
+  const cumDeltaByMinute = new Map<number, FlowInput>()
   // CVD podkladu (#829) drží stejnou logiku děr, ale null zůstává null:
   // linka se přeruší místo aby předstírala vyrovnaný tok
   const futuresCvd: (number | null)[] = Array.from({ length: minutes }, () => null)
@@ -1437,15 +1454,27 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   for (const row of inputs.flow) {
     const minuteIdx = minuteIndex.get(row.tsIso)
     if (minuteIdx !== undefined) {
-      cumDeltaByMinute.set(minuteIdx, row.cum_delta)
+      cumDeltaByMinute.set(minuteIdx, row)
       if (row.futures_cvd != null) cvdByMinute.set(minuteIdx, row.futures_cvd)
     }
   }
-  let lastCumDelta = 0
+  // Zdroj znaménka per minuta (ADR-0057 bod 8): minuta před prvním řádkem
+  // přebírá zdroj prvního řádku, díra ve sběru zdroj posledního; den bez
+  // flow řádku midpoint není (nic se neměřilo, legenda by lhala)
+  const cumDeltaMidpoint: boolean[] = Array.from({ length: minutes }, () => false)
+  let lastCumDelta: number | null = 0
+  const firstFlow = inputs.flow[0]
+  let lastMidpoint =
+    firstFlow !== undefined && (firstFlow.source ?? null) !== CUMDELTA_SOURCE_AGGRESSOR
   let lastCvd: number | null = null
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
-    lastCumDelta = cumDeltaByMinute.get(minuteIdx) ?? lastCumDelta
+    const row = cumDeltaByMinute.get(minuteIdx)
+    if (row !== undefined) {
+      lastCumDelta = row.cum_delta
+      lastMidpoint = (row.source ?? null) !== CUMDELTA_SOURCE_AGGRESSOR
+    }
     cumDelta[minuteIdx] = lastCumDelta
+    cumDeltaMidpoint[minuteIdx] = lastMidpoint
     const cvd = cvdByMinute.get(minuteIdx)
     if (cvd !== undefined) lastCvd = cvd
     futuresCvd[minuteIdx] = lastCvd
@@ -1598,7 +1627,7 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
     raw,
     rawFa,
     overlays,
-    panels: { vol, optVolCall, optVolPut, cumDelta, futuresCvd, deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut, cumDeltaFromIso }, // prettier-ignore
+    panels: { vol, optVolCall, optVolPut, cumDelta, cumDeltaMidpoint, futuresCvd, deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut, cumDeltaFromIso }, // prettier-ignore
     profileByMinute,
     provisionalMinutes,
     reconstructedIso,

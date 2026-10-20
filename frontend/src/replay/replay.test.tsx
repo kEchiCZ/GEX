@@ -6,7 +6,7 @@ import { BottomPanels } from '../components/BottomPanels'
 import type { PanelSeries } from '../components/BottomPanels'
 import { PlaybackBar } from '../components/PlaybackBar'
 import { demoGrid } from '../heatmap/demo'
-import { cvdLinePoints } from '../panels/geometry'
+import { cvdLineSegments } from '../panels/geometry'
 import { CrosshairProvider } from '../state/Crosshair'
 import {
   appendMinute,
@@ -51,7 +51,8 @@ test('sliceSeries a slicePanels drží délku (stabilní osa X)', () => {
     0,
   )
   expect(panels.vol).toEqual([1, 0, 0])
-  expect(panels.cumDelta).toEqual([5, 0, 0])
+  // Cum Δ po pozici null (#1588): plocha končí na pozici, nula by kreslila vyrovnaný tok
+  expect(panels.cumDelta).toEqual([5, null, null])
 })
 
 test('slicePanels nese CVD podkladu (po pozici null) a Evo OI — žádná řada nevypadne (#1578)', () => {
@@ -62,7 +63,9 @@ test('slicePanels nese CVD podkladu (po pozici null) a Evo OI — žádná řada
     vol: [1, 2, 3, 4],
     optVolCall: [1, 1, 1, 1],
     optVolPut: [2, 2, 2, 2],
-    cumDelta: [5, -5, 9, 12],
+    cumDelta: [5, null, 9, 12],
+    cumDeltaMidpoint: [true, true, true, true],
+    cumDeltaGapMinutes: [3, 3, 3, 3],
     futuresCvd: [null, 100, -20, -50],
     deltaFlowCall: [1, 2, 3, 4],
     deltaFlowPut: [4, 3, 2, 1],
@@ -76,10 +79,18 @@ test('slicePanels nese CVD podkladu (po pozici null) a Evo OI — žádná řada
   // Po pozici null, ne 0: linka CVD končí na pozici, nepropadne k nule;
   // díra před první hodnotou zůstává díra
   expect(sliced.futuresCvd).toEqual([null, 100, -20, null])
-  expect(cvdLinePoints(sliced.futuresCvd ?? [], 400, 80).split(' ')).toHaveLength(2)
+  const cvdSegments = cvdLineSegments(sliced.futuresCvd ?? [], 400, 80)
+  expect(cvdSegments).toHaveLength(1)
+  expect(cvdSegments[0].split(' ')).toHaveLength(2)
   // Evo OI se v playbacku kreslí jen s neprázdnou řadou — dřív zmizel celý panel
-  expect(sliced.evoOiCall).toEqual([10, 11, 12, 0])
-  expect(sliced.evoOiPut).toEqual([20, 21, 22, 0])
+  // Evo OI je úroveň: po pozici null, schod končí na pozici (#1591), ne nula
+  expect(sliced.evoOiCall).toEqual([10, 11, 12, null])
+  expect(sliced.evoOiPut).toEqual([20, 21, 22, null])
+  // Cum Δ s mezerou (#1588): mezera zůstává, po pozici null
+  expect(sliced.cumDelta).toEqual([5, null, 9, null])
+  // Look-ahead: zdroj a mezery po pozici playback neprozradí
+  expect(sliced.cumDeltaMidpoint).toEqual([true, true, true, false])
+  expect(sliced.cumDeltaGapMinutes).toEqual([3, 3, 3, 0])
   expect(sliced.cumDeltaFromIso).toBe('2026-07-16T15:00:00.000Z')
   expect(full.futuresCvd).toEqual([null, 100, -20, -50]) // původní data netknutá
 })
@@ -1463,4 +1474,32 @@ test('Daily balík nese verzi obsahu v URL, plný balík ne (#1602)', async () =
     daily.endsWith(`/replay/ES/20260716/2026-07-16?resolution=daily&v=${DAILY_BUNDLE_VERSION}`),
   ).toBe(true)
   expect(full.endsWith('/replay/ES/20260716/2026-07-16')).toBe(true)
+})
+
+// ── Cum Δ s mezerou a zdrojem znaménka (ADR-0057 body 3 a 8, #1588) ──
+
+test('flow s cum_delta NULL je mezera, díra ve sběru drží stav, zdroj per minuta (#1588)', () => {
+  const MID2 = '2026-07-16T15:02:00Z'
+  const M3 = '2026-07-16T15:03:00Z'
+  const bars = [...BARS, { ...BARS[1], ts_min: MID2 }, { ...BARS[1], ts_min: M3 }]
+  const bundle = bundleFor(CELLS, bars, LEVELS, [])
+  const flow = [
+    { ts_min: M0, flow_delta: 50, cum_delta: 50, source: 'midpoint' },
+    // M1: trade větev neběžela (NULL), MID2: řádek chybí (díra ve sběru, #459)
+    { ts_min: M1, flow_delta: null, cum_delta: null, source: 'aggressor' },
+    { ts_min: M3, flow_delta: 20, cum_delta: 70, source: 'aggressor' },
+  ]
+  const day = buildReplayDay({ ...bundle, flow })
+  expect(day.panels.cumDelta).toEqual([50, null, null, 70])
+  expect(day.panels.cumDeltaMidpoint).toEqual([true, false, false, false])
+
+  // Živý append z WS: null zůstane mezerou, zdroj se nese
+  const live = appendMinute(decodeBundle({ ...bundle, flow: flow.slice(0, 1) }), {
+    tsIso: M1,
+    rows: [],
+    flow: { cum_delta: null, source: 'aggressor' },
+  })
+  const liveDay = assembleReplayDay(live)
+  expect(liveDay.panels.cumDelta.slice(0, 2)).toEqual([50, null])
+  expect(liveDay.panels.cumDeltaMidpoint?.slice(0, 2)).toEqual([true, false])
 })

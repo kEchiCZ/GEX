@@ -1,6 +1,7 @@
 /** Testy range selectoru (#484): okenní profil = parita s API aritmetikou (#483). */
 import { describe, expect, it } from 'vitest'
 import {
+  panelWindowCumDelta,
   decodeRange,
   encodeRange,
   minuteIndexFor,
@@ -9,7 +10,6 @@ import {
   prePostWindows,
   rangeLabel,
   reactionWindow,
-  windowCumDelta,
   windowProfileRows,
 } from './rangeselect'
 import type { ProfileRow } from '../profile/bars'
@@ -88,25 +88,6 @@ describe('minuteIndexFor / rangeBuckets', () => {
   })
 })
 
-describe('windowCumDelta', () => {
-  it('diff posledních hodnot ≤ hranic — kotva open se odečte', () => {
-    const series = [
-      { tsIso: '2026-08-13T15:00:00Z', cumDelta: 50 },
-      { tsIso: '2026-08-13T15:01:00Z', cumDelta: 100 },
-      { tsIso: '2026-08-13T15:02:00Z', cumDelta: 150 },
-    ]
-    const value = windowCumDelta(series, {
-      fromIso: '2026-08-13T15:00:00Z',
-      toIso: '2026-08-13T15:02:00Z',
-    })
-    expect(value).toBe(100) // 150 − 50, parita s /flow window (#483)
-  })
-
-  it('prázdná řada → null', () => {
-    expect(windowCumDelta([], { fromIso: 'a', toIso: 'b' })).toBeNull()
-  })
-})
-
 describe('URL round-trip', () => {
   it('encode/decode a odmítnutí nesmyslů', () => {
     const range = { fromIso: '2026-08-13T15:00:00Z', toIso: '2026-08-13T15:30:00Z' }
@@ -169,5 +150,19 @@ describe('duální rozsah (#489)', () => {
     })
     const open = prePostWindows('2026-08-14T14:30:00Z', 60, '2026-08-14T15:00:00Z')
     expect(open?.bOpen).toBe(true)
+  })
+})
+
+describe('panelWindowCumDelta (#483, ADR-0057 bod 4)', () => {
+  it('rozdíl úrovní okna, kotva před prvním měřením 0', () => {
+    expect(panelWindowCumDelta([10, 25, 40], 1, 2)).toBe(30)
+    expect(panelWindowCumDelta([10, 25, 40], 0, 2)).toBe(40)
+    expect(panelWindowCumDelta([], 0, 1)).toBeNull()
+  })
+  it('mezera uvnitř okna = gap, hranice v mezeře bere poslední měřenou úroveň', () => {
+    const cum = [10, null, 30, 45]
+    expect(panelWindowCumDelta(cum, 1, 2)).toBe('gap')
+    // okno [2, 3]: hranice t1 − 1 = minuta 1 v mezeře → úroveň 10 z minuty 0
+    expect(panelWindowCumDelta(cum, 2, 3)).toBe(35)
   })
 })

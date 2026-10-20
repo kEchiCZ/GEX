@@ -17,7 +17,9 @@ import {
   CUM_DELTA_PAD,
   barHeights,
   cumDeltaAreas,
-  cvdLinePoints,
+  cumDeltaSegments,
+  visibleCumDelta,
+  cvdLineSegments,
   evoOiDisplay,
   evoOiStepPath,
   sentimentCandleGeometry,
@@ -32,7 +34,15 @@ export interface PanelSeries {
   vol: number[]
   optVolCall: number[]
   optVolPut: number[]
-  cumDelta: number[]
+  /** null = mezera trade větve (ADR-0057 bod 3) — plocha se přeruší, žádná spojnice. */
+  cumDelta: (number | null)[]
+  /** Paralelně k `cumDelta`: minuta má znaménko z midpoint testu (zdroj ≠
+  `aggressor`, ADR-0057 bod 8) — od mechaniky v6 se nekreslí, viz
+  `hideMidpointCumDelta`. Chybí = starší data / demo, kreslí se vše. */
+  cumDeltaMidpoint?: boolean[]
+  /** Daily (#1588): počet minut bez tisků za den (`cum_delta_gap_minutes`) —
+  den s mezerou je neúplný; chybí = intraday nebo bez mezer. */
+  cumDeltaGapMinutes?: number[]
   /** CVD podkladu (#829): kumulativní tok ve futures (agresivní nákupy −
   prodeje), druhá řada téhož panelu. null v minutě = data chybí (bez tasty
   větve); prázdné/chybějící pole = řada se nekreslí vůbec. */
@@ -41,8 +51,8 @@ export interface PanelSeries {
   deltaFlowCall: number[]
   deltaFlowPut: number[]
   /** Evo OI (#573): Σ OI přes striky per sloupec, C/P zvlášť; prázdné = starší data. */
-  evoOiCall?: number[]
-  evoOiPut?: number[]
+  evoOiCall?: (number | null)[]
+  evoOiPut?: (number | null)[]
   /** SentIndex po minutách (#288); prázdné = modul zatím data nemá. */
   sentiment?: number[]
   /** Daily pohled (#296, SPEC 7.1): OHLC svíčka per sloupec-den; null = den
@@ -93,6 +103,10 @@ const fmtSigned = (value: number, peak = Infinity): string => {
       : Math.round(value).toLocaleString('cs-CZ')
   return (value > 0 ? '+' : '') + text
 }
+
+/** Hodnota Evo OI pod crosshairem; null (za pozicí přetáčení, #1591) = „—", ne 0. */
+const evoOiLabel = (value: number | null | undefined, signed: boolean): string =>
+  value === null || value === undefined ? '—' : signed ? fmtSigned(value) : fmtInt(value)
 
 /** Hodnota ukazatele vpravo nahoře (HTML overlay — SVG by text roztáhl). */
 function PanelValue({ children }: { children: React.ReactNode }) {
@@ -173,6 +187,7 @@ function BottomPanelsBase({
   onTimePan,
   range = null,
   rangeB = null,
+  hideMidpointCumDelta = false,
 }: {
   data: PanelSeries
   visible: PanelsVisible
@@ -196,6 +211,9 @@ function BottomPanelsBase({
   range?: { startBucket: number; endBucket: number } | null
   /** Druhé okno B (#489) — dim je komplement sjednocení obou. */
   rangeB?: { startBucket: number; endBucket: number } | null
+  /** Běžící engine nese CumΔ z tisků (`/status.cumdelta_source` = aggressor):
+  minuty s midpoint znaménkem se nekreslí (ADR-0057 bod 8). Pod v5 false. */
+  hideMidpointCumDelta?: boolean
 }) {
   const endRenderTimer = useRenderTimer('renderPanels') // měřič výkonu (#1419)
   const minutes = data.vol.length
@@ -313,7 +331,8 @@ function BottomPanelsBase({
   const volPeak = seriesPeak(data.vol)
   const optPeak = Math.max(seriesPeak(data.optVolCall), seriesPeak(data.optVolPut))
   const flowPeak = Math.max(seriesPeak(data.deltaFlowCall), seriesPeak(data.deltaFlowPut))
-  const cumPeak = seriesPeak(data.cumDelta)
+  const cum = visibleCumDelta(data.cumDelta, data.cumDeltaMidpoint, hideMidpointCumDelta)
+  const cumPeak = seriesPeak(cum.values)
 
   // Pohyb v panelu: crosshair (osa X) + výšková úroveň (osa Y) pro daný panel
   const handleMove =
@@ -659,12 +678,8 @@ function BottomPanelsBase({
         </span>
         {idx !== null && (
           <PanelValue>
-            <span style={{ color: COLORS.call }}>
-              C {signed ? fmtSigned(callSeries[idx]) : fmtInt(callSeries[idx])}
-            </span>{' '}
-            <span style={{ color: COLORS.put }}>
-              P {signed ? fmtSigned(putSeries[idx]) : fmtInt(putSeries[idx])}
-            </span>
+            <span style={{ color: COLORS.call }}>C {evoOiLabel(callSeries[idx], signed)}</span>{' '}
+            <span style={{ color: COLORS.put }}>P {evoOiLabel(putSeries[idx], signed)}</span>
           </PanelValue>
         )}
         {axisValue('evooi', evoPeak, signed, height)}
@@ -713,15 +728,15 @@ function BottomPanelsBase({
   if (visible.delta) {
     const height = heightOf('delta')
     const rangeDim = rangeDimFor(height)
-    const areas = cumDeltaAreas(data.cumDelta, minutes * step, height)
+    const areas = cumDeltaSegments(cum.values, minutes * step, height)
     const cvdSeries = data.futuresCvd ?? []
     const cvdAt = (index: number) => cvdSeries[index] ?? null
-    const cvdPoints = cvdLinePoints(cvdSeries, minutes * step, height)
-    const hasCvd = cvdPoints.length > 0
-    // Kotva seance (#829): kumulativ se resetuje na Globex open (22:00 UTC),
-    // ale osa začíná půlnocí — na levém okraji je proto už nasčítaný tok.
-    // Bez přiznání by se výchylka četla proti nule, která na grafu není.
-    const anchor = data.cumDelta.length > 0 ? data.cumDelta[0] : 0
+    const cvdSegments = cvdLineSegments(cvdSeries, minutes * step, height)
+    const hasCvd = cvdSegments.length > 0
+    // Kotva (#829): první minuta osy už může nést nasčítaný tok (start enginu
+    // uprostřed seance, den bez začátku) — bez přiznání by se výchylka četla
+    // proti nule, která na grafu není.
+    const anchor = cum.values.find((value) => value !== null) ?? 0
     addPanel(
       'delta',
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
@@ -739,12 +754,12 @@ function BottomPanelsBase({
               · CVD podkladu
             </span>
           )}
-          {/* Kotva seance (#829): levý okraj osy není nula — kumulativ běží
-          od Globex open (22:00 UTC), zatímco osa začíná půlnocí */}
+          {/* Kotva (#829): levý okraj osy není nula — první minuta osy už nese
+          nasčítaný tok */}
           {Math.abs(anchor) > 0.5 && (
             <span
               data-testid="cumdelta-anchor"
-              title="Kumulativ se resetuje na open Globex seance (22:00 UTC), ale osa grafu začíná půlnocí — na levém okraji už je nasčítaný tok. Výchylku čtěte proti této hodnotě, ne proti nule."
+              title="Kumulativ se resetuje na open Globex seance (17:00 CT), první minuta osy ale už nese nasčítaný tok — výchylku čtěte proti této hodnotě, ne proti nule."
             >
               {' '}
               · osa od {fmtSigned(anchor)}
@@ -752,6 +767,16 @@ function BottomPanelsBase({
           )}
           {/* Den nezačíná od začátku seance (#518): měření běží až od startu
           enginu — decentní přiznání v legendě, detail v tooltipu */}
+          {/* Midpointová historie se nekreslí (ADR-0057 bod 8) — důvod v legendě */}
+          {cum.hiddenReason && (
+            <span
+              data-testid="cumdelta-hidden"
+              title="Dny před mechanikou v6 nesou znaménko z midpoint testu, které jde proti ceně (#1018). Tok těchto minut se nekreslí — čti linku CVD podkladu."
+            >
+              {' '}
+              · {cum.hiddenReason}
+            </span>
+          )}
           {data.cumDeltaFromIso && (
             <span
               data-testid="cumdelta-from"
@@ -764,7 +789,25 @@ function BottomPanelsBase({
         </span>
         {idx !== null && (
           <PanelValue>
-            {fmtSigned(data.cumDelta[idx])}
+            {cum.values[idx] === null ? (
+              <span
+                title={
+                  cum.hiddenAt(idx)
+                    ? (cum.hiddenReason ?? '')
+                    : 'Tok se neměřil: mezera v tiscích z burzy (ADR-0057), chybějící den nebo čas za pozicí přetáčení'
+                }
+              >
+                —
+              </span>
+            ) : (
+              fmtSigned(cum.values[idx] as number)
+            )}
+            {(data.cumDeltaGapMinutes?.[idx] ?? 0) > 0 && (
+              <span title="Den má minuty bez tisků z burzy — Cum Δ je poslední měřená úroveň, tok z mezer chybí">
+                {' '}
+                · neúplný ({data.cumDeltaGapMinutes?.[idx]} min bez tisků)
+              </span>
+            )}
             {hasCvd && cvdAt(idx) !== null && (
               <span className="panel-value-cvd"> · CVD {fmtSigned(cvdAt(idx) as number)}</span>
             )}
@@ -790,27 +833,35 @@ function BottomPanelsBase({
           />
           <g transform={transform}>
             <g transform={yTransform('cumdelta', height)}>
-              <polygon
-                points={areas.positive}
-                fill={COLORS.positive}
-                data-part="cumdelta-positive"
-              />
-              <polygon
-                points={areas.negative}
-                fill={COLORS.negative}
-                data-part="cumdelta-negative"
-              />
+              {areas.segments.map((segment, index) => (
+                <g key={index}>
+                  <polygon
+                    points={segment.positive}
+                    fill={COLORS.positive}
+                    data-part="cumdelta-positive"
+                  />
+                  <polygon
+                    points={segment.negative}
+                    fill={COLORS.negative}
+                    data-part="cumdelta-negative"
+                  />
+                </g>
+              ))}
               {/* CVD podkladu (#829) přes plochu opčního toku — rozchod obou
             řad je informace, kterou ani jedna sama nedá */}
               {hasCvd && (
-                <polyline
-                  points={cvdPoints}
-                  fill="none"
-                  stroke={COLORS.cvd}
-                  strokeWidth={1.5}
-                  data-part="cumdelta-cvd"
-                  data-testid="cumdelta-cvd"
-                />
+                <g data-testid="cumdelta-cvd">
+                  {cvdSegments.map((points, index) => (
+                    <polyline
+                      key={index}
+                      points={points}
+                      fill="none"
+                      stroke={COLORS.cvd}
+                      strokeWidth={1.5}
+                      data-part="cumdelta-cvd"
+                    />
+                  ))}
+                </g>
               )}
             </g>
             {rangeDim}
