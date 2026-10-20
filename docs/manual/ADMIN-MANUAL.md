@@ -461,15 +461,20 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
     ADR-0057 doplněk 20. 10.).
     - Řetěz D+1 si nechá tracker sekundáru. Nová pipeline ho převezme v další
       iteraci orchestrátoru. Do té doby do něj tečou tisky přes trasy, které pod
-      tisky nesou tracker svého řetězu.
+      tisky nesou tracker svého řetězu, a plán tasty subskripcí drží TimeAndSale
+      D+1 dál (čekající předání).
+    - Pásmo nového aktivního D+1 pokryje i striky sekundáru (přes roll jen roste),
+      takže tisky chodí na všech stranách, které sekundár měřil.
     - Net navazuje bez mezery, včetně tisků od posledního zápisu sekundáru (každý
-      N-tý cyklus). První minuta aktivního D+1 je měřená.
+      N-tý cyklus). První minuta aktivního D+1 je měřená, když vzorky pokryjí
+      hranici; výpadek v neuzavřeném okně sekundáru udělá mezeru z prvního řádku.
     - CumΔ symbolu navazuje z flow aktivního řetězu a nese tok až od vzorku minuty
       rollu. Mezera rollu v CumΔ pod v6 zaniká.
     - Log předání: „Roll ES: aktivní řetěz 20261020 převzal tracker sekundáru
       (net N stran) — tisky bez mezery (#1460)“.
-    - Nevznikne-li pipeline hned po rollu (spojení, chyba setupu), tracker propadá
-      s varováním „pipeline nevznikla hned po rollu — tracker sekundáru … propadá“.
+    - Nevznikne-li pipeline hned po rollu (spojení, chyba setupu, cooldown), tracker
+      propadá s varováním „pipeline nevznikla hned po rollu — tracker sekundáru …
+      propadá“.
       První minuta nového trackeru je mezera a den bod nedá, stejně jako po
       restartu procesu.
   - `fa_alpha` i `fa_alpha_history` nesou `source` (aditivní ADD COLUMN přes
@@ -573,7 +578,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:80
 
 | Endpoint | Popis |
 |---|---|
-| `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline (`lines_utilization` je od #630 měřená špička; `symbols` = symboly s pipeline, např. „ES,NQ“ — Briefing podle něj ukáže „Engine pro tento symbol verdikt nepočítá“, #1595). Pole `chain_source` / `spot_source` nesou aktivní zdroj dat (#614), `feed_crosscheck*` verdikt křížové kontroly (#517 A), `connection_offline_for_s` délku výpadku IBKR (#770), `tasty_rate_limited` / `tasty_heals` / `tasty_budget` stav DXLink subskripce (#863, #936, #982), `tasty_kpi` KPI stability streamu per seance (#1214: výpadky, rate limit, RTH minuty bez eventu, tasty mrtvá strana, podíl greeks; uzavřené seance v `data/reports/tasty-kpi.jsonl` a v logu `tasty KPI …`), `cumdelta_source` (`midpoint`, od mechaniky v6 `aggressor`, ADR-0057) + `cumdelta_coverage[symbol]` (v1.4, ADR-0032: `printed_volume`, `unknown_volume`, `structured_volume`, `fallback_volume`, `dropped_no_delta`, `printed_share`; od #1460 `printed_share_total` = podíl tisků se stranou z celého přírůstku objemu včetně struktury; od v6 oba podíly jen z tisků spárovaných s měřeným přírůstkem objemu, `printed_volume` nese všechny tisky včetně minut bez baru kontraktu, a bez spárovaného objemu (start do fallbacku řetězu) je podíl `null` = neměří se, ne 0 (pod midpointem 0 jako dřív; ADR-0057 doplněk 18. 10.); a `trade_branch` = stav trade větve aktivního řetězu podle ADR-0057 bod 3: `running` / `gap` (otevřený trh, stream odpojený, univerzum mlčí nad práh hlídače 3 min RTH / 10 min Globex nebo trasy tisků patří předchozímu řetězu — od v6 minuta s NULL CumΔ) / `closed` / `off` = bez tasty větve), `map_state[symbol]` stav „tenká mapa" (v1.10, #1245: `thin`, podmínky `thin_gamma`/`weak_walls`/`fused` jako true/false/null = bez dat, `reasons`, `gex_abs`, `gamma_abs`, `spread_pct`). **Chybějící klíč znamená „neměří se"**, ne „je to v pořádku" — od #756 chodí status i bez jediné pipeline a `connection` nese skutečný stav spojení |
+| `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline (`lines_utilization` je od #630 měřená špička; `symbols` = symboly s pipeline, např. „ES,NQ“ — Briefing podle něj ukáže „Engine pro tento symbol verdikt nepočítá“, #1595). Pole `chain_source` / `spot_source` nesou aktivní zdroj dat (#614), `feed_crosscheck*` verdikt křížové kontroly (#517 A), `connection_offline_for_s` délku výpadku IBKR (#770), `tasty_rate_limited` / `tasty_heals` / `tasty_budget` stav DXLink subskripce (#863, #936, #982), `tasty_kpi` KPI stability streamu per seance (#1214: výpadky, rate limit, RTH minuty bez eventu, tasty mrtvá strana, podíl greeks; uzavřené seance v `data/reports/tasty-kpi.jsonl` a v logu `tasty KPI …`), `cumdelta_source` (`midpoint`, od mechaniky v6 `aggressor`, ADR-0057) + `cumdelta_coverage[symbol]` (v1.4, ADR-0032: `printed_volume`, `unknown_volume`, `structured_volume`, `fallback_volume`, `dropped_no_delta`, `printed_share`; od #1460 `printed_share_total` = podíl tisků se stranou z celého přírůstku objemu včetně struktury; od v6 oba podíly jen z tisků spárovaných s měřeným přírůstkem objemu, `printed_volume` nese všechny tisky včetně minut bez baru kontraktu, a bez spárovaného objemu (start do fallbacku řetězu) je podíl `null` = neměří se, ne 0 (pod midpointem 0 jako dřív; ADR-0057 doplněk 18. 10.); a `trade_branch` = stav trade větve aktivního řetězu podle ADR-0057 bod 3: `running` / `gap` (otevřený trh, stream odpojený, univerzum mlčí nad práh hlídače 3 min RTH / 10 min Globex nebo trasy tisků patří předchozímu řetězu — od v6 minuta s NULL CumΔ; od v6 rozhoduje tracker, pro který se trasy stavěly, takže po rollu s předáním běží aktivní D+1 hned, ADR-0057 doplněk 20. 10.) / `closed` / `off` = bez tasty větve), `map_state[symbol]` stav „tenká mapa" (v1.10, #1245: `thin`, podmínky `thin_gamma`/`weak_walls`/`fused` jako true/false/null = bez dat, `reasons`, `gex_abs`, `gamma_abs`, `spread_pct`). **Chybějící klíč znamená „neměří se"**, ne „je to v pořádku" — od #756 chodí status i bez jediné pipeline a `connection` nese skutečný stav spojení |
 | `GET /push/status` | Push na Telegram (#1175, #1284), bez tokenu: `configured`, `quiet_hours`, `daily_cap`, `sent_today`, `last_sent_at`, `last_error`, `enabled` (hlavní vypínač), `master` {`setting`, `label`, `help`} a `groups[]` {`key`, `label`, `topics[]` {`key`, `setting`, `label`, `help` = řádky tooltipu, `enabled` = efektivní hodnota po dědění}}. Token bota ani chat id nevrací. Čte ho Settings → Notifikace i `scripts/lib/OpsAlert.ps1` |
 | `POST /engine/reconnect` `{"target": "ibkr"\|"tasty"\|"both"}` | Ruční přepojení (#950): zapíše razítko do `settings`, engine ho vyřídí při nejbližším pollu (kap. 5). Bez tokenu jako `/settings` — nová třída expozice nevzniká, kdo dosáhne na port, může spojení rozbít už přes `PUT /settings/ibkr_port` |
 | `GET /gexforward/{symbol}` | Forward GEX bloky per budoucí den (#519) |

@@ -317,12 +317,24 @@ vlastníka v epice #1385: z 19. 10. 2026 E-0.12 varianta C a zobrazení hlasu s 
     převezme, je-li D+1 její aktivní expirací (`EngineRuntime.take_over`,
     `CumDeltaTracker.promote`). Net v paměti, tisky ještě neuzavřené v řádku i vzorky okna
     zůstávají. Navázání z partice netflow se podruhé nespouští.
+  - **Pásmo řetězu přes roll jen roste** (ADR-0002): nový aktivní runtime začne v pásmu
+    kolem spotu rozšířeném o striky sekundáru (`discovery.band_covering`). Strany, které
+    sekundár měřil, tak dostávají tisky i kotace až do řezu dne. Bez toho by strany mimo
+    nové pásmo tisky ztratily: 19. 10. 2026 u NQ 8 strikových párů (29920–29990), na
+    kterých leželo ~8,5 % lotů tisků D+1 poslední hodiny před settle.
   - **Trasy tisků patří trackeru, ne pipeline.** Pod tisky nese každá část tras tracker, pro
     který se stavěla. Tisk jde do něj (`route_trade`) i mezi zastavením staré a založením nové
-    pipeline. Vzorek uzná trasy podle identity trackeru (`owned_universe`), takže trackeru
-    nového aktivního runtime patří sekundární část tras ještě před obnovou plánu. Do trackeru
-    jiné expirace tisk nejde ani teď: zastaralá část doručuje jen do trackeru svého řetězu,
-    tracker zastavené pipeline dostává tisky naprázdno.
+    pipeline, ale jen dokud čeká předání (`pending_handovers`): symbol bez pipeline a bez
+    předání tisky nedoručuje nikam jako v části 1a. Vzorek uzná trasy podle identity trackeru
+    (`owned_universe`), takže trackeru nového aktivního runtime patří sekundární část tras
+    ještě před obnovou plánu. Po založení pipeline se trasy přestaví hned, ještě před vzorkem
+    téže iterace (`on_pipeline_created`). Do trackeru jiné expirace tisk nejde ani teď.
+  - **Subskripci tisků řetězu D+1 drží čekající předání.** Plán tasty subskripcí bere účel
+    chain z běžících pipeline a z čekajících předání. Bez toho by v okně mezi zastavením
+    a založením odhlásil TimeAndSale D+1 (19. 10. 2026 pod v5 ticho tisků D+1 ES
+    20:01:44–20:03:34 UTC, NQ 20:02:05–20:03:57 UTC). Vzorek by tu ztrátu nepoznal, protože
+    kotace z účelu extended chodí dál. Předání se proto ze slovníku bere až po založení
+    pipeline.
   - **Hranice** je vzorek minuty rollu, ve kterém aktivní řetěz D uzavřel poslední řádek.
     Od ní začínají metriky aktivního řetězu jako u nového trackeru: tok do CumΔ, pokrytí,
     podíly a rozklady barů. První bar stav objemu jen založí. Tok a pokrytí sekundáru před
@@ -333,14 +345,14 @@ vlastníka v epice #1385: z 19. 10. 2026 E-0.12 varianta C a zobrazení hlasu s 
     okně proto udělá mezeru z prvního řádku aktivního řetězu a vrátí celý uzavřený úsek
     netu. Konzervativní je to jen o pár minut navíc, kalibraci to nemění: den s mezerou bod
     nedá tak jako tak.
-  - **Mezera rollu v CumΔ** z bodu 3 pod v6 zaniká. Zůstává jen u nového sekundáru D+2 do
-    obnovy tras (sekundy, `on_pipeline_created`). Ten v seanci D kalibrovaný není (#1580).
+  - **Mezera rollu v CumΔ** z bodu 3 pod v6 zaniká. Nový sekundár D+2 má nový tracker,
+    jeho první minuta je proto mezera jako po restartu. V seanci D kalibrovaný není (#1580).
   - **Předání platí jen v první iteraci po rollu.** Nevznikne-li nová pipeline hned
-    (spojení, chyba setupu), tracker propadá a první minuta nového je mezera jako po
-    restartu. Tracker, který vynechal vzorek, by okno potvrdil bez doložení. **Restart
-    procesu zůstává mezerou.**
+    (spojení, chyba setupu, cooldown), tracker propadá s varováním a první minuta nového
+    je mezera jako po restartu. Tracker, který vynechal vzorek, by okno potvrdil bez
+    doložení. **Restart procesu zůstává mezerou.**
   - Pod v5 (midpoint) se nic nepředává. Trasy i vzorky se řídí pozicí a expirací jako
-    před #1460 a net sekundáru se po rollu navazuje z partice.
+    v části 1a, pásmo začíná kolem spotu a net sekundáru se po rollu navazuje z partice.
 - **Reset α při bumpu je automatický.** `fa_alpha` i `fa_alpha_history` nesou `source`
   (aditivní sloupec, NULL = midpoint).
   - Pod tisky se stav jiného zdroje bere jako nekalibrovaný a první bod jde přímo.

@@ -58,6 +58,7 @@ from gexlens_engine.ibkr.discovery import (
     OptionContractSpec,
     StrikeBand,
     Underlying,
+    band_covering,
     build_contracts,
 )
 from gexlens_engine.ibkr.lines import LineGauge
@@ -1190,6 +1191,10 @@ async def create_pipeline(
         )
     info = infos[0]
     band = discovery.initial_band(info, spot)
+    if handover is not None and handover.expiry == info.expiry:
+        # Pásmo řetězu D+1 přes roll jen roste (#1460, varianta C): strany, které
+        # sekundár měřil, dostávají tisky dál až do řezu dne
+        band = band_covering(info.strikes, band, [spec.strike for spec in handover.contracts])
     contracts = build_contracts(underlying, info, band)
     # OI archiv pokrývá N nejbližších expirací — ΔOI vs. včera potřebuje stejný
     # kontrakt archivovaný ve dvou dnech (0DTE řetěz jinak srovnání nemá)

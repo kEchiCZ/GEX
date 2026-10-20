@@ -69,7 +69,7 @@ def pending_handovers[RuntimeT: RuntimeLike](
     Symbol bez běžící pipeline s předáním v rollu: jeho řetěz D+1 dál drží
     subskripci tisků (účel chain) i trasy, které tisky doručí do čekajícího
     trackeru. Symbol, který pipeline už má, nečeká — drží ho pipeline. Bez
-    předání se tisky symbolu bez pipeline nedoručují nikam (jako před #1460).
+    předání se tisky symbolu bez pipeline nedoručují nikam (jako v části 1a).
     """
     return {symbol: runtime for symbol, runtime in handovers.items() if symbol not in pipes}
 
@@ -159,8 +159,8 @@ def owned_universe(
     Pod tisky rozhoduje identita trackeru jako v `route_trade`: po rollu
     s předáním patří trackeru nového aktivního runtime sekundární část
     zastaralých tras, nový sekundár D+2 do přestavby tras nedostává nic.
-    Midpoint (v5) jako před #1460: část podle pozice (`index` 0 = aktivní)
-    a expirace musí sedět na běžící řetěz.
+    Midpoint (v5) jako v části 1a (#1460): část podle pozice (`index` 0 =
+    aktivní) a expirace musí sedět na běžící řetěz.
     """
     if routes is None:
         return {}
