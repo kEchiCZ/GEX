@@ -61,6 +61,19 @@ class PipelineLike(Protocol):
     def next_runtime(self) -> RuntimeLike | None: ...
 
 
+def pending_handovers[RuntimeT: RuntimeLike](
+    pipes: Mapping[str, PipelineLike], handovers: Mapping[str, RuntimeT]
+) -> dict[str, RuntimeT]:
+    """Sekundáry, jejichž tracker po rollu v settle čeká na novou pipeline (#1460, varianta C).
+
+    Symbol bez běžící pipeline s předáním v rollu: jeho řetěz D+1 dál drží
+    subskripci tisků (účel chain) i trasy, které tisky doručí do čekajícího
+    trackeru. Symbol, který pipeline už má, nečeká — drží ho pipeline. Bez
+    předání se tisky symbolu bez pipeline nedoručují nikam (jako před #1460).
+    """
+    return {symbol: runtime for symbol, runtime in handovers.items() if symbol not in pipes}
+
+
 @dataclass(frozen=True)
 class TradeRoutes:
     """Trasy tisků jednoho instrumentu: streamer symbol → spec, zvlášť podle řetězu.

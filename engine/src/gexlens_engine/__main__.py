@@ -175,6 +175,7 @@ from gexlens_engine.tasty.trade_branch import (
     TradeRoutes,
     build_routes,
     observe_without_branch,
+    pending_handovers,
     route_trade,
 )
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
@@ -1701,6 +1702,11 @@ async def main() -> None:
         tombstones=reqid_tombstones,
     )
     pipelines: dict[str, InstrumentPipeline] = {}
+    # Sekundární runtime pipeline zastavené v rollu v settle → nová pipeline
+    # převezme jeho tracker (#1460, varianta C). Do založení nové pipeline drží
+    # subskripci tisků i trasy řetězu D+1 (`pending_handovers`); platí jen do
+    # konce plánu další iterace
+    roll_handovers: dict[str, EngineRuntime] = {}
     # Dlouhý výpadek spojení hlásí zvoneček (#770) — registrace PŘED start(),
     # ať dozor platí od první vteřiny (i pro „TWS po startu stroje neběží")
     _watch_connection_stall(
@@ -2040,11 +2046,11 @@ async def main() -> None:
     trade_branch_sample: Callable[
         [dt.datetime, Mapping[str, InstrumentPipeline]], dict[str, str]
     ] = observe_without_branch
-    # Probuzení plánu subskripcí po založení pipeline (#1460): trasy tisků nového
-    # řetězu (roll v settle, restart) se přestaví do sekund, ne až za minutu.
-    # None bez tasty větve; volá se jen pod zdrojem tisků — pod midpointem by
-    # dřívější obnova univerza změnila stín `cumdelta_dx`
-    on_pipeline_created: Callable[[], None] | None = None
+    # Po založení pipeline (#1460): trasy tisků nového řetězu (roll v settle,
+    # restart) se přestaví hned, ještě před vzorkem téže iterace, a plán
+    # subskripcí se probudí. None bez tasty větve; volá se jen pod zdrojem
+    # tisků — pod midpointem by dřívější obnova univerza změnila stín `cumdelta_dx`
+    on_pipeline_created: Callable[[str], None] | None = None
     # Křížová kontrola (#517 A) — None, dokud neběží shadow větev; status ji
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
     crosscheck: CrossCheckDetector | None = None
@@ -2118,7 +2124,10 @@ async def main() -> None:
                 # čekají stranou, místo aby je reset smazal (#1460)
                 trade_session = trading_session_date(dt.datetime.now(dt.UTC))
                 for dx_symbol, routes in trade_routes.items():
-                    target = route_trade(routes, pipelines.get(dx_symbol), streamer)
+                    dx_pipe = pipelines.get(dx_symbol)
+                    if dx_pipe is None and dx_symbol not in roll_handovers:
+                        continue
+                    target = route_trade(routes, dx_pipe, streamer)
                     if target is not None:
                         dx_tracker, dx_spec = target
                         dx_tracker.add_dx_trade(
@@ -2160,7 +2169,24 @@ async def main() -> None:
             )
 
         trade_branch_sample = _trade_branch_sample
-        on_pipeline_created = plan_wakeup.set
+
+        def _on_pipeline_created(created_symbol: str) -> None:
+            """Trasy tisků nové pipeline z mapy řetězu v cache hned (#1460, varianta C).
+
+            Smyčka plánu je přestaví do sekund, ale až po vzorku téže iterace:
+            nový tracker by v něm podle identity trasy neměl, vzorek by řekl
+            „neběží" a hraniční vzorek dalšího okna by zneplatnil i další
+            minutu. Bez mapy v cache (start) přestaví trasy smyčka plánu.
+            """
+            chain = shadow_chain.get(created_symbol)
+            created = pipelines.get(created_symbol)
+            if chain is not None and created is not None:
+                routes = build_routes(created, chain.streamer_symbol)
+                if routes.active:
+                    trade_routes[created_symbol] = routes
+            plan_wakeup.set()
+
+        on_pipeline_created = _on_pipeline_created
 
         stream_kpi = StreamKpi(
             report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl",
@@ -2527,10 +2553,15 @@ async def main() -> None:
             return sorted({*settings.symbol_list, *desired_symbols, *pipelines})
 
         def ibkr_expiries_of(symbol: str) -> set[str]:
-            """Expirace držené IBKR pipeline (aktivní + next) — vlastnická množina."""
+            """Expirace držené IBKR pipeline (aktivní + next) — vlastnická množina.
+
+            Řetěz čekající na předání v rollu (#1460, varianta C) drží účel chain,
+            extended ho proto neplánuje.
+            """
             pipeline = pipelines.get(symbol)
             if pipeline is None:
-                return set()
+                waiting = pending_handovers(pipelines, roll_handovers).get(symbol)
+                return {waiting.expiry} if waiting is not None else set()
             held = {pipeline.runtime.expiry}
             if pipeline.next_runtime is not None:
                 held.add(pipeline.next_runtime.expiry)
@@ -2559,7 +2590,17 @@ async def main() -> None:
                     for symbol in shadow_target_symbols():
                         chain = await symbol_map.chain(symbol, today)
                         shadow_chain[symbol] = chain
-                        chain_syms = tracked_symbols(shadow_contract_specs(), chain)
+                        # Řetěz D+1 čekající po rollu na novou pipeline drží
+                        # TimeAndSale dál (#1460, varianta C): bez toho by ho plán
+                        # odhlásil a tisky do předaného trackeru by nechodily
+                        waiting = pending_handovers(pipelines, roll_handovers)
+                        chain_syms = tracked_symbols(
+                            [
+                                *shadow_contract_specs(),
+                                *(spec for held in waiting.values() for spec in held.contracts),
+                            ],
+                            chain,
+                        )
                         purpose["chain"] |= chain_syms
                         symbols |= chain_syms
                         # Extended expirace (#616 4a): šířka mimo IBKR množinu —
@@ -3056,9 +3097,6 @@ async def main() -> None:
         reconnect_seen,
     )
     last_full_minute: dt.datetime | None = None
-    # Sekundární runtime pipeline zastavené v rollu v settle → nová pipeline
-    # převezme jeho tracker (#1460, varianta C); platí jen do další iterace plánu
-    roll_handovers: dict[str, EngineRuntime] = {}
 
     # Symbol → remediační pokus BS fallbacku, o jehož čekání na konec RTH už
     # log ví (#1315) — WARNING jednou na pokus, ne každou minutu RTH
@@ -3214,19 +3252,20 @@ async def main() -> None:
                     bar_gap_fill=bar_gap_fill,
                     futures_cvd=futures_cvd,
                     discovery_cache=discovery_cache,
-                    handover=roll_handovers.pop(symbol, None),
+                    handover=roll_handovers.get(symbol),
                 )
+                # Předání drží subskripci a trasy D+1 až do založení (#1460)
+                roll_handovers.pop(symbol, None)
                 setup_cooldown.succeeded(symbol)
                 # Trasy tisků nového řetězu hned (#1460): po rollu drží trasy
-                # vypršelý řetěz a nový sekundár D+2 má do jejich obnovy mezeru
-                # (aktivní D+1 s převzatým trackerem ji nemá, varianta C)
+                # vypršelý řetěz a nový sekundár D+2 by do jejich obnovy neměřil
                 created_tracker = pipelines[symbol].runtime.cum_delta
                 if (
                     on_pipeline_created is not None
                     and created_tracker is not None
                     and created_tracker.prints
                 ):
-                    on_pipeline_created()
+                    on_pipeline_created(symbol)
             except ConnectionError as exc:
                 # Spojení se rozpadlo uprostřed setupu (odhlášená TWS, restart
                 # Gateway). O symbolu to nevypovídá nic — cooldown by jen držel
@@ -3242,7 +3281,9 @@ async def main() -> None:
                     "Setup %s selhal neočekávaně — další pokus za %d cyklů", symbol, delay
                 )
         # Předání v rollu platí jen v první iteraci po rollu: tracker, který
-        # vynechal vzorek, by okno potvrdil bez doložení (#1460, varianta C)
+        # vynechal vzorek, by okno potvrdil bez doložení (#1460, varianta C).
+        # Propadá i po chybě setupu nebo bez spojení; tisky symbolu bez
+        # pipeline pak trasy nedoručují nikam
         for symbol, unclaimed in roll_handovers.items():
             logger.warning(
                 "Roll %s: pipeline nevznikla hned po rollu — tracker sekundáru %s "
@@ -3305,13 +3346,9 @@ async def main() -> None:
                     symbol,
                 )
                 rolled = pipelines.pop(symbol)
-                secondary = rolled.next_runtime
-                if (
-                    secondary is not None
-                    and secondary.cum_delta is not None
-                    and secondary.cum_delta.prints
-                ):
-                    roll_handovers[symbol] = secondary
+                handover = rolled.roll_handover()
+                if handover is not None:
+                    roll_handovers[symbol] = handover
                 rolled.stop()
                 # Resubskripce nové seance vyrobí nárazově error 354 (#772:
                 # 18./19. 8. skok 5→23 přesně v tehdejším rollu o půlnoci

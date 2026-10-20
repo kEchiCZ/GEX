@@ -21,6 +21,7 @@ from gexlens_engine.tasty.trade_branch import (
     TradeRoutes,
     build_routes,
     observe_without_branch,
+    pending_handovers,
     route_trade,
     trade_branch_running,
 )
@@ -435,6 +436,46 @@ def test_bez_tasty_vetve_stav_off() -> None:
     for rt in (closed.runtime, closed.next_runtime):
         tracker_of(rt).begin_cycle()
         assert tracker_of(rt).minute_measured
+
+
+def test_midpoint_trasy_podle_pozice_a_expirace() -> None:
+    """Mechanika v5 (/status trade_branch): část tras podle pozice, expirace musí sedět.
+
+    Čerstvé trasy → aktivní běží a sekundár měří svou část; zastaralé trasy
+    po rollu (žádné předání pod v5) → mezera, i když eventy chodí.
+    """
+    pipe = pipeline(source=SOURCE_MIDPOINT)
+    routes = {"ES": build_routes(pipe, streamer_of)}
+    branch = Branch()
+    branch.touch(routes["ES"], RTH)
+    assert sample(TradeBranchMonitor(), RTH, {"ES": pipe}, routes, branch) == {"ES": BRANCH_RUNNING}
+    seen: list[set[str]] = []
+
+    def last_event_among(streamers: Iterable[str]) -> dt.datetime | None:
+        seen.append(set(streamers))
+        return RTH
+
+    TradeBranchMonitor().sample(
+        RTH,
+        {"ES": pipe},
+        routes,
+        connected=True,
+        reconnects=0,
+        last_event_among=last_event_among,
+    )
+    assert seen == [set(routes["ES"].active), set(routes["ES"].next)]
+
+    rolled = pipeline(active=NEXT, nxt=AFTER_NEXT, source=SOURCE_MIDPOINT)
+    rolled.runtime.cum_delta = tracker_of(pipe.next_runtime)  # i se stejným trackerem
+    assert sample(TradeBranchMonitor(), RTH, {"ES": rolled}, routes, branch) == {"ES": BRANCH_GAP}
+
+
+def test_pending_handovers_jen_symbol_bez_pipeline() -> None:
+    """Varianta C: řetěz D+1 drží subskripci a trasy, jen dokud symbol nemá pipeline."""
+    es, nq = runtime(NEXT), runtime(NEXT)
+    pipes = {"ES": pipeline(active=NEXT, nxt=AFTER_NEXT)}
+    assert pending_handovers(pipes, {"ES": es, "NQ": nq}) == {"NQ": nq}
+    assert pending_handovers({}, {}) == {}
 
 
 def test_midpoint_vzorky_neovlivni() -> None:

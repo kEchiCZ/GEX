@@ -1,10 +1,14 @@
 """Roll v settle bez mezery v kalibrovaném řetězu D+1 (#1460, varianta C, ADR-0057 bod 6).
 
 Celý den nad skutečnými objekty: vzorky `TradeBranchMonitor` každou minutu,
-tisky přes trasy (`route_trade`), cykly runtime sekundáru a po rollu aktivního
-runtime, který převezme tracker sekundáru (`EngineRuntime.take_over`), a ranní
-kalibrace α nad zapsanými particemi. Tisky mezi posledním zápisem sekundáru
-a novou pipeline jsou v netu a bod α vznikne; restart v rollu je mezera.
+tisky přes trasy (`route_trade`) s bránou orchestrátoru (`_tasty_event`: symbol
+bez pipeline jen s čekajícím předáním, `pending_handovers`), cykly runtime
+sekundáru a po rollu aktivního runtime, který převezme tracker sekundáru
+(`EngineRuntime.take_over`), přestavba tras před vzorkem (`on_pipeline_created`)
+a ranní kalibrace α nad zapsanými particemi. Tisky mezi posledním zápisem
+sekundáru a novou pipeline jsou v netu a bod α vznikne; restart v rollu je
+mezera. Plán subskripcí model nemá — řetěz čekajícího předání v něm drží
+`pending_handovers` (test v test_trade_branch.py).
 Mechaniku v6 volí explicitní zdroj trackeru (`SOURCE_AGGRESSOR`).
 """
 
@@ -31,7 +35,12 @@ from gexlens_engine.storage.fa_calibration import (
 )
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
 from gexlens_engine.storage.parquet_store import SnapshotWriter
-from gexlens_engine.tasty.trade_branch import TradeBranchMonitor, build_routes, route_trade
+from gexlens_engine.tasty.trade_branch import (
+    TradeBranchMonitor,
+    build_routes,
+    pending_handovers,
+    route_trade,
+)
 
 MIN = dt.timedelta(minutes=1)
 STRIKES = [7500.0 + 10 * i for i in range(5)]
@@ -92,13 +101,18 @@ def _runtime(
 
 
 async def _simulate(
-    tmp_path: Path, day: RollDay, *, handover: bool = True
+    tmp_path: Path,
+    day: RollDay,
+    *,
+    handover: bool = True,
+    secondary_at_roll: bool = False,
 ) -> tuple[Settings, AlphaCalibrationResult | None]:
     """Den D od pauzy před seancí do řezu 16:00 CT; tisky 100 kontraktů BUY na call stranu.
 
-    Tisky: 50 hodinu po openu, 20 po posledním zápisu sekundáru (minuta před
-    settle), 10 mezi zastavením staré a založením nové pipeline, 10 před prvním
-    vzorkem nové pipeline a 10 pět minut po settle.
+    Tisky: 50 hodinu po openu, 20 minutu před settle, 10 mezi zastavením staré
+    a založením nové pipeline, 10 před prvním vzorkem nové pipeline a 10 pět
+    minut po settle. Sekundár naposledy cykluje 2 min před settle (NQ 19. 10.),
+    nebo s `secondary_at_roll` přímo v iteraci rollu (ES 19. 10.: 19:57, 20:00).
     """
     settings = Settings(data_dir=tmp_path)
     db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
@@ -134,7 +148,12 @@ async def _simulate(
             last_event_among=lambda _streamers: clock[0],
         )
 
+    handovers: dict[str, EngineRuntime] = {}
+
     def prints(now: dt.datetime, size: float) -> None:
+        pipes = {} if pipe is None else {"ES": pipe}
+        if not pipes and "ES" not in pending_handovers(pipes, handovers):
+            return  # orchestrátor tisk symbolu bez pipeline a bez předání nedoručí
         for strike in STRIKES:
             spec = OptionContractSpec("ES", "FOP", day.expiry_d1, strike, "C", "CME", "E3D", "50")
             target = route_trade(routes["ES"], pipe, streamer_of(spec))
@@ -143,7 +162,10 @@ async def _simulate(
             tracker.add_dx_trade(routed, size, "BUY", 0.5, session_date=trading_session_date(now))
 
     schedule = {session_open + 60 * MIN: 50.0, roll - MIN: 20.0, roll + 5 * MIN: 10.0}
-    secondary_cycles = {session_open + 90 * MIN, roll - 2 * MIN}
+    if secondary_at_roll:
+        secondary_cycles = {session_open + 90 * MIN, roll - 3 * MIN, roll}
+    else:
+        secondary_cycles = {session_open + 90 * MIN, roll - 2 * MIN}
     active: EngineRuntime | None = None
     active_cycles = {roll + MIN, roll + 2 * MIN, cutoff - MIN, cutoff}
     now = start
@@ -153,21 +175,23 @@ async def _simulate(
         if now == roll + MIN:
             # Další iterace orchestrátoru: nová pipeline nad D+1 (#1460, varianta C)
             active = _runtime(settings, repo, day.expiry_d1, secondary=False)
-            if handover:
-                active.take_over(secondary)
+            waiting = handovers.get("ES")
+            if waiting is not None:
+                active.take_over(waiting)
+            prints(now, 10.0)  # během zakládání: drží ho čekající předání
             pipe = Pipe(active, _runtime(settings, repo, day.expiry_d2, secondary=True))
-            prints(now, 10.0)  # tisk před prvním vzorkem nové pipeline
+            handovers.pop("ES", None)
+            routes = {"ES": build_routes(pipe, streamer_of)}  # on_pipeline_created
         sample(now)
         if now in secondary_cycles:
             await secondary.run_cycle(now, SPOT, [])
         if active is not None and now in active_cycles:
             await active.run_cycle(now, SPOT, [])
-            if now == roll + MIN:
-                assert pipe is not None
-                routes = {"ES": build_routes(pipe, streamer_of)}  # obnova plánu
         if now == roll:
             # Konec cyklu rollu: stará pipeline se zastaví, trasy zůstávají
             pipe = None
+            if handover:
+                handovers["ES"] = secondary
             prints(now, 10.0)
         now += MIN
 
@@ -193,8 +217,10 @@ async def _simulate(
 
 
 ROLL_DAYS = [
-    # Všední den v létě: settle 20:00 UTC, řez 21:00 UTC (roll 19. 10. 2026)
+    # Pondělí v létě: settle 20:00 UTC, řez 21:00 UTC (roll 19. 10. 2026, open v neděli)
     RollDay(dt.date(2026, 10, 19), "20261020", "20261021", dt.date(2026, 10, 20)),
+    # Středa v létě: seance od denního openu 17:00 CT v úterý po pauze
+    RollDay(dt.date(2026, 10, 21), "20261022", "20261023", dt.date(2026, 10, 22)),
     # Pátek: D+1 je pondělní expirace, kalibrace v pondělí
     RollDay(dt.date(2026, 10, 23), "20261026", "20261027", dt.date(2026, 10, 26)),
     # Seance pondělí: open v neděli 22:00 UTC, netflow v nedělní i pondělní partici
@@ -207,10 +233,17 @@ ROLL_DAYS = [
 
 
 @pytest.mark.parametrize(
-    "day", ROLL_DAYS, ids=["vsedni-den", "patek", "nedelni-open", "zimni-cas", "zkracena"]
+    "secondary_at_roll", [False, True], ids=["sekundar-2min", "sekundar-v-rollu"]
 )
-async def test_roll_predani_bez_mezery_a_bod_alfa(tmp_path: Path, day: RollDay) -> None:
-    settings, result = await _simulate(tmp_path, day)
+@pytest.mark.parametrize(
+    "day",
+    ROLL_DAYS,
+    ids=["pondeli", "streda", "patek", "nedelni-open", "zimni-cas", "zkracena"],
+)
+async def test_roll_predani_bez_mezery_a_bod_alfa(
+    tmp_path: Path, day: RollDay, secondary_at_roll: bool
+) -> None:
+    settings, result = await _simulate(tmp_path, day, secondary_at_roll=secondary_at_roll)
     exp_dir = settings.derived_dir / "ES" / day.expiry_d1
     assert not (exp_dir / "netgap").exists()
     netflow = netflow_at_cutoff(
@@ -226,7 +259,11 @@ async def test_roll_predani_bez_mezery_a_bod_alfa(tmp_path: Path, day: RollDay) 
 
 
 async def test_restart_v_rollu_je_mezera_a_bod_neda(tmp_path: Path) -> None:
-    """Bez předání (restart procesu, pipeline nevznikla hned po rollu) je první minuta mezera."""
+    """Bez předání (restart procesu, pipeline nevznikla hned po rollu) je první minuta mezera.
+
+    Tisky mezi zastavením a založením orchestrátor nedoručí (symbol bez pipeline
+    i bez čekajícího předání), nový tracker je nezná.
+    """
     day = ROLL_DAYS[0]
     settings, result = await _simulate(tmp_path, day, handover=False)
     netgap = settings.derived_dir / "ES" / day.expiry_d1 / "netgap"

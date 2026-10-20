@@ -1617,6 +1617,18 @@ class InstrumentPipeline:
         if exc is not None:
             logger.error("Re-backfill %s po výpadku barů selhal: %s", self.symbol, exc)
 
+    def roll_handover(self) -> EngineRuntime | None:
+        """Sekundár, jehož tracker v rollu v settle převezme nová pipeline (#1460, varianta C).
+
+        Jen pod tisky (ADR-0057 bod 6, doplněk 20. 10.): pod midpointem dává
+        net sekundáru bar větev a navazuje se z partice, předání by `take_over`
+        odmítl. None = pipeline bez sekundáru nebo mechanika v5.
+        """
+        secondary = self.next_runtime
+        if secondary is None or secondary.cum_delta is None or not secondary.cum_delta.prints:
+            return None
+        return secondary
+
     def stop(self) -> None:
         """Odhlášení market dat podkladu (kontrakty řetězce rotuje scheduler sám)."""
         if self._backfill_task is not None:

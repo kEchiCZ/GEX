@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -360,6 +361,21 @@ def make_pipeline(
         spot=spot,
         oi_available=oi_available,
     )
+
+
+def test_roll_handover_jen_sekundar_pod_tisky(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1460 varianta C: tracker předává jen sekundár pod tisky; v5 a bez sekundáru nic."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    assert pipeline.roll_handover() is None
+    secondary = replace(pipeline.runtime, expiry="20260720", secondary=True)
+    secondary.cum_delta = CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT)
+    pipeline.next_runtime = secondary
+    assert pipeline.roll_handover() is None
+    secondary.cum_delta = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    assert pipeline.roll_handover() is secondary
 
 
 async def test_rozsirena_obalka_doarchivuje_nove_striky(
