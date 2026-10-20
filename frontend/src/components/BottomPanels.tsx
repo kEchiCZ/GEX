@@ -19,7 +19,7 @@ import {
   cumDeltaAreas,
   cumDeltaSegments,
   visibleCumDelta,
-  cvdLinePoints,
+  cvdLineSegments,
   evoOiDisplay,
   evoOiStepPath,
   sentimentCandleGeometry,
@@ -731,11 +731,11 @@ function BottomPanelsBase({
     const areas = cumDeltaSegments(cum.values, minutes * step, height)
     const cvdSeries = data.futuresCvd ?? []
     const cvdAt = (index: number) => cvdSeries[index] ?? null
-    const cvdPoints = cvdLinePoints(cvdSeries, minutes * step, height)
-    const hasCvd = cvdPoints.length > 0
-    // Kotva seance (#829): kumulativ se resetuje na Globex open (22:00 UTC),
-    // ale osa začíná půlnocí — na levém okraji je proto už nasčítaný tok.
-    // Bez přiznání by se výchylka četla proti nule, která na grafu není.
+    const cvdSegments = cvdLineSegments(cvdSeries, minutes * step, height)
+    const hasCvd = cvdSegments.length > 0
+    // Kotva (#829): první minuta osy už může nést nasčítaný tok (start enginu
+    // uprostřed seance, den bez začátku) — bez přiznání by se výchylka četla
+    // proti nule, která na grafu není.
     const anchor = cum.values.find((value) => value !== null) ?? 0
     addPanel(
       'delta',
@@ -754,12 +754,12 @@ function BottomPanelsBase({
               · CVD podkladu
             </span>
           )}
-          {/* Kotva seance (#829): levý okraj osy není nula — kumulativ běží
-          od Globex open (22:00 UTC), zatímco osa začíná půlnocí */}
+          {/* Kotva (#829): levý okraj osy není nula — první minuta osy už nese
+          nasčítaný tok */}
           {Math.abs(anchor) > 0.5 && (
             <span
               data-testid="cumdelta-anchor"
-              title="Kumulativ se resetuje na open Globex seance (22:00 UTC), ale osa grafu začíná půlnocí — na levém okraji už je nasčítaný tok. Výchylku čtěte proti této hodnotě, ne proti nule."
+              title="Kumulativ se resetuje na open Globex seance (17:00 CT), první minuta osy ale už nese nasčítaný tok — výchylku čtěte proti této hodnotě, ne proti nule."
             >
               {' '}
               · osa od {fmtSigned(anchor)}
@@ -794,7 +794,7 @@ function BottomPanelsBase({
                 title={
                   cum.hiddenAt(idx)
                     ? (cum.hiddenReason ?? '')
-                    : 'Mezera: tisky z burzy v této minutě neběžely (ADR-0057) — tok se neměřil'
+                    : 'Tok se neměřil: mezera v tiscích z burzy (ADR-0057), chybějící den nebo čas za pozicí přetáčení'
                 }
               >
                 —
@@ -850,14 +850,18 @@ function BottomPanelsBase({
               {/* CVD podkladu (#829) přes plochu opčního toku — rozchod obou
             řad je informace, kterou ani jedna sama nedá */}
               {hasCvd && (
-                <polyline
-                  points={cvdPoints}
-                  fill="none"
-                  stroke={COLORS.cvd}
-                  strokeWidth={1.5}
-                  data-part="cumdelta-cvd"
-                  data-testid="cumdelta-cvd"
-                />
+                <g data-testid="cumdelta-cvd">
+                  {cvdSegments.map((points, index) => (
+                    <polyline
+                      key={index}
+                      points={points}
+                      fill="none"
+                      stroke={COLORS.cvd}
+                      strokeWidth={1.5}
+                      data-part="cumdelta-cvd"
+                    />
+                  ))}
+                </g>
               )}
             </g>
             {rangeDim}

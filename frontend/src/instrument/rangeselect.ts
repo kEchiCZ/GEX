@@ -70,24 +70,6 @@ export function rangeBuckets(
   }
 }
 
-/** CumΔ okna z flow řady dne: cum(≤t2) − cum(≤t1); kotva open se odečte. */
-export function windowCumDelta(
-  cumSeries: Array<{ tsIso: string; cumDelta: number | null }>,
-  range: RangeSelection,
-): number | null {
-  const at = (limitIso: string): number => {
-    const limit = Date.parse(limitIso)
-    let value = 0
-    for (const point of cumSeries) {
-      if (Date.parse(point.tsIso) > limit) break
-      if (point.cumDelta !== null) value = point.cumDelta
-    }
-    return value
-  }
-  if (cumSeries.length === 0) return null
-  return at(range.toIso) - at(range.fromIso)
-}
-
 /** CumΔ okna z minutové řady panelu (#483): úroveň(t2) − úroveň(t1 − 1).
 Mezera (null) uvnitř okna = `'gap'` — rozdíl přes ni je neúplný (ADR-0057
 bod 4, shodně s API `/flow` okna); hranice v mezeře bere poslední měřenou

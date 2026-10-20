@@ -6,7 +6,7 @@ import { BottomPanels } from '../components/BottomPanels'
 import type { PanelSeries } from '../components/BottomPanels'
 import { PlaybackBar } from '../components/PlaybackBar'
 import { demoGrid } from '../heatmap/demo'
-import { cvdLinePoints } from '../panels/geometry'
+import { cvdLineSegments } from '../panels/geometry'
 import { CrosshairProvider } from '../state/Crosshair'
 import {
   appendMinute,
@@ -64,8 +64,8 @@ test('slicePanels nese CVD podkladu (po pozici null) a Evo OI — žádná řada
     optVolCall: [1, 1, 1, 1],
     optVolPut: [2, 2, 2, 2],
     cumDelta: [5, null, 9, 12],
-    cumDeltaMidpoint: [false, false, false, false],
-    cumDeltaGapMinutes: [0, 0, 0, 0],
+    cumDeltaMidpoint: [true, true, true, true],
+    cumDeltaGapMinutes: [3, 3, 3, 3],
     futuresCvd: [null, 100, -20, -50],
     deltaFlowCall: [1, 2, 3, 4],
     deltaFlowPut: [4, 3, 2, 1],
@@ -79,13 +79,18 @@ test('slicePanels nese CVD podkladu (po pozici null) a Evo OI — žádná řada
   // Po pozici null, ne 0: linka CVD končí na pozici, nepropadne k nule;
   // díra před první hodnotou zůstává díra
   expect(sliced.futuresCvd).toEqual([null, 100, -20, null])
-  expect(cvdLinePoints(sliced.futuresCvd ?? [], 400, 80).split(' ')).toHaveLength(2)
+  const cvdSegments = cvdLineSegments(sliced.futuresCvd ?? [], 400, 80)
+  expect(cvdSegments).toHaveLength(1)
+  expect(cvdSegments[0].split(' ')).toHaveLength(2)
   // Evo OI se v playbacku kreslí jen s neprázdnou řadou — dřív zmizel celý panel
   // Evo OI je úroveň: po pozici null, schod končí na pozici (#1591), ne nula
   expect(sliced.evoOiCall).toEqual([10, 11, 12, null])
   expect(sliced.evoOiPut).toEqual([20, 21, 22, null])
   // Cum Δ s mezerou (#1588): mezera zůstává, po pozici null
   expect(sliced.cumDelta).toEqual([5, null, 9, null])
+  // Look-ahead: zdroj a mezery po pozici playback neprozradí
+  expect(sliced.cumDeltaMidpoint).toEqual([true, true, true, false])
+  expect(sliced.cumDeltaGapMinutes).toEqual([3, 3, 3, 0])
   expect(sliced.cumDeltaFromIso).toBe('2026-07-16T15:00:00.000Z')
   expect(full.futuresCvd).toEqual([null, 100, -20, -50]) // původní data netknutá
 })

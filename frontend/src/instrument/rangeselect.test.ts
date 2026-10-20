@@ -10,7 +10,6 @@ import {
   prePostWindows,
   rangeLabel,
   reactionWindow,
-  windowCumDelta,
   windowProfileRows,
 } from './rangeselect'
 import type { ProfileRow } from '../profile/bars'
@@ -86,25 +85,6 @@ describe('minuteIndexFor / rangeBuckets', () => {
       2,
     )
     expect(buckets).toEqual({ fromIdx: 1, toIdx: 3, startBucket: 0, endBucket: 1 })
-  })
-})
-
-describe('windowCumDelta', () => {
-  it('diff posledních hodnot ≤ hranic — kotva open se odečte', () => {
-    const series = [
-      { tsIso: '2026-08-13T15:00:00Z', cumDelta: 50 },
-      { tsIso: '2026-08-13T15:01:00Z', cumDelta: 100 },
-      { tsIso: '2026-08-13T15:02:00Z', cumDelta: 150 },
-    ]
-    const value = windowCumDelta(series, {
-      fromIso: '2026-08-13T15:00:00Z',
-      toIso: '2026-08-13T15:02:00Z',
-    })
-    expect(value).toBe(100) // 150 − 50, parita s /flow window (#483)
-  })
-
-  it('prázdná řada → null', () => {
-    expect(windowCumDelta([], { fromIso: 'a', toIso: 'b' })).toBeNull()
   })
 })
 

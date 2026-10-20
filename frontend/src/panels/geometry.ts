@@ -72,10 +72,14 @@ export function cumDeltaSegments(
     if (value !== null && start < 0) start = index
     if (value !== null || start < 0) continue
     const part = values.slice(start, index) as number[]
-    const positivePoints = part.map((v, offset) => `${x(start + offset)},${zeroY - Math.max(0, v) * scale}`) // prettier-ignore
-    const negativePoints = part.map((v, offset) => `${x(start + offset)},${zeroY - Math.min(0, v) * scale}`) // prettier-ignore
-    const baselineStart = `${x(start)},${zeroY}`
-    const baselineEnd = `${x(index - 1)},${zeroY}`
+    // Osamocená měřená minuta mezi mezerami: úsek široký jeden krok, jinak by
+    // polygon nulové šířky nebyl vidět
+    const xs = part.length === 1 ? [x(start) - step / 2, x(start) + step / 2] : part.map((_, offset) => x(start + offset)) // prettier-ignore
+    const ys = part.length === 1 ? [part[0], part[0]] : part
+    const positivePoints = ys.map((v, offset) => `${xs[offset]},${zeroY - Math.max(0, v) * scale}`) // prettier-ignore
+    const negativePoints = ys.map((v, offset) => `${xs[offset]},${zeroY - Math.min(0, v) * scale}`) // prettier-ignore
+    const baselineStart = `${xs[0]},${zeroY}`
+    const baselineEnd = `${xs[xs.length - 1]},${zeroY}`
     segments.push({
       positive: `${baselineStart} ${positivePoints.join(' ')} ${baselineEnd}`,
       negative: `${baselineStart} ${negativePoints.join(' ')} ${baselineEnd}`,
@@ -90,29 +94,36 @@ export function cumDeltaSegments(
 Vlastní normalizace, ne sdílená s plochou: opční delta tok je v deltách ×
 multiplikátor, CVD v kontraktech futures — společná škála by jednu z řad
 zploštila k nule. Čte se proto tvar a poloha vůči nule, ne absolutní výška;
-proto taky vlastní hodnota v hlavičce panelu. Prázdná řada → prázdný path. */
-export function cvdLinePoints(
+proto taky vlastní hodnota v hlavičce panelu. Vrací body úseků (jeden
+`<polyline>` na úsek); prázdná řada → žádný úsek. */
+export function cvdLineSegments(
   values: (number | null)[],
   width: number,
   height: number,
   pad = CUM_DELTA_PAD,
-): string {
+): string[] {
   const zeroY = height / 2
   const known = values.filter((value): value is number => value !== null)
   if (known.length === 0) {
-    return ''
+    return []
   }
   const peak = Math.max(1e-9, ...known.map((value) => Math.abs(value)))
   const scale = Math.max(0, zeroY - pad) / peak
   const step = width / values.length
-  // Minuty bez CVD (výpadek tasty větve) se přeskočí — linka se přeruší,
-  // místo aby propadla k nule a předstírala vyrovnaný tok
-  return values
-    .map((value, index) =>
-      value === null ? null : `${(index + 0.5) * step},${zeroY - value * scale}`,
-    )
-    .filter((point): point is string => point !== null)
-    .join(' ')
+  // Minuty bez CVD (výpadek tasty větve, za pozicí přetáčení) linku přeruší —
+  // úsečka přes díru by předstírala tok, který nikdo neměřil (#1579)
+  const segments: string[] = []
+  let points: string[] = []
+  values.forEach((value, index) => {
+    if (value === null) {
+      if (points.length > 0) segments.push(points.join(' '))
+      points = []
+      return
+    }
+    points.push(`${(index + 0.5) * step},${zeroY - value * scale}`)
+  })
+  if (points.length > 0) segments.push(points.join(' '))
+  return segments
 }
 
 /** Svíčka sentimentu v Daily pohledu (#296, SPEC 7.1); null = den bez dat. */

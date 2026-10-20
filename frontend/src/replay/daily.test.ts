@@ -131,7 +131,8 @@ test('Daily: Cum Δ dne s mezerou, neúplný den, CVD a zdroj — žádná řada
   expect(built.panels.cumDelta).toEqual([null, null, -500]) // nic neměřeno ≠ nula
   expect(built.panels.cumDeltaGapMinutes).toEqual([0, 1380, 12])
   expect(built.panels.cumDeltaMidpoint).toEqual([false, false, true])
-  expect(built.panels.futuresCvd).toEqual([null, -340, -340])
+  // Linku CVD Daily nekreslí: poslední minuta seance je v pauze, CVD tam 0 (#1633)
+  expect(built.panels.futuresCvd).toEqual([])
   expect(built.panels.cumDeltaFromIso).toBeNull()
   // Sada klíčů jako u aggregateDay/slicePanels (#1578): Daily nevynechá žádnou řadu
   const intraday = withFlow('2026-07-16', totals(-500, 12), 'midpoint').panels

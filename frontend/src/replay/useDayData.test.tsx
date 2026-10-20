@@ -731,6 +731,32 @@ test('opožděná minuta jiné seance se do dne nevsune (#1602)', async () => {
   expect(result.current.day.panels.optVolCall).toEqual([0, 20])
 })
 
+test('živý WS flow s cum_delta null je mezera, zdroj se nese (#1588)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  await act(async () => {
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+    })
+    socket.emit('flow.ES', {
+      ts_min: '2026-07-16T15:01:00Z',
+      flow_delta: null,
+      cum_delta: null,
+      source: 'aggressor',
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  expect(result.current.day.panels.cumDelta.at(-1)).toBeNull()
+  expect(result.current.day.panels.cumDeltaMidpoint?.at(-1)).toBe(false)
+})
+
 // ── Rekonstruované minuty (#617) ───────────────────────────────────
 
 test('assembleReplayDay vypíše rekonstruované minuty; měřené ne', async () => {

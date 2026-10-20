@@ -1459,10 +1459,13 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
     }
   }
   // Zdroj znaménka per minuta (ADR-0057 bod 8): minuta před prvním řádkem
-  // přebírá zdroj prvního řádku, díra ve sběru zdroj posledního
+  // přebírá zdroj prvního řádku, díra ve sběru zdroj posledního; den bez
+  // flow řádku midpoint není (nic se neměřilo, legenda by lhala)
   const cumDeltaMidpoint: boolean[] = Array.from({ length: minutes }, () => false)
   let lastCumDelta: number | null = 0
-  let lastMidpoint = (inputs.flow[0]?.source ?? null) !== CUMDELTA_SOURCE_AGGRESSOR
+  const firstFlow = inputs.flow[0]
+  let lastMidpoint =
+    firstFlow !== undefined && (firstFlow.source ?? null) !== CUMDELTA_SOURCE_AGGRESSOR
   let lastCvd: number | null = null
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
     const row = cumDeltaByMinute.get(minuteIdx)

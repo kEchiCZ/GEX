@@ -2441,7 +2441,7 @@ function Shell() {
 
 /** CumΔ okna do chipu (#483): mezera v okně (ADR-0057 bod 4) = „—", jinak se znaménkem. */
 function windowCumLabel(value: number | 'gap'): string {
-  if (value === 'gap') return '— (mezera)'
+  if (value === 'gap') return '— (neměřeno)'
   return `${value >= 0 ? '+' : ''}${Math.round(value).toLocaleString('cs-CZ')}`
 }
 
