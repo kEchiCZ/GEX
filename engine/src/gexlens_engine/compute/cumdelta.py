@@ -471,6 +471,46 @@ class CumDeltaTracker:
             self.add_dx_trade(item.spec, item.size, item.aggressor, item.delta)
         return True
 
+    def promote(self) -> None:
+        """Sekundár se v rollu stává aktivním řetězem (#1460, varianta C, ADR-0057 doplněk).
+
+        Volá se při předání trackeru nové pipeline, před dalším vzorkem. Hranicí
+        je poslední řez (vzorek minuty rollu), ve kterém aktivní řetěz D uzavřel
+        svůj poslední řádek. Net řetězu (denní, uzavřený i otevřený úsek), vzorky,
+        verdikt a tisky další seance zůstávají: net navazuje bez mezery a první
+        verdikt aktivního řetězu pokryje i okno, které sekundár ještě neuzavřel
+        (při mezeře v něm vrátí celý uzavřený úsek). Metriky aktivního řetězu
+        začínají na hranici jako u nového trackeru:
+        - CumΔ: kumulativ sekundáru do CumΔ symbolu nepatří, runtime ji naváže
+          z flow partice aktivního řetězu; tok uzavřeného úseku leží před hranicí;
+        - pokrytí a podíly: jen tisky po hranici, ostatní čítače od nuly;
+        - rozklady a stav barů: rozklady sekundáru se nezapisují, první bar
+          aktivního řetězu stav jen založí — jinak by jeho přírůstek a tisky
+          sahaly přes hranici do doby sekundáru.
+
+        Pod midpointem se nevolá (předání jen pod tisky).
+        """
+        if not self.prints:
+            raise ValueError("promote: předání trackeru v rollu jen pod zdrojem tisků")
+        now, cut = self._coverage, self._coverage_at_seal
+        self._coverage = CumDeltaCoverage(
+            printed_volume=now.printed_volume - cut.printed_volume,
+            unknown_volume=now.unknown_volume - cut.unknown_volume,
+            dropped_no_delta=now.dropped_no_delta - cut.dropped_no_delta,
+        )
+        self._coverage_at_close = CumDeltaCoverage()
+        self._coverage_at_seal = CumDeltaCoverage()
+        self._cum = 0.0
+        self._sealed_flow = 0.0
+        self._last_volume.clear()
+        self._printed_since_bar.clear()
+        self._unknown_since_bar.clear()
+        self._breakdowns.clear()
+        self._fed.clear()
+        self._gapped.clear()
+        self._paired_printed = 0.0
+        self._paired_unknown = 0.0
+
     def restore_cum(self, base: float) -> None:
         """Naváže CumΔ z flow partice po restartu uprostřed seance (#638).
 
