@@ -14,12 +14,31 @@ Očekávané kategorie:
   snapshot volume; drobné rozdíly na minutách s rotací jsou očekávané a
   REPORTUJÍ se (parita je měření, ne přání).
 
+Shoda sloupce počítá jen minuty, kde obě strany mají hodnotu a sedí; NaN × NaN
+shoda není (dvě chybějící hodnoty nic nedokládají) a vypisuje se zvlášť (#1590).
+
+Brána parity stín ↔ živá 1A (ADR-0057 bod 7, #1590): `--cum-source stin` pod
+mechanikou v6 postaví CumΔ replaye ze stínu `cumdelta_dx` i v seancích s 1A,
+touž transformací jako historii 21. 9. → nasazení (štítek L → minuta L + 1;
+po bumpu jsou štítky zarovnané, #1586, takže brána měří horní mez zpoždění). Proti
+živému feature logu (1A) se měří mezery (minuta s mezerou jen v jedné řadě)
+a 10min přírůstky CumΔ (Pearson r a shoda znaménka) — okno T1 a sklonu.
+Práh (varianta B, vlastník 21. 10. 2026): ≥ 5 seancí, medián r ≥ 0,85, žádná
+seance pod 0,75, znaménko ≥ 80 % v každé seanci, mezera jen v jedné řadě ≤ 2 %
+minut; verdikt `gate_failures` se vypíše pod souhrnem.
+
 Spuštění (engine kontejner):  python replay_parity.py --symbol ES --date 2026-08-24
+Brána po bumpu v6 (seance čárkou):
+    python replay_parity.py --symbol ES --mechanics 6 --cum-source stin
+        --date 2026-11-02,2026-11-03,2026-11-04,2026-11-05,2026-11-06
 """
 
 import argparse
 import datetime as dt
+import math
+import statistics
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -32,7 +51,12 @@ from sqlalchemy import create_engine  # noqa: E402
 
 from gexlens_engine.compute.bandregime import band_context  # noqa: E402
 from gexlens_engine.compute.gexfield import GexProfile  # noqa: E402
-from gexlens_engine.compute.setups import SetupParams, average_true_range  # noqa: E402
+from gexlens_engine.compute.setups import (  # noqa: E402
+    CUMDELTA_PRINTS,
+    SETUP_MECHANICS_VERSION,
+    SetupParams,
+    average_true_range,
+)
 from gexlens_engine.config import load_settings  # noqa: E402
 from gexlens_engine.storage.oi_archive import OIEodRepository  # noqa: E402
 
@@ -50,11 +74,118 @@ ATOL = 1e-9
 RTOL_COLUMNS = {"gamma_edge_up": 1e-6, "gamma_edge_dn": 1e-6}
 #: Známé rozdílové sloupce (jiný zdroj živě vs. replay) — reportují se zvlášť
 KNOWN_DIFF = {"call_flow", "put_flow", "opt_vol"}
+#: Okno přírůstků CumΔ brány stín ↔ 1A v minutách — okno T1 a sklonu (ADR-0057 bod 4)
+WINDOW_MIN = 10
+#: Práh brány stín ↔ 1A (ADR-0057 bod 7, doplněk 21. 10. 2026: vlastník varianta B).
+#: Strop daný samotným posunem štítku o 1 min (14.–20. 10.): r 0,843–0,950, znaménko 86–89 %.
+GATE_MIN_SESSIONS = 5
+GATE_MEDIAN_R = 0.85
+GATE_MIN_R = 0.75
+GATE_MIN_SIGN = 0.80
+GATE_MAX_ONE_SIDE_GAP = 0.02
 
 
-def replay_features(symbol: str, expiry: str, repo: OIEodRepository) -> pd.DataFrame:
+@dataclass(frozen=True)
+class CumParity:
+    """Parita CumΔ jedné seance: replay (stín) × živý feature log (1A)."""
+
+    minutes: int
+    #: minuty s mezerou jen v jedné řadě (neshoda) a v obou (NaN × NaN, shoda to není)
+    gap_one_side: int
+    gap_both: int
+    #: přírůstky přes okno: počet oken, Pearson r, podíl oken se stejným znaménkem
+    windows: int
+    r: float | None
+    sign_share: float | None
+
+
+def cum_parity(live: pd.Series, replay: pd.Series, minutes: int = WINDOW_MIN) -> CumParity:
+    """Mezery a `minutes`-minutové přírůstky CumΔ dvou řad (index = minuta, NaN = mezera).
+
+    Okno (t − minutes, t] se počítá, jen když obě řady mají hodnotu v t i t − minutes
+    a žádný jejich řádek v okně není NaN — přírůstek přes mezeru úplný není
+    (`_cum_levels`). Znaménko se srovnává jen u oken, kde jsou oba přírůstky nenulové.
+    """
+    common = live.index.intersection(replay.index)
+    frame = pd.DataFrame({"live": live[common], "replay": replay[common]}).sort_index()
+    nan_live, nan_replay = frame["live"].isna(), frame["replay"].isna()
+    step = pd.Timedelta(minutes=minutes)
+    times = list(frame.index)
+    position = {ts: index for index, ts in enumerate(times)}
+    pairs: list[tuple[float, float]] = []
+    for index, ts in enumerate(times):
+        start = position.get(ts - step)
+        if start is None:
+            continue
+        window = frame.iloc[start : index + 1]
+        if window.isna().to_numpy().any():
+            continue
+        pairs.append(
+            (
+                float(window["live"].iloc[-1] - window["live"].iloc[0]),
+                float(window["replay"].iloc[-1] - window["replay"].iloc[0]),
+            )
+        )
+    r: float | None = None
+    if len(pairs) >= 3:
+        try:
+            r = statistics.correlation([a for a, _ in pairs], [b for _, b in pairs])
+        except statistics.StatisticsError:  # konstantní řada
+            r = None
+    signed = [(a, b) for a, b in pairs if a != 0.0 and b != 0.0]
+    sign_share = sum(1 for a, b in signed if (a > 0) == (b > 0)) / len(signed) if signed else None
+    return CumParity(
+        minutes=len(frame),
+        gap_one_side=int((nan_live ^ nan_replay).sum()),
+        gap_both=int((nan_live & nan_replay).sum()),
+        windows=len(pairs),
+        r=r,
+        sign_share=sign_share,
+    )
+
+
+def gate_failures(results: list[CumParity]) -> list[str]:
+    """Důvody, proč brána stín ↔ 1A neprošla; prázdný seznam = prošla (ADR-0057 bod 7).
+
+    Seance bez r nebo bez shody znaménka (málo oken) bránu nedoloží, proto neprojde.
+    Mezera jen v jedné řadě se měří přes minuty všech seancí dohromady.
+    """
+    failures: list[str] = []
+    if len(results) < GATE_MIN_SESSIONS:
+        failures.append(f"seancí {len(results)} < {GATE_MIN_SESSIONS}")
+    rs = [c.r for c in results]
+    known = [r for r in rs if r is not None]
+    if len(known) < len(rs):
+        failures.append(f"seancí bez r {len(rs) - len(known)}")
+    if known and statistics.median(known) < GATE_MEDIAN_R:
+        failures.append(f"medián r {statistics.median(known):.3f} < {GATE_MEDIAN_R}")
+    if known and min(known) < GATE_MIN_R:
+        failures.append(f"nejnižší r {min(known):.3f} < {GATE_MIN_R}")
+    signs = [c.sign_share for c in results]
+    if any(s is None for s in signs):
+        failures.append(f"seancí bez shody znaménka {sum(1 for s in signs if s is None)}")
+    low = [s for s in signs if s is not None and s < GATE_MIN_SIGN]
+    if low:
+        failures.append(f"shoda znaménka {min(low):.1%} < {GATE_MIN_SIGN:.0%}")
+    minutes = sum(c.minutes for c in results)
+    one_side = sum(c.gap_one_side for c in results) / minutes if minutes else None
+    if one_side is None or one_side > GATE_MAX_ONE_SIDE_GAP:
+        failures.append(
+            f"mezera jen v jedné řadě {_fmt(one_side, pct=True)} > {GATE_MAX_ONE_SIDE_GAP:.0%}"
+        )
+    return failures
+
+
+def replay_features(
+    symbol: str,
+    expiry: str,
+    repo: OIEodRepository,
+    *,
+    prints: bool = CUMDELTA_PRINTS,
+    shadow_only: bool = False,
+) -> pd.DataFrame:
     """Feature řádky z replaye — týmiž funkcemi jako živý `_log_features`."""
-    minutes = build_minutes(symbol, expiry, repo)
+    minutes = build_minutes(symbol, expiry, repo, prints, shadow_only=shadow_only)
     profiles = load_series(f"{DATA}/{symbol}/{expiry}/gexprofile/*.parquet")
     profile_map: dict[object, GexProfile] = {}
     if profiles is not None:
@@ -86,7 +217,7 @@ def replay_features(symbol: str, expiry: str, repo: OIEodRepository) -> pd.DataF
     return pd.DataFrame(rows)
 
 
-def compare(live: pd.DataFrame, replay: pd.DataFrame) -> None:
+def compare(live: pd.DataFrame, replay: pd.DataFrame) -> CumParity:
     live = live.copy()
     live["ts"] = pd.to_datetime(live.ts, utc=True)
     replay["ts"] = pd.to_datetime(replay.ts, utc=True)
@@ -116,17 +247,48 @@ def compare(live: pd.DataFrame, replay: pd.DataFrame) -> None:
         diff = (a[both] - b[both]).abs()
         tolerance = ATOL + RTOL_COLUMNS.get(name, 0.0) * b[both].abs()
         nan_match = (a.isna() == b.isna()).mean()
-        match = ((diff <= tolerance).sum() + (a.isna() & b.isna()).sum()) / len(merged)
+        both_nan = int((a.isna() & b.isna()).sum())
+        # NaN × NaN shoda není (#1590): dvě chybějící hodnoty nic nedokládají
+        match = (diff <= tolerance).sum() / len(merged) if len(merged) else 0.0
         note = "known-diff (jiný zdroj)" if name in KNOWN_DIFF else ""
         if nan_match < 1.0:
             note += f" NaN neshoda {1 - nan_match:.1%}"
+        if both_nan:
+            note += f" NaN v obou {both_nan}"
         print(f"{name:<20} {match:>6.1%}  {diff.max() if len(diff) else 0:>12.6g}  {note}")
+    indexed = merged.set_index("ts")
+    cum = cum_parity(indexed["cum_delta_live"], indexed["cum_delta_replay"])
+    print(
+        f"CumΔ {WINDOW_MIN}min přírůstky: oken {cum.windows}, r {_fmt(cum.r)}, "
+        f"shoda znaménka {_fmt(cum.sign_share, pct=True)}; mezera jen v jedné řadě "
+        f"{cum.gap_one_side} z {cum.minutes} min, v obou {cum.gap_both}"
+    )
+    return cum
+
+
+def _fmt(value: float | None, *, pct: bool = False) -> str:
+    if value is None or math.isnan(value):
+        return "—"
+    return f"{value:.1%}" if pct else f"{value:.3f}"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbol", default="ES")
-    parser.add_argument("--date", required=True)
+    parser.add_argument("--date", required=True, help="seance, víc čárkou (brána ≥ 5 seancí)")
+    parser.add_argument(
+        "--mechanics",
+        type=int,
+        choices=(5, 6),
+        default=SETUP_MECHANICS_VERSION,
+        help="mechanika replaye: 5 = CumΔ midpoint, 6 = CumΔ z tisků (ADR-0057 bod 7)",
+    )
+    parser.add_argument(
+        "--cum-source",
+        choices=("mechanika", "stin"),
+        default="mechanika",
+        help="stin = pod v6 CumΔ ze stínu i v seancích s 1A (brána parity, ADR-0057 bod 7)",
+    )
     parser.add_argument(
         "--shift-min",
         type=int,
@@ -135,20 +297,45 @@ def main() -> None:
         "build_minutes (bar N-1 + stav N jako živý engine) je default 0",
     )
     args = parser.parse_args()
-    expiry = args.date.replace("-", "")
-    features_file = Path(DATA) / args.symbol / "features" / f"{args.date}.parquet"
-    if not features_file.exists():
-        raise SystemExit(f"Živý feature log neexistuje: {features_file}")
-    live = pd.read_parquet(features_file)
-    # Živý log nese expiraci aktivního runtime — replay rekonstruuje tutéž
-    expiry = str(live["expiry"].iloc[-1]) if "expiry" in live and len(live) else expiry
+    prints = args.mechanics >= 6
+    shadow_only = args.cum_source == "stin"
+    if shadow_only and not prints:
+        parser.error("--cum-source stin jen s --mechanics 6 (stín je zdroj CumΔ z tisků)")
     settings = load_settings()
     repo = OIEodRepository(create_engine(settings.database_url))
-    replay = replay_features(args.symbol, expiry, repo)
-    replay["ts"] = pd.to_datetime(replay.ts, utc=True) + pd.Timedelta(minutes=args.shift_min)
-    day_replay = replay[replay.ts.dt.date == dt.date.fromisoformat(args.date)]
-    print(f"=== Parita {args.symbol} {args.date} (expirace {expiry}) ===")
-    compare(live, day_replay)
+    results: list[CumParity] = []
+    for date in [d.strip() for d in args.date.split(",") if d.strip()]:
+        expiry = date.replace("-", "")
+        features_file = Path(DATA) / args.symbol / "features" / f"{date}.parquet"
+        if not features_file.exists():
+            raise SystemExit(f"Živý feature log neexistuje: {features_file}")
+        live = pd.read_parquet(features_file)
+        # Živý log nese expiraci aktivního runtime — replay rekonstruuje tutéž
+        expiry = str(live["expiry"].iloc[-1]) if "expiry" in live and len(live) else expiry
+        replay = replay_features(args.symbol, expiry, repo, prints=prints, shadow_only=shadow_only)
+        replay["ts"] = pd.to_datetime(replay.ts, utc=True) + pd.Timedelta(minutes=args.shift_min)
+        day_replay = replay[replay.ts.dt.date == dt.date.fromisoformat(date)]
+        print(
+            f"=== Parita {args.symbol} {date} (expirace {expiry}, mechanika "
+            f"v{args.mechanics}, CumΔ {args.cum_source}) ==="
+        )
+        results.append(compare(live, day_replay))
+    if len(results) > 1:
+        rs = [c.r for c in results if c.r is not None]
+        signs = [c.sign_share for c in results if c.sign_share is not None]
+        minutes = sum(c.minutes for c in results)
+        one_side = sum(c.gap_one_side for c in results) / minutes if minutes else None
+        print(
+            f"=== Souhrn {len(results)} seancí: medián r "
+            f"{_fmt(statistics.median(rs) if rs else None)}, nejnižší r "
+            f"{_fmt(min(rs) if rs else None)}, nejnižší shoda znaménka "
+            f"{_fmt(min(signs) if signs else None, pct=True)}, mezera jen v jedné řadě "
+            f"{_fmt(one_side, pct=True)} ==="
+        )
+    if shadow_only:
+        failures = gate_failures(results)
+        verdict = "PROŠLA" if not failures else "NEPROŠLA — " + "; ".join(failures)
+        print(f"=== Brána stín ↔ 1A (ADR-0057 bod 7): {verdict} ===")
 
 
 if __name__ == "__main__":

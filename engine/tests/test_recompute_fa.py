@@ -195,3 +195,26 @@ def test_report_bez_nove_alfy_necha_stavajici_fa_alpha() -> None:
     report = module.report_markdown([item], dt.datetime(2026, 10, 18, 12, 0, tzinfo=dt.UTC))
     assert "nechá `fa_alpha` 0.400" in report
     assert "platí konfigurace" not in report
+
+
+def test_srovnava_jen_body_a_stav_zdroje_prehrani(tmp_path: Path) -> None:
+    """#1590: přehrání počítá zdrojem mechaniky kódu (v5 midpoint) — bod a stav α
+    tisků (`aggressor`) nejsou jeho „staré hodnoty“ a `--apply` je nechá být."""
+    module = _load()
+    url, settings = _seed(tmp_path)
+    db = create_engine(url)
+    other_day = PREV - dt.timedelta(days=1)
+    FaAlphaRepository(db).record(
+        "ES",
+        other_day,
+        EXPIRY,
+        AlphaCalibrationPoint(20, 0.3, None, None),
+        0.3,
+        1,
+        source="aggressor",
+    )
+    FaAlphaRepository(db).set_state("ES", 0.3, 1, source="aggressor")
+    result = module.replay_symbol("ES", settings, OIEodRepository(db), db)
+    assert all(day != other_day for day, _, _ in result.stale_alpha)
+    assert result.old_alpha is None  # stav jiného zdroje se nesrovnává
+    assert result.alpha_points[PREV][0] == 0.0  # midpoint bod ze _seed je starý bod

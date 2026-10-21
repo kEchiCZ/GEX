@@ -20,7 +20,10 @@ den po dni nad čistou paměťovou DB a porovná výsledek s produkcí:
   už samy přehrávané funkce (#1605) — kontrola dne podle max
   `captured_ts` je nepozná; počty vyřazených stran jdou do logu (INFO);
 - α se počítá od nuly v pořadí dnů (EMA); dny bez netflow partice (retence)
-  bod nemají, report ukáže starou i novou α a počet dnů.
+  bod nemají, report ukáže starou i novou α a počet dnů;
+- přehrání počítá zdrojem mechaniky kódu (`cumdelta.LIVE_SOURCE`, #1460), proto
+  se srovnává jen s body a stavem α téhož zdroje (#1590): bod midpointu před
+  bumpem v6 není „starý bod“ tiskové α a `--apply` ho nechá beze změny.
 
 Režimy:
 - **výchozí je dry-run**: report jako markdown do `{data}/reports/` (nebo
@@ -46,7 +49,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT
+from gexlens_engine.compute.cumdelta import LIVE_SOURCE, SOURCE_MIDPOINT, stored_sources
 from gexlens_engine.compute.facalibration import AlphaCalibrationPoint
 from gexlens_engine.compute.favalidation import FaValidationPoint
 from gexlens_engine.compute.settle import is_trading_session
@@ -149,11 +152,13 @@ def replay_symbol(
                 select(fa_validation_table).where(fa_validation_table.c.symbol == symbol)
             )
         }
+        own = stored_sources(LIVE_SOURCE)
         old_history = {
             row.day: (row.ratio_median, row.samples)
             for row in conn.execute(
                 select(fa_alpha_history_table).where(fa_alpha_history_table.c.symbol == symbol)
             )
+            if row.source in own
         }
     with memory.connect() as conn:
         for row in conn.execute(select(fa_validation_table)):
@@ -188,6 +193,8 @@ def replay_symbol(
         if (expiry, day) not in result.validation
     )
     old_state = FaAlphaRepository(prod).get(symbol)
+    if old_state is not None and old_state.source not in own:
+        old_state = None  # α jiného zdroje se s přehráním nesrovnává
     new_state = alpha_memory.get(symbol)
     result.old_alpha = old_state.alpha if old_state else None
     result.new_alpha = new_state.alpha if new_state else None

@@ -19,6 +19,12 @@ přírůstek volume proti předchozí minutě téhož kontraktu, vážený |delt
 zvlášť za call a put strany (`opt_vol` je nevážený součet přírůstků). Záporné
 přírůstky (reset volume na přelomu seance) se zahazují, stejně jako v produkci.
 
+CumΔ podle mechaniky replaye (`cum_delta_series`, #1590): v5 midpoint řada
+`flow` jako živý engine v5; v6 tisky (ADR-0057 bod 7) — seance se zdrojem
+`aggressor` z `flow` (živá 1A), seance od 21. 9. 2026 do nasazení ze stínu
+`cumdelta_dx`, starší seance mezera. Mezera CumΔ jde do `MinuteInputs` jako
+None a `cum_gap_before` jako v živém `SetupEngine`.
+
 Sondy nezapnutých šablon (`--probes`, #577 fáze 1): tatáž čistá funkce
 `detect_damping_ceiling` jako živý sběrač (`gexlens_engine.probes`) nad bary +
 uloženými Dyn profily (`gexprofile/`), vyhodnocení týmž `walk_setup_path`,
@@ -27,6 +33,7 @@ Datový kořen: `--data` nebo `GEXLENS_DATA_DIR` (default `data`).
 """
 
 import argparse
+import bisect
 import dataclasses
 import datetime as dt
 import glob
@@ -39,9 +46,16 @@ import pandas as pd
 from sqlalchemy import create_engine
 
 from gexlens_engine.compute.bandregime import band_metrics, band_zone
+from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, SOURCE_MIDPOINT, stored_sources
 from gexlens_engine.compute.gexfield import GexProfile, gamma_edges
-from gexlens_engine.compute.settle import history_expiry_settle, settle_ts
+from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.compute.settle import (
+    history_expiry_settle,
+    settle_ts,
+    trading_session_date,
+)
 from gexlens_engine.compute.setups import (
+    CUMDELTA_PRINTS,
     Direction,
     MinuteInputs,
     Outcome,
@@ -114,6 +128,220 @@ def option_flows(symbol: str, expiry: str) -> pd.DataFrame | None:
     ).reset_index(drop=True)
 
 
+#: Stín `cumdelta_dx` zastupuje živou 1A v replayi v6 od této seance do nasazení
+#: v6; starší seance jsou pro v6 mezera (ADR-0057 bod 7)
+SHADOW_FROM = dt.date(2026, 9, 21)
+_MINUTE = pd.Timedelta(minutes=1)
+
+
+def _utc_ns(ts: pd.Series) -> pd.Series:
+    """Minuty jako `datetime64[ns, UTC]` — partice nesou µs, testy ns; merge chce jednu jednotku."""
+    return pd.to_datetime(ts, utc=True).astype("datetime64[ns, UTC]")
+
+
+def _session_of(ts: pd.Series) -> pd.Series:
+    """Obchodní den minut (17:00 CT) — `settle.trading_session_date`, bez kopie vzorce."""
+    return ts.map(lambda value: trading_session_date(pd.Timestamp(value).to_pydatetime()))
+
+
+def _open_market(ts: pd.Timestamp) -> bool:
+    """Mezera se za zavřeného trhu nezapisuje (ADR-0057 bod 3)."""
+    return not is_market_closed(ts.to_pydatetime())
+
+
+def shadow_rows(shadow: pd.DataFrame, session: dt.date, gaps: set[pd.Timestamp]) -> pd.DataFrame:
+    """CumΔ seance ze stínu `cumdelta_dx` pro rozhodnutí v minutě (ADR-0057 bod 7, #1586).
+
+    - Štítek L nese stav k času L + φ, kde φ je 0–60 s (smyčka v5 není zarovnaná
+      na minutu). Patří proto rozhodnutí v minutě L + 1: štítek L by pustil až
+      minutu tisků, které živý engine v minutě L ještě neměl.
+    - Jeden chybějící štítek (přeskok smyčky) = poslední kumulativ, tok nesou
+      sousední řádky.
+    - Díra ≥ 2 štítky za otevřeného trhu (restart, výpadek) je mezera včetně
+      prvního řádku po ní, protože tisky z doby výpadku chybí.
+    - Štítek, jehož obsah [L − 1, L + 1) zasáhla minuta bez trade větve (`gaps`,
+      `_shadow_gap_minutes`), je mezera; štítek po přeskoku sahá i do L − 2.
+      Stín za odpojeného tasty píše tok 0, živá 1A NULL — tady i v paritě platí
+      sémantika 1A.
+    - Od v6 stín štítky zarovnává (stav k N, #1586), posun o 1 min je tam celé
+      zpoždění. Brána parity po bumpu proto měří horní mez zpoždění historie.
+
+    Vrací `ts_min` (minuta rozhodnutí), `session` a `cum_delta` (NaN = mezera);
+    řádek, který by po posunu patřil další seanci, se zahodí.
+    """
+    if shadow.empty:
+        return pd.DataFrame({"ts_min": [], "session": [], "cum_delta": []})
+    shadow = shadow.assign(ts_min=_utc_ns(shadow["ts_min"]))
+    shadow = shadow.sort_values("ts_min").drop_duplicates("ts_min", keep="last")
+    level = shadow["cum_ring"] + shadow.get("cum_hot", 0.0)
+    rows: list[tuple[pd.Timestamp, float]] = []
+    previous: tuple[pd.Timestamp, float] | None = None
+    for label, value in zip(shadow["ts_min"], level, strict=True):
+        hole = False
+        missing = 0
+        if previous is not None:
+            missing = int((label - previous[0]) / _MINUTE) - 1
+            if missing == 1:
+                rows.append((previous[0] + _MINUTE, previous[1]))
+            elif missing > 1:
+                skipped = [previous[0] + k * _MINUTE for k in range(1, missing + 1)]
+                opened = [ts for ts in skipped if _open_market(ts)]
+                rows.extend((ts, float("nan")) for ts in opened)
+                hole = bool(opened)
+        reach = [label, label + _MINUTE] + ([label - _MINUTE] if missing == 1 else [])
+        gap = hole or any(ts in gaps for ts in reach)
+        rows.append((label, float("nan") if gap else float(value)))
+        previous = (label, float(value))
+    frame = pd.DataFrame(rows, columns=["ts_min", "cum_delta"])
+    frame["ts_min"] = frame["ts_min"] + _MINUTE
+    frame["session"] = _session_of(frame["ts_min"])
+    return frame[frame["session"] == session].reset_index(drop=True)
+
+
+def _shadow_gap_minutes(symbol: str, flow: pd.DataFrame | None) -> set[pd.Timestamp]:
+    """Minuty otevřeného trhu bez trade větve od `SHADOW_FROM` (#1071, ADR-0057 bod 7).
+
+    Sémantika mezery živé 1A podle enginu, který minutu zapsal:
+    - řádek `flow` se zdrojem `aggressor` (v6): mezera = `cum_delta` NULL.
+      `printvol.printed` NULL tu minutu neznačí — pod tisky ho nese až bar
+      s přírůstkem, klidně o desítky minut později (`CumDeltaTracker.add_bar`);
+    - jinak (v5): `flow.printed_volume` NULL nebo `printvol.printed` NULL.
+    """
+    candidates: list[pd.Timestamp] = []
+    v6_minutes: set[pd.Timestamp] = set()
+    if flow is not None:
+        recent = flow["session"] >= SHADOW_FROM
+        v6 = flow["source"] == SOURCE_AGGRESSOR
+        v6_minutes = set(flow.loc[v6, "ts_min"])
+        candidates.extend(flow.loc[recent & v6 & flow["cum_delta"].isna(), "ts_min"])
+        candidates.extend(flow.loc[recent & ~v6 & flow["printed_volume"].isna(), "ts_min"])
+    first_day = (SHADOW_FROM - dt.timedelta(days=1)).isoformat()
+    for path in sorted(glob.glob(f"{DATA}/{symbol}/*/printvol/*.parquet")):
+        if os.path.basename(path)[:10] < first_day:
+            continue
+        part = pd.read_parquet(path, columns=["ts_min", "printed"])
+        nulls = _utc_ns(part.loc[part["printed"].isna(), "ts_min"])
+        candidates.extend(ts for ts in nulls if ts not in v6_minutes)
+    return {ts for ts in set(candidates) if _open_market(ts)}
+
+
+def _flow_frame(symbol: str) -> pd.DataFrame | None:
+    """Řada `flow` symbolu; sloupce, které starší partice nemají, jsou NULL."""
+    flow = load_series(f"{DATA}/{symbol}/flow/*.parquet")
+    if flow is None:
+        return None
+    flow = flow.reset_index(drop=True)
+    for column in ("source", "printed_volume", "cum_delta"):
+        if column not in flow:
+            flow[column] = None
+    flow["source"] = flow["source"].astype(object).where(flow["source"].notna(), None)
+    flow["ts_min"] = _utc_ns(flow["ts_min"])
+    flow["session"] = _session_of(flow["ts_min"])
+    return flow
+
+
+def build_cum_series(
+    symbol: str, prints: bool, *, shadow_only: bool = False
+) -> pd.DataFrame | None:
+    """CumΔ symbolu pro rozhodnutí v minutě: `ts_min`, `session`, `cum_delta` (NaN = mezera).
+
+    - **v5** (midpoint): řádky `flow` zdroje midpoint (`stored_sources`); řádek
+      jiného zdroje je mezera.
+    - **v6** (tisky, ADR-0057 bod 7): seance, která má za otevřeného trhu řádek
+      `flow` se zdrojem `aggressor`, čte živou 1A (NULL = mezera, řádek jiného
+      zdroje v ní taky); hranici nesou řádky, ne datum (bod 8). Řádky z denní
+      pauze se nepočítají: nasazení v pauze 16:00–17:00 CT patří ještě seanci D,
+      jejíž RTH je midpoint — D čte stín, 1A až D + 1. Ostatní seance od
+      `SHADOW_FROM` čtou stín (`shadow_rows`), starší jsou mezera.
+    - `shadow_only` (brána parity, `replay_parity.py`): stín i v seancích s 1A,
+      touž transformací jako historie — srovnává se proti živé 1A.
+    """
+    flow = _flow_frame(symbol)
+    parts: list[pd.DataFrame] = []
+    if not prints:
+        if flow is None:
+            return None
+        own = flow["source"].map(lambda source: source in stored_sources(SOURCE_MIDPOINT))
+        parts.append(
+            flow.assign(cum_delta=flow["cum_delta"].where(own))[["ts_min", "session", "cum_delta"]]
+        )
+    else:
+        live_sessions: set[dt.date] = set()
+        if flow is not None and not shadow_only:
+            aggressor = flow[flow["source"] == SOURCE_AGGRESSOR]
+            opened = aggressor["ts_min"].map(_open_market).astype(bool)
+            live_sessions = set(aggressor.loc[opened, "session"])
+            live = flow[flow["session"].isin(live_sessions)]
+            measured = live["cum_delta"].where(live["source"] == SOURCE_AGGRESSOR)
+            parts.append(live.assign(cum_delta=measured)[["ts_min", "session", "cum_delta"]])
+        gaps = _shadow_gap_minutes(symbol, flow)
+        for path in sorted(glob.glob(f"{DATA}/{symbol}/cumdelta_dx/*.parquet")):
+            session = dt.date.fromisoformat(os.path.basename(path)[:10])
+            if session < SHADOW_FROM or session in live_sessions:
+                continue
+            parts.append(shadow_rows(pd.read_parquet(path), session, gaps))
+    parts = [part for part in parts if not part.empty]
+    if not parts:
+        return None
+    series = pd.concat(parts, ignore_index=True)
+    series["ts_min"] = _utc_ns(series["ts_min"])
+    series["cum_delta"] = series["cum_delta"].astype(float)
+    return (
+        series.sort_values("ts_min").drop_duplicates("ts_min", keep="last").reset_index(drop=True)
+    )
+
+
+_CUM: dict[tuple[str, bool, bool], pd.DataFrame | None] = {}
+
+
+def cum_delta_series(
+    symbol: str, prints: bool, *, shadow_only: bool = False
+) -> pd.DataFrame | None:
+    """`build_cum_series` jednou za symbol a mechaniku — společná všem expiracím."""
+    key = (symbol, prints, shadow_only)
+    if key not in _CUM:
+        _CUM[key] = build_cum_series(symbol, prints, shadow_only=shadow_only)
+    return _CUM[key]
+
+
+def attach_cum_delta(
+    frame: pd.DataFrame, series: pd.DataFrame | None, prints: bool
+) -> pd.DataFrame:
+    """Přidá minutám replaye `cum_delta` (NaN = mezera) a `cum_gap_before`.
+
+    Hodnota pod v6 = poslední řádek řady téže seance do minuty včetně (živý engine
+    drží `runtime.last_flow`); pod v5 jen řádek téže minuty jako před #1590,
+    chybějící je mezera. `cum_gap_before` jako živý `SetupEngine` (ADR-0057 bod 4):
+    mezi minulým a tímto řádkem historie leží minuta s mezerou (minuta bez baru
+    nebo levels do historie nejde), a pod v6 i hranice seance 17:00 CT (#1581).
+    """
+    frame = frame.assign(ts_min=_utc_ns(frame["ts_min"])).sort_values("ts_min")
+    frame = frame.reset_index(drop=True)
+    frame["session"] = _session_of(frame["ts_min"])
+    if series is None or series.empty:
+        frame["cum_delta"] = float("nan")
+        gap_ts: list[pd.Timestamp] = []
+    else:
+        frame = pd.merge_asof(
+            frame,
+            series[["ts_min", "session", "cum_delta"]],
+            on="ts_min",
+            by="session",
+            direction="backward",
+            tolerance=None if prints else pd.Timedelta(0),
+        )
+        gap_ts = list(series.loc[series["cum_delta"].isna(), "ts_min"])
+    flags = [False] * len(frame)
+    times = list(frame["ts_min"])
+    sessions = list(frame["session"])
+    for index in range(1, len(frame)):
+        lo = bisect.bisect_right(gap_ts, times[index - 1])
+        hi = bisect.bisect_left(gap_ts, times[index])
+        flags[index] = hi > lo or (prints and sessions[index] != sessions[index - 1])
+    frame["cum_gap_before"] = flags
+    return frame
+
+
 def expiry_end(symbol: str, expiry: str) -> dt.datetime | None:
     """Settle expirace dne z partic (#1331). Partice trading class řetězu nenesou —
     kvartální datum se dovodí z tickeru jako v přepočtu setupů (#1366,
@@ -130,12 +358,23 @@ def max_pain_for(repo: OIEodRepository, symbol: str, expiry: str, day: dt.date) 
     return max_pain_strike(oi_map) if oi_map else None
 
 
-def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[MinuteInputs]:
-    """MinuteInputs jednoho obchodního dne (expirace = adresář derived)."""
+def build_minutes(
+    symbol: str,
+    expiry: str,
+    repo: OIEodRepository,
+    prints: bool = CUMDELTA_PRINTS,
+    *,
+    shadow_only: bool = False,
+) -> list[MinuteInputs]:
+    """MinuteInputs jednoho obchodního dne (expirace = adresář derived).
+
+    `prints` = mechanika replaye: CumΔ z tisků (v6, ADR-0057 bod 7), jinak
+    midpoint (v5); výchozí je mechanika kódu. `shadow_only` čte pod v6 stín
+    i v seancích s 1A (brána parity, `cum_delta_series`).
+    """
     bars = load_series(f"{DATA}/{symbol}/bars/*.parquet")
     levels = load_series(f"{DATA}/{symbol}/{expiry}/levels/*.parquet")
     dom = load_series(f"{DATA}/{symbol}/{expiry}/walldom/*.parquet")
-    flow = load_series(f"{DATA}/{symbol}/flow/*.parquet")
     if bars is None or levels is None:
         return []
     # Decision-time konvence (#794 f. 1, změřeno 24. 8.): živý engine v minutě N
@@ -148,13 +387,15 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
     frame = bars.merge(levels, on="ts_min", how="inner")
     if dom is not None:
         frame = frame.merge(dom, on="ts_min", how="left")
-    if flow is not None:
-        frame = frame.merge(flow[["ts_min", "cum_delta"]], on="ts_min", how="left")
     flows = option_flows(symbol, expiry)
     if flows is not None:
         frame = frame.merge(flows, on="ts_min", how="left")
     if frame.empty:
         return []
+    # CumΔ podle mechaniky + mezera mezi řádky historie (#1590); minuta bez řádku
+    # bere poslední hodnotu seance jako živý engine (dřív left merge → NaN)
+    series = cum_delta_series(symbol, prints, shadow_only=shadow_only)
+    frame = attach_cum_delta(frame, series, prints)
     # Hranice gamma masy (#600) z uložených Dyn GEX profilů — dřív harness
     # tohle pole nechával None, takže se live vs. replay lišily (#796)
     edges_by_ts: dict[object, tuple[float | None, float | None]] = {}
@@ -196,7 +437,9 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
                 call_wall=none_if_nan(getattr(row, "call_wall", None)),
                 put_wall=none_if_nan(getattr(row, "put_wall", None)),
                 max_pain=pain,
-                cum_delta=float(getattr(row, "cum_delta", 0.0) or 0.0),
+                # Mezera CumΔ = None, ne 0,0 (ADR-0057 bod 3): nula by byla
+                # vymyšlená hodnota, kterou by T4 brala jako potvrzení
+                cum_delta=none_if_nan(row.cum_delta),
                 call_flow=float(getattr(row, "call_flow", 0.0) or 0.0),
                 put_flow=float(getattr(row, "put_flow", 0.0) or 0.0),
                 opt_vol=float(getattr(row, "opt_vol", 0.0) or 0.0),
@@ -210,6 +453,7 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
                 ),
                 gamma_edge_up=edges_by_ts.get(row.ts_min, (None, None))[0],
                 gamma_edge_dn=edges_by_ts.get(row.ts_min, (None, None))[1],
+                cum_gap_before=bool(row.cum_gap_before),
             )
         )
     return minutes

@@ -126,7 +126,7 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
    NULL (#1071), aby replay i brána parity měly tutéž sémantiku jako živá 1A. Od nasazení čte
    řadu `flow` se zdrojem 1A; starší seance jsou mezera a walk-forward v6 je nepoužije. **Výjimka z ADR-0034 bod 6** (učení přes
    změnu zdroje): stín a 1A jsou táž mechanika. Brána: parita stín ↔ živá 1A ≥ 5 seancí po
-   bumpu s číselným prahem (stanoví #1460); když neprojde, walk-forward v6 jede jen nad živou 1A
+   bumpu s číselným prahem (doplněk 21. 10. 2026); když neprojde, walk-forward v6 jede jen nad živou 1A
    (první návrh koncem prosince místo poloviny listopadu). (*odvozeno:* před bumpem se přehraje
    v5 × v6 nad 21. 9.–15. 10. pro všechny šablony — dopad přepnutí na množinu setupů je vidět
    dřív, než se nuluje vzorek.)
@@ -373,3 +373,61 @@ vlastníka v epice #1385: z 19. 10. 2026 E-0.12 varianta C a zobrazení hlasu s 
   bez přepínače. Pevných 21:00 UTC by od konce US letního času řízlo v 15:00 CT.
 - **Mimo část 1b** zůstávají dva podklady z dat: číselný práh parity stín ↔ 1A (bod 7)
   nese #1590 a retro α z recorderu na sucho jako podklad prahů nese #1627.
+
+## Doplněk (21. 10. 2026, #1590)
+
+Zpřesnění bodu 7, které zavádí #1590. Nové rozhodnutí je jen číselný práh parity
+(vlastník 21. 10. 2026 v epice #1385, varianta B).
+
+- **Zdroj CumΔ replaye** (`scripts/backtest_setups.py`, `build_cum_series`):
+  - mechanika v5 čte jen řádky `flow` se zdrojem midpoint (NULL = midpoint), minuty jiného
+    zdroje jsou mezera;
+  - mechanika v6 volí zdroj per seance podle řádků, ne podle data. Seance s aspoň jedním
+    řádkem `flow` se `source = aggressor` **za otevřeného trhu** čte 1A a řádky jiného zdroje
+    v ní jsou mezera. Řádky z denní pauzy se nepočítají: nasazení v pauze 16:00–17:00 CT
+    patří ještě seanci D, jejíž RTH je midpoint, takže D čte stín a 1A až D + 1 (bez toho by
+    RTH seance D bylo mezerou). Nasazení uprostřed seance (výjimka mimo pauzu) dá seanci 1A
+    a její úsek před nasazením je mezera. Ostatní seance od 21. 9. 2026 čtou stín
+    `cumdelta_dx`, starší seance jsou mezera. Seance = `trading_session_date` (17:00 CT),
+    sobota a neděle před openem jsou pseudo-dny;
+  - chybějící CumΔ je `None`, ne 0. Minuta bez řádku bere pod v6 poslední hodnotu téže seance
+    (živý `runtime.last_flow`), pod v5 je jako dřív mezerou.
+- **Štítek stínu → minuta rozhodnutí.** Štítek L nese stav až v L + φ (φ 0–60 s, flush stínu
+  není srovnaný na minutu, #1586), patří proto rozhodovací minutě L + 1 (bar N − 1 + stav N,
+  bez look-ahead). Úroveň = `cum_ring + cum_hot`.
+  - Jeden přeskočený štítek = poslední kumulativ (bod 7). Díra ≥ 2 štítků za otevřeného trhu
+    je mezera a mezerou je i první minuta po ní.
+  - Mezera platí pro štítek L, leží-li v ní L nebo L + 1 (po přeskoku i L − 1). Sémantika
+    je mezera 1A podle enginu, který minutu zapsal: minuta v5 = `flow.printed_volume` NULL
+    nebo `printvol.printed` NULL; minuta s řádkem `aggressor` = `flow.cum_delta` NULL, protože
+    `printvol.printed` NULL pod tisky nese až bar s přírůstkem, klidně o desítky minut
+    později. Řádek, který po posunu padne do jiné seance, se zahodí.
+- **Mezera mezi řádky** (`cum_gap_before`) má v replayi tutéž sémantiku jako živý
+  `SetupEngine`: mezi minulým a tímto řádkem historie leží minuta s mezerou CumΔ (minuta
+  bez baru nebo levels do historie nejde), pod v6 i hranice seance 17:00 CT (#1581).
+- **Walk-forward** (`scripts/walkforward_setups.py`): `--mechanics` (default mechanika enginu)
+  a `--from` (první seance; pod v6 default 21. 9. 2026, dřívější datum skript odmítne).
+  Hlavička reportu i JSON nesou mechaniku a začátek, baseline i mechaniku verze ze store.
+- **Práh parity stín ↔ 1A (varianta B).** Měří `scripts/replay_parity.py --mechanics 6
+  --cum-source stin` nad ≥ 5 seancemi po bumpu: CumΔ replaye ze stínu i v seancích s 1A
+  (touž transformací jako historii, štítek L → minuta L + 1) proti živému feature logu. Po
+  bumpu stín štítky zarovnává (#1586), posun o 1 min je tam celé zpoždění, kdežto historie
+  se zpozdí o 1 min − φ; brána tak měří horní mez zpoždění. Projde, když platí všechno:
+  - medián r 10minutových přírůstků CumΔ ≥ 0,85 a žádná seance pod 0,75;
+  - shoda znaménka nenulových přírůstků ≥ 80 % v každé seanci;
+  - minut s mezerou jen v jedné řadě ≤ 2 % ze všech seancí dohromady; NaN × NaN se za shodu
+    nepočítá;
+  - seance bez r nebo bez shody znaménka (málo úplných oken) bránu nedoloží.
+
+  Strop daný samotným posunem štítku o 1 min při shodném modelu (14.–20. 10. 2026): ES r
+  0,843–0,950 (medián 0,916), NQ 0,900–0,923, znaménko 86,3–89,1 %, mezera 0–1,1 % minut.
+  B nechává pod stropem rezervu ~0,07 v r a ~5 p. b. ve znaménku na drobné rozdíly modelu
+  (univerzum, delta); obrácené znaménko nebo chybějící tisky neprojdou. Zvažováno: A (každá
+  seance r ≥ 0,85, znaménko ≥ 85 %, mezera ≤ 1 %) by shodila ES 20. 10. (r 0,843) i se
+  shodným modelem; C (medián r ≥ 0,70, znaménko ≥ 75 %, mezera ≤ 5 %) by připustila
+  historii, která 1A popisuje jen zhruba.
+- **Řady obou mechanik se nemíchají ani mimo replay.** `storage/cumdelta_compare.py` (živá
+  řada jen midpoint, net hybridu bez řádků tisků) a `scripts/recompute_fa.py` (historie
+  a stav α jen zdroje živé mechaniky) filtrují řádky podle `source`.
+- **Přehrání v5 × v6** nad 21. 9.–15. 10. nese `scripts/compare_mechanics_v5_v6.py`
+  (report v #1403).

@@ -699,3 +699,57 @@ def test_script_hybrid_section(tmp_path: Path) -> None:
     )
     assert missing.returncode == 2
     assert "neexistuje" in missing.stderr
+
+
+def test_live_series_reads_only_requested_source(tmp_path: Path) -> None:
+    """#1590: po bumpu v6 nesou partice flow tisky — srovnání se stínem čte jen
+    midpoint řádky (NULL source = partice před sloupcem) a mezera 1A není nula."""
+    from gexlens_engine.storage.cumdelta_compare import load_live_series
+
+    derived = tmp_path / "derived"
+    session = dt.date(2026, 11, 3)
+    base = dt.datetime(2026, 11, 3, 15, 0, tzinfo=dt.UTC)
+    rows: list[dict[str, object]] = [
+        {"ts_min": base, "flow_delta": 1.0, "cum_delta": 1.0, "source": None},
+        {
+            "ts_min": base + dt.timedelta(minutes=1),
+            "flow_delta": 1.0,
+            "cum_delta": 2.0,
+            "source": "midpoint",
+        },
+        {
+            "ts_min": base + dt.timedelta(minutes=2),
+            "flow_delta": 3.0,
+            "cum_delta": 3.0,
+            "source": "aggressor",
+        },
+        {
+            "ts_min": base + dt.timedelta(minutes=3),
+            "flow_delta": None,
+            "cum_delta": None,
+            "source": "aggressor",
+        },
+    ]
+    _write_rows(derived / "ES" / "flow" / f"{session.isoformat()}.parquet", rows, FLOW_SCHEMA)
+    midpoint, _ = load_live_series(derived, "ES", session)
+    assert sorted(midpoint) == [base, base + dt.timedelta(minutes=1)]
+    prints, _ = load_live_series(derived, "ES", session, "aggressor")
+    assert prints == {base + dt.timedelta(minutes=2): (3.0, 3.0)}
+
+
+def test_hybrid_ignores_netflow_of_prints(tmp_path: Path) -> None:
+    """#1590: hybrid skládá midpoint tok — net tisků (`netflow.source` aggressor) do něj nepatří."""
+    from gexlens_engine.storage.cumdelta_compare import check_hybrid_session
+    from gexlens_engine.storage.parquet_store import NETFLOW_SCHEMA
+
+    ts = _minutes(30)
+    live, _ = write_hybrid_inputs(tmp_path, ts)
+    derived = tmp_path / "derived"
+    write_live(derived, "ES", ts, live)
+    write_dx(derived, "ES", ts, _flows(30))
+    for path in (derived / "ES" / "20260910" / "netflow").glob("*.parquet"):
+        rows = pq.read_table(path, schema=NETFLOW_SCHEMA).to_pylist()
+        rows += [{**row, "net_volume": 999.0, "source": "aggressor"} for row in rows]
+        _write_rows(path, rows, NETFLOW_SCHEMA)
+    _, check = check_hybrid_session(derived, tmp_path / "snapshots", "ES", SESSION, 50.0)
+    assert check is not None and check.recon_rel_error == 0.0
