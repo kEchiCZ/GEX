@@ -2974,6 +2974,16 @@ tr.setup-after-settle td {
   font-size: 11px;
 }
 
+/* Hlas s vahou 0 (ADR-0057 doplněk 1b): zašedlý, do skóre nevstupuje */
+.tendency-votes li.tendency-vote-zero {
+  opacity: 0.5;
+  cursor: help;
+}
+
+.tendency-votes li.tendency-vote-zero .tendency-vote {
+  color: var(--text-muted);
+}
+
 /* EV na obchod (#911): tooltip s rozkladem drží konvenci cursor:help */
 .stats-ev {
   cursor: help;

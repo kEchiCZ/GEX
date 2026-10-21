@@ -3,11 +3,20 @@
 Pětipásmová škála Strong Short … Strong Long; klik → popover s rozpadem
 hlasů složek (podmínka „žádná černá skříňka") a přiznaným badge
 „nekalibrováno" — váhy zatím nejsou ověřené proti datům (#232).
+Hlas s vahou 0 (tendence v5: poloha mezi zdmi, E-0.12 C) se dál počítá
+a ukládá, v rozpadu je zašedlý — do skóre nevstupuje (ADR-0057 doplněk 1b).
 Není to doporučení k obchodu: popisuje positioning a tok, ne co dělat.
 */
 import { useState } from 'react'
 import { BAND_LABELS, BAND_ORDER, VOTE_LABELS } from '../api/tendency'
 import { useTendency } from '../hooks/useTendency'
+
+/** Tooltip hlasu s vahou 0 — odrážky a `\n` (vzor `ivRankTooltip`). */
+const ZERO_WEIGHT_TOOLTIP = [
+  'Hlas s vahou 0 — do skóre tendence nevstupuje:',
+  '• složka se dál počítá a ukládá, data zůstávají pro další revize vah',
+  '• váhu 0 nastavila revize vah (tendence v5: poloha mezi zdmi, #1113)',
+].join('\n')
 
 export function TendencyChip() {
   const row = useTendency()
@@ -47,7 +56,11 @@ export function TendencyChip() {
           </p>
           <ul className="tendency-votes">
             {row.votes.map((vote) => (
-              <li key={vote.name}>
+              <li
+                key={vote.name}
+                className={vote.weight === 0 ? 'tendency-vote-zero' : undefined}
+                title={vote.weight === 0 ? ZERO_WEIGHT_TOOLTIP : undefined}
+              >
                 <span
                   className={
                     vote.vote > 0
@@ -61,7 +74,10 @@ export function TendencyChip() {
                   {vote.vote.toFixed(1)}
                 </span>
                 <span className="tendency-vote-name">{VOTE_LABELS[vote.name] ?? vote.name}</span>
-                <span className="muted tendency-vote-detail">{vote.detail}</span>
+                <span className="muted tendency-vote-detail">
+                  {vote.detail}
+                  {vote.weight === 0 && ' · váha 0, do skóre nevstupuje'}
+                </span>
               </li>
             ))}
           </ul>
