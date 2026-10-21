@@ -10,6 +10,7 @@ import { outsideUsRth } from '../instrument/marketclock'
 import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { feedSilenceMinutes } from '../instrument/marketclock'
+import { CUMDELTA_SOURCE_AGGRESSOR } from '../replay/loader'
 import { useAppState } from '../state/AppState'
 import { ExpiryCalendar } from './ExpiryCalendar'
 import { ExpiryPhaseChip, useExpiryCalendar } from './ExpiryPhaseChip'
@@ -127,7 +128,7 @@ function FallbackChip({
         'dodávat — typicky souběh s přihlášením na mobilu (error 10197) nebo výpadek ' +
         'datové farmy. Graf běží dál. ' +
         // Týž obsah jako alert enginu (`tasty/chain_fallback.fallback_alert_message`)
-        (cumdeltaSource === 'aggressor'
+        (cumdeltaSource === CUMDELTA_SOURCE_AGGRESSOR
           ? 'CumΔ a net objem běží dál z tisků tastytrade (ADR-0057); po dobu fallbacku ' +
             'řetězu chybí jen rozklad objemu na tisky a zbytek bez tisku.'
           : 'Po dobu fallbacku řetězu ale stojí CumΔ a net objem: tastytrade denní objem ' +

@@ -6,7 +6,7 @@ import { BottomPanels } from '../components/BottomPanels'
 import type { PanelSeries } from '../components/BottomPanels'
 import { PlaybackBar } from '../components/PlaybackBar'
 import { demoGrid } from '../heatmap/demo'
-import { buildGexGrid, profileAt } from '../heatmap/gexmode'
+import { buildGexGrid, currentFaField, profileAt } from '../heatmap/gexmode'
 import { buildModeGrid } from '../heatmap/modes'
 import { cvdLineSegments } from '../panels/geometry'
 import { CrosshairProvider } from '../state/Crosshair'
@@ -384,6 +384,20 @@ test('FA při mezeře: minuta se snímkem bez FA řad je mezera, ne měřené OI
   expect(under.layers.signed![1]).toBe(0)
   expect(under.layers.signed![0]).not.toBe(0)
   expect(under.layers.signed![3]).toBe(under.layers.signed![2])
+  // Modelované FA pole starší než měřené = FA teď v mezeře → projekce bez něj
+  const field = (tsIso: string) => ({
+    tsIso,
+    gridStart: 7590,
+    gridStep: 5,
+    colStartIso: tsIso,
+    colStepMin: 1,
+    colCount: 1,
+    values: [1, 2],
+  })
+  expect(currentFaField(field(minuteIso(2)), field(minuteIso(2)))?.tsIso).toBe(minuteIso(2))
+  expect(currentFaField(field(minuteIso(2)), field(minuteIso(0)))).toBeNull()
+  expect(currentFaField(null, field(minuteIso(0)))?.tsIso).toBe(minuteIso(0))
+  expect(currentFaField(field(minuteIso(2)), null)).toBeNull()
   // Živě: snímek minuty 4 bez FA je mezera, dokud FA řady nedorazí
   const live = appendMinute(inputs, {
     tsIso: minuteIso(4),

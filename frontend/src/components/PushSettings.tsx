@@ -9,6 +9,7 @@ frontend nedrží kopii klíčů ani výchozích hodnot. Zvonek na přepínačí
 nezávisí. Přihlašovací údaje bota jsou jen v `.env`, UI je nikdy nevidí. */
 import { useEffect, useState } from 'react'
 import { API_BASE } from '../config'
+import { CUMDELTA_SOURCE_AGGRESSOR } from '../replay/loader'
 
 export interface PushTopicStatus {
   key: string
@@ -113,7 +114,7 @@ export function PushSettings({
       </p>
       <p className="muted">
         Zvoneček dostává vždy všechno, tyto přepínače řídí jen Telegram. Popis druhu ukáže tooltip.{' '}
-        {cumdeltaSource === 'aggressor'
+        {cumdeltaSource === CUMDELTA_SOURCE_AGGRESSOR
           ? 'Během přihlášení na mobilu k IBKR běží CumΔ dál z tisků tastytrade (ADR-0057); setupy s potvrzením tokem (T1, T4 a kontra-režim T2) stojí jen při mezeře tisků. Upozornění „IBKR přihlášen jinde“ přijde i tak.'
           : 'Během přihlášení na mobilu k IBKR stojí CumΔ, takže setupy s potvrzením tokem (T1, T4 a kontra-režim T2) nevznikají; upozornění „IBKR přihlášen jinde“ o tom přijde.'}
       </p>

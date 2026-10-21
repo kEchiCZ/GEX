@@ -96,6 +96,17 @@ export function profileAt(
   return null
 }
 
+/** FA modelované pole pro projekci, jen když je z téže minuty jako měřené
+(nebo novější). Starší FA pole = FA je teď v mezeře a projekce by držela odhad
+z doby před ní (ADR-0057 bod 4, #1632); bez měřeného pole platí FA. */
+export function currentFaField(
+  measured: GexFieldRow | null,
+  fa: GexFieldRow | null,
+): GexFieldRow | null {
+  if (fa === null) return null
+  return measured === null || fa.tsIso >= measured.tsIso ? fa : null
+}
+
 /** Jmenovatel normalizace dyn módu — p99 naměřené části (sdílí ho i projekce).
 
 `units` (#569) default `per_point` = uložená jednotka enginu (bez váhy). */

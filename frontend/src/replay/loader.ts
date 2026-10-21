@@ -844,12 +844,20 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     capacity,
     minuteKeys.length,
   )
+  // Minuty s FA řadami (#1632): levelsfa a gexprofilefa mají jeden řádek na
+  // minutu, oiest statisíce — jeho minuty se berou ve smyčce přepisu odhadu
+  const faMinutes = new Set<string>(
+    [...(bundle.levelsfa ?? []), ...(bundle.gexprofilefa ?? [])].map((row) =>
+      canonicalTs(row.ts_min),
+    ),
+  )
   const oiestRows = bundle.oiest ?? []
   for (const row of oiestRows) {
     const minuteIdx = minuteIndex.get(canonicalTs(row.ts_min))
     const strikeIdx = strikeIndex.get(Number(row.strike))
     const est = Number(row.oi_est)
     if (minuteIdx === undefined || strikeIdx === undefined || !Number.isFinite(est)) continue
+    faMinutes.add(minuteKeys[minuteIdx])
     const index = strikeIdx * capacity + minuteIdx
     if (String(row.right) === 'C') callOiEst[index] = est
     else putOiEst[index] = est
@@ -868,11 +876,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     putOi,
     callOiEst,
     putOiEst,
-    faMinutes: new Set<string>(
-      [...oiestRows, ...(bundle.levelsfa ?? []), ...(bundle.gexprofilefa ?? [])].map((row) =>
-        canonicalTs(row.ts_min),
-      ),
-    ),
+    faMinutes,
     callPrinted,
     putPrinted,
     callStructured,

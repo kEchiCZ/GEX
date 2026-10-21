@@ -1,5 +1,6 @@
 /** Stavová lišta pipeline (SPEC 3.7 + 7.1) — živě ze status kanálu /ws/live. */
 import { daysLabel, faAlphaBadge, useFaAlpha, type FaAlphaBadge } from '../hooks/useFaAlpha'
+import { CUMDELTA_SOURCE_AGGRESSOR } from '../replay/loader'
 import { useAppState } from '../state/AppState'
 
 /** Tooltip badge FA α — odrážky a `\n` (vzor `ivRankTooltip`). */
@@ -17,7 +18,7 @@ function faAlphaTooltip(badge: FaAlphaBadge): string {
     'Kalibrovaná α flow-adjusted odhadu OI (ADR-0011):',
     '• medián poměru skutečného ΔOI k čistému toku z ranních validací, EMA přes dny',
     '• počet = kolik čistých dnů už kalibrace započetla',
-    badge.source === 'aggressor'
+    badge.source === CUMDELTA_SOURCE_AGGRESSOR
       ? '• čistý tok z tisků se stranou agresora od burzy (ADR-0057)'
       : '• čistý tok z midpoint testu (mechanika v5)',
   ].join('\n')

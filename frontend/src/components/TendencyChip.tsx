@@ -15,7 +15,7 @@ import { useTendency } from '../hooks/useTendency'
 const ZERO_WEIGHT_TOOLTIP = [
   'Hlas s vahou 0 — do skóre tendence nevstupuje:',
   '• složka se dál počítá a ukládá, data zůstávají pro další revize vah',
-  '• váhu 0 nastavila revize vah (tendence v5: poloha mezi zdmi, #1113)',
+  '• váhu 0 nastavuje revize vah tendence (od tendence v5 poloha mezi zdmi, #1113)',
 ].join('\n')
 
 export function TendencyChip() {

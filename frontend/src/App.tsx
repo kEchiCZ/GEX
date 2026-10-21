@@ -61,7 +61,7 @@ import { SetupsView } from './components/SetupsView'
 import { StatsView } from './components/StatsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { useSetups } from './hooks/useSetups'
-import { buildGexGrid, profileAt, projectGexField } from './heatmap/gexmode'
+import { buildGexGrid, currentFaField, profileAt, projectGexField } from './heatmap/gexmode'
 import { planeUnits } from './heatmap/units'
 import { extendDailyGrid, forwardBoundaries, forwardLabels, futureBlocks, projectDailyForward } from './heatmap/dailyforward' // prettier-ignore
 import { useGexForward } from './hooks/useGexForward'
@@ -415,16 +415,10 @@ function MainContent() {
     if (greekPlane.profiles.length === 0) return null
     return alignPlaneProfiles(greekPlane.profiles, rawDay.minutesIso)
   }, [underlayPlane, rawDay.gexProfile, rawDay.gexProfileFa, rawDay.minutesIso, greekPlane.profiles, faActive]) // prettier-ignore
-  // FA pole jen ze stejné minuty jako měřené: starší FA pole = FA teď v mezeře
-  // a projekce by držela odhad z doby před ní (ADR-0057 bod 4, #1632)
-  const faFieldCurrent =
-    day.gexFieldFa !== null && (day.gexField === null || day.gexFieldFa.tsIso >= day.gexField.tsIso)
   const planeField =
     underlayPlane === 'gex'
       ? faActive
-        ? faFieldCurrent
-          ? day.gexFieldFa
-          : null
+        ? currentFaField(day.gexField, day.gexFieldFa)
         : day.gexField
       : greekPlane.field
   const planePalette =
@@ -2031,7 +2025,8 @@ function MainContent() {
               '• OI Δ složka pravého profilu zůstává měřená',
               ...(faDayEmpty
                 ? [
-                    '• tento den FA řady nemá — stav kalibrace ukazuje badge „FA“ ve stavové liště; měřené OI: přepínač OI → Měřené',
+                    '• tento den FA řady nemá — FA píše jen aktivní řetěz plné pipeline (ne sekundární expirace ani ad-hoc pohled) a od v6 až po kalibraci (badge „FA“ ve stavové liště)',
+                    '• měřené OI: přepínač OI → Měřené',
                   ]
                 : []),
             ].join('\n')}

@@ -7,6 +7,7 @@ CumΔ běžícího enginu (ADR-0057 bod 6, #1632).
 */
 import { useEffect, useState } from 'react'
 import { API_BASE } from '../config'
+import { CUMDELTA_SOURCE_AGGRESSOR } from '../replay/loader'
 
 /** Zdroj netu kalibrace α (ADR-0057 bod 8); NULL ze starších stavů = midpoint. */
 export type FaAlphaSource = 'midpoint' | 'aggressor'
@@ -17,10 +18,11 @@ export interface FaAlphaState {
   source: FaAlphaSource
 }
 
-/** Odpověď `/fa/alpha`: stavy per symbol a práh dnů, od kterého FA pod tisky jede. */
+/** Odpověď `/fa/alpha`: stavy per symbol a práh dnů, od kterého FA pod tisky jede
+(`FA_MIN_DAYS` enginu; null = API ho nenese, pak se „nekalibrováno“ neukáže). */
 export interface FaAlphaPayload {
   bySymbol: Record<string, FaAlphaState>
-  minDays: number
+  minDays: number | null
 }
 
 /** Co ukáže badge: kalibrovaná α, nebo FA vypnutá do kalibrace z tisků. */
@@ -29,8 +31,6 @@ export type FaAlphaBadge =
   | { kind: 'uncalibrated'; days: number; minDays: number }
 
 const REFRESH_MS = 15 * 60_000
-/** Výchozí práh dnů (`FA_MIN_DAYS` enginu), když starší API `min_days` nenese. */
-const DEFAULT_MIN_DAYS = 5
 
 interface AlphaRow {
   symbol: string
@@ -55,14 +55,14 @@ export function useFaAlpha(): FaAlphaPayload | null {
               bySymbol[row.symbol] = {
                 alpha: row.alpha,
                 days: Number(row.days) || 0,
-                source: row.source === 'aggressor' ? 'aggressor' : 'midpoint',
+                source: row.source === CUMDELTA_SOURCE_AGGRESSOR ? 'aggressor' : 'midpoint',
               }
             }
           }
           const minDays = Number(body.min_days)
           setPayload({
             bySymbol,
-            minDays: Number.isFinite(minDays) && minDays > 0 ? minDays : DEFAULT_MIN_DAYS,
+            minDays: Number.isFinite(minDays) && minDays > 0 ? minDays : null,
           })
         })
         .catch(() => {
@@ -99,17 +99,19 @@ export function faAlphaBadge(
 ): FaAlphaBadge | null {
   if (!payload) return null
   const state = payload.bySymbol[symbol]
-  if (runningSource !== 'aggressor') {
+  if (runningSource !== CUMDELTA_SOURCE_AGGRESSOR) {
     return state ? { kind: 'calibrated', ...state } : null
   }
-  if (state && state.source === 'aggressor' && state.days >= payload.minDays) {
+  const { minDays } = payload
+  if (minDays === null) return null // starší API bez prahu — nehádat
+  if (state && state.source === CUMDELTA_SOURCE_AGGRESSOR && state.days >= minDays) {
     return { kind: 'calibrated', ...state }
   }
   if (!state && !trackedSymbols.includes(symbol)) return null
   return {
     kind: 'uncalibrated',
-    days: state?.source === 'aggressor' ? state.days : 0,
-    minDays: payload.minDays,
+    days: state?.source === CUMDELTA_SOURCE_AGGRESSOR ? state.days : 0,
+    minDays,
   }
 }
 

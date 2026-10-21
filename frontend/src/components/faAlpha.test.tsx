@@ -119,6 +119,17 @@ test('faAlphaBadge: pod v5 beze změny, pod tisky jen stav z tisků s ≥ min_da
   expect(faAlphaBadge(PAYLOAD, 'SPY', 'aggressor', ['ES'])).toBeNull()
   // API nedostupné → žádný badge
   expect(faAlphaBadge(null, 'ES', 'aggressor', ['ES'])).toBeNull()
+  // Starší API bez min_days: pod tisky práh nehádat, pod v5 beze změny
+  const noMin = { ...PAYLOAD, minDays: null }
+  expect(faAlphaBadge(noMin, 'NQ', 'aggressor', ['NQ'])).toBeNull()
+  expect(faAlphaBadge(noMin, 'ES', 'midpoint', ['ES'])?.kind).toBe('calibrated')
+  // Stav z tisků pod v5 (návrat pinem image z v6): FA jede s uloženou α jako live_alpha
+  expect(faAlphaBadge(PAYLOAD, 'RTY', 'midpoint', ['RTY'])).toEqual({
+    kind: 'calibrated',
+    alpha: 0.3,
+    days: 4,
+    source: 'aggressor',
+  })
 })
 
 test('daysLabel skloňuje česky', () => {

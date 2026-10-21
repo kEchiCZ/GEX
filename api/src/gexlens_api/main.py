@@ -122,7 +122,9 @@ def volume_increments(volume: pd.DataFrame) -> pd.DataFrame:
     PRŮBĚŽNÉ MAXIMUM seance, ne poslední hodnota: pokles i návrat k maximu
     dají 0, započte se jen objem nad maximem. NaN referenci nemění a první
     výskyt kontraktu jen založí stav (přírůstek 0). Tentýž vzorec počítá
-    frontend `ensureDerived` (`frontend/src/replay/loader.ts`).
+    frontend `ensureDerived` (`frontend/src/replay/loader.ts`) — jen první
+    minutu po mezeře v objemu (kontrakt bez objemu v předchozí minutě) panel
+    kreslí jako 0, Daily ji počítá (#1632, rozhodnutí B 21. 10.).
     """
     reference = volume.ffill(axis=1).cummax(axis=1)
     return reference.diff(axis=1).clip(lower=0.0).fillna(0.0)
@@ -139,7 +141,8 @@ def _contract_frame(snapshots: pd.DataFrame) -> pd.DataFrame:
 
 def daily_totals(snapshots: pd.DataFrame) -> tuple[dict[str, object], object | None]:
     """Denní součty pro Daily pohled (#1206) — stejné vzorce jako frontend
-    `ensureDerived`: OptVol / Δ Flow = přírůstky kumulativního volume proti
+    `ensureDerived` (kromě minuty po mezeře v objemu, kterou panel kreslí jako 0
+    a Daily počítá, #1632): OptVol / Δ Flow = přírůstky kumulativního volume proti
     průběžnému maximu kontraktu (`volume_increments`, #1602; NULL ani
     chybějící strike nejsou 0, první výskyt kontraktu jen založí stav),
     Δ Flow vážené |delta| minuty; Evo OI = Σ OI přes striky v poslední minutě.
