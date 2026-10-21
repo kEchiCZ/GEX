@@ -19,7 +19,8 @@ shoda není (dvě chybějící hodnoty nic nedokládají) a vypisuje se zvláš�
 
 Brána parity stín ↔ živá 1A (ADR-0057 bod 7, #1590): `--cum-source stin` pod
 mechanikou v6 postaví CumΔ replaye ze stínu `cumdelta_dx` i v seancích s 1A,
-touž cestou jako historie 21. 9. → nasazení (štítek L → minuta L + 1). Proti
+touž transformací jako historii 21. 9. → nasazení (štítek L → minuta L + 1;
+po bumpu jsou štítky zarovnané, #1586, takže brána měří horní mez zpoždění). Proti
 živému feature logu (1A) se měří mezery (minuta s mezerou jen v jedné řadě)
 a 10min přírůstky CumΔ (Pearson r a shoda znaménka) — okno T1 a sklonu.
 Práh (varianta B, vlastník 21. 10. 2026): ≥ 5 seancí, medián r ≥ 0,85, žádná
@@ -51,6 +52,7 @@ from sqlalchemy import create_engine  # noqa: E402
 from gexlens_engine.compute.bandregime import band_context  # noqa: E402
 from gexlens_engine.compute.gexfield import GexProfile  # noqa: E402
 from gexlens_engine.compute.setups import (  # noqa: E402
+    CUMDELTA_PRINTS,
     SETUP_MECHANICS_VERSION,
     SetupParams,
     average_true_range,
@@ -179,7 +181,7 @@ def replay_features(
     expiry: str,
     repo: OIEodRepository,
     *,
-    prints: bool = SETUP_MECHANICS_VERSION >= 6,
+    prints: bool = CUMDELTA_PRINTS,
     shadow_only: bool = False,
 ) -> pd.DataFrame:
     """Feature řádky z replaye — týmiž funkcemi jako živý `_log_features`."""

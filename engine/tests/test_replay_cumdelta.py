@@ -100,6 +100,16 @@ def test_minuta_bez_trade_vetve_dela_mezeru_ze_dvou_stitku() -> None:
     assert rows[ts(DAY, "14:04")] == 4.0
 
 
+def test_stitek_po_preskoku_kontroluje_i_minutu_pred_sebou() -> None:
+    labels = [ts(DAY, "14:00"), ts(DAY, "14:02"), ts(DAY, "14:03")]
+    gaps = {ts(DAY, "14:01")}  # obsah štítku 14:02 po přeskoku sahá do [14:00, 14:01)
+    rows = _values(bt.shadow_rows(_shadow(labels, [10.0, 14.0, 15.0]), SESSION, gaps))
+    assert math.isnan(rows[ts(DAY, "14:01")])  # štítek 14:00 (L + 1 v mezeře)
+    assert rows[ts(DAY, "14:02")] == 10.0  # doplněný přeskok = poslední kumulativ
+    assert math.isnan(rows[ts(DAY, "14:03")])  # štítek 14:02 (L − 1 po přeskoku)
+    assert rows[ts(DAY, "14:04")] == 15.0
+
+
 def test_posledni_stitek_seance_nepatri_do_dalsi() -> None:
     # 21:59 UTC = 16:59 CDT → rozhodnutí 22:00 UTC = 17:00 CDT = seance 15. 10.
     labels = [ts(DAY, "21:58"), ts(DAY, "21:59")]
@@ -370,3 +380,75 @@ def test_v6_shadow_only_cte_stin_i_v_seanci_s_1a(data_root: Path) -> None:
     assert _values(bt.build_cum_series("ES", prints=True))[ts(monday, "15:01")] == 9.0
     shadow = _values(bt.build_cum_series("ES", prints=True, shadow_only=True))
     assert shadow == {ts(monday, "15:01"): 3.0}  # štítek 15:00 → minuta 15:01
+
+
+def test_v6_nasazeni_ve_stredu_v_pauze_seance_d_ze_stinu(data_root: Path) -> None:
+    wednesday, thursday = dt.date(2026, 10, 28), dt.date(2026, 10, 29)
+    assert is_trading_session(wednesday) and is_trading_session(thursday)
+    derived = data_root / "derived" / "ES"
+    day = wednesday.isoformat()
+    _write(
+        derived / "cumdelta_dx" / f"{day}.parquet",
+        _shadow([ts(day, "14:00"), ts(day, "14:01")], [4.0, 6.0]),
+    )
+    # RTH seance D z midpointu, nasazení v6 v pauze 21:30 UTC = 16:30 CDT (ještě seance D)
+    pause = ts(day, "21:30")
+    assert trading_session_date(pause.to_pydatetime()) == wednesday
+    _write(
+        derived / "flow" / f"{day}.parquet",
+        _flow(
+            [
+                (ts(day, "14:00"), -70.0, "midpoint", 2.0),
+                (ts(day, "14:01"), -72.0, "midpoint", 2.0),
+                (pause, 0.0, "aggressor", 0.0),
+                # 22:00 UTC = 17:00 CDT otevírá seanci čtvrtka
+                (ts(day, "22:00"), 1.0, "aggressor", 1.0),
+            ]
+        ),
+    )
+    values = _values(bt.build_cum_series("ES", prints=True))
+    assert values[ts(day, "14:01")] == 4.0  # seance D ze stínu, RTH není mezera
+    assert values[ts(day, "14:02")] == 6.0
+    assert values[ts(day, "22:00")] == 1.0  # seance D + 1 z 1A
+    assert trading_session_date(ts(day, "22:00").to_pydatetime()) == thursday
+
+
+def test_v6_printvol_null_pod_tisky_mezeru_neznaci(data_root: Path) -> None:
+    derived = data_root / "derived" / "ES"
+    labels = [ts(DAY, f"14:0{m}") for m in range(4)]
+    _write(derived / "cumdelta_dx" / f"{DAY}.parquet", _shadow(labels, [1.0, 2.0, 3.0, 4.0]))
+    # Engine v6: mezera 1A je jen `cum_delta` NULL (14:02); printvol NULL ve 14:00 nese
+    # až bar s přírůstkem po mezeře v dřívější minutě, mezeru téže minuty neznačí
+    _write(
+        derived / "flow" / f"{DAY}.parquet",
+        _flow([(label, None if label == labels[2] else 1.0, "aggressor", 1.0) for label in labels]),
+    )
+    _write(
+        derived / "20261014" / "printvol" / f"{DAY}.parquet",
+        pd.DataFrame(
+            {
+                "ts_min": [labels[0]],
+                "strike": [6700.0],
+                "right": ["C"],
+                "volume_delta": [3.0],
+                "printed": [None],
+                "structured": [None],
+            }
+        ),
+    )
+    values = _values(bt.build_cum_series("ES", prints=True, shadow_only=True))
+    assert values[ts(DAY, "14:01")] == 1.0
+    assert math.isnan(values[ts(DAY, "14:02")]) and math.isnan(values[ts(DAY, "14:03")])
+    assert values[ts(DAY, "14:04")] == 4.0
+
+
+def test_v5_chybejici_radek_je_mezera_bez_dosazeni(data_root: Path) -> None:
+    derived = data_root / "derived" / "ES"
+    _write(
+        derived / "flow" / f"{DAY}.parquet",
+        _flow([(ts(DAY, "14:00"), -10.0, "midpoint", 3.0)]),
+    )
+    frame = pd.DataFrame({"ts_min": [ts(DAY, "14:00"), ts(DAY, "14:01")]})
+    v5 = bt.attach_cum_delta(frame, bt.build_cum_series("ES", prints=False), prints=False)
+    assert v5["cum_delta"][0] == -10.0
+    assert math.isnan(v5["cum_delta"][1])  # v5 jako před #1590: jen řádek téže minuty

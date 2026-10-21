@@ -6,7 +6,6 @@ Skript žije ve `scripts/`, načítá se přes importlib (vzor test_backtest_rep
 from __future__ import annotations
 
 import importlib.util
-import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -60,13 +59,13 @@ def test_compare_nepocita_nan_nan_do_shody(capsys: pytest.CaptureFixture[str]) -
 
 def test_prirustek_pres_mezeru_se_nepocita() -> None:
     index = _minutes(25)
-    live = pd.Series([float(i) for i in range(25)], index=index)
+    live = pd.Series([float(i * i) for i in range(25)], index=index)
     replay = live * 0.3
     live.iloc[12] = NAN  # mezera 1A ve 14:12
     result = parity.cum_parity(live, replay, minutes=10)
     # okna končící 14:10–14:24: přes 14:12 vede každé okno s koncem 14:12–14:22
     assert result.windows == 15 - 11
-    assert result.r is None or math.isnan(result.r) or result.r == pytest.approx(1.0)
+    assert result.r == pytest.approx(1.0)  # přírůstky replaye = 0,3 × živé
     assert result.sign_share == 1.0
 
 

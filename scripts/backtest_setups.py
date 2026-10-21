@@ -159,10 +159,12 @@ def shadow_rows(shadow: pd.DataFrame, session: dt.date, gaps: set[pd.Timestamp])
       sousední řádky.
     - Díra ≥ 2 štítky za otevřeného trhu (restart, výpadek) je mezera včetně
       prvního řádku po ní, protože tisky z doby výpadku chybí.
-    - Štítek, jehož obsah [L − 1, L + 1) zasáhla minuta bez trade větve (`gaps`:
-      `flow.printed_volume` nebo `printvol.printed` NULL, #1071), je mezera.
+    - Štítek, jehož obsah [L − 1, L + 1) zasáhla minuta bez trade větve (`gaps`,
+      `_shadow_gap_minutes`), je mezera; štítek po přeskoku sahá i do L − 2.
       Stín za odpojeného tasty píše tok 0, živá 1A NULL — tady i v paritě platí
       sémantika 1A.
+    - Od v6 stín štítky zarovnává (stav k N, #1586), posun o 1 min je tam celé
+      zpoždění. Brána parity po bumpu proto měří horní mez zpoždění historie.
 
     Vrací `ts_min` (minuta rozhodnutí), `session` a `cum_delta` (NaN = mezera);
     řádek, který by po posunu patřil další seanci, se zahodí.
@@ -176,6 +178,7 @@ def shadow_rows(shadow: pd.DataFrame, session: dt.date, gaps: set[pd.Timestamp])
     previous: tuple[pd.Timestamp, float] | None = None
     for label, value in zip(shadow["ts_min"], level, strict=True):
         hole = False
+        missing = 0
         if previous is not None:
             missing = int((label - previous[0]) / _MINUTE) - 1
             if missing == 1:
@@ -185,7 +188,8 @@ def shadow_rows(shadow: pd.DataFrame, session: dt.date, gaps: set[pd.Timestamp])
                 opened = [ts for ts in skipped if _open_market(ts)]
                 rows.extend((ts, float("nan")) for ts in opened)
                 hole = bool(opened)
-        gap = hole or label in gaps or label + _MINUTE in gaps
+        reach = [label, label + _MINUTE] + ([label - _MINUTE] if missing == 1 else [])
+        gap = hole or any(ts in gaps for ts in reach)
         rows.append((label, float("nan") if gap else float(value)))
         previous = (label, float(value))
     frame = pd.DataFrame(rows, columns=["ts_min", "cum_delta"])
@@ -195,17 +199,29 @@ def shadow_rows(shadow: pd.DataFrame, session: dt.date, gaps: set[pd.Timestamp])
 
 
 def _shadow_gap_minutes(symbol: str, flow: pd.DataFrame | None) -> set[pd.Timestamp]:
-    """Minuty otevřeného trhu bez trade větve od `SHADOW_FROM` (#1071, ADR-0057 bod 7)."""
+    """Minuty otevřeného trhu bez trade větve od `SHADOW_FROM` (#1071, ADR-0057 bod 7).
+
+    Sémantika mezery živé 1A podle enginu, který minutu zapsal:
+    - řádek `flow` se zdrojem `aggressor` (v6): mezera = `cum_delta` NULL.
+      `printvol.printed` NULL tu minutu neznačí — pod tisky ho nese až bar
+      s přírůstkem, klidně o desítky minut později (`CumDeltaTracker.add_bar`);
+    - jinak (v5): `flow.printed_volume` NULL nebo `printvol.printed` NULL.
+    """
     candidates: list[pd.Timestamp] = []
+    v6_minutes: set[pd.Timestamp] = set()
     if flow is not None:
-        null = flow["printed_volume"].isna() & (flow["session"] >= SHADOW_FROM)
-        candidates.extend(flow.loc[null, "ts_min"])
+        recent = flow["session"] >= SHADOW_FROM
+        v6 = flow["source"] == SOURCE_AGGRESSOR
+        v6_minutes = set(flow.loc[v6, "ts_min"])
+        candidates.extend(flow.loc[recent & v6 & flow["cum_delta"].isna(), "ts_min"])
+        candidates.extend(flow.loc[recent & ~v6 & flow["printed_volume"].isna(), "ts_min"])
     first_day = (SHADOW_FROM - dt.timedelta(days=1)).isoformat()
     for path in sorted(glob.glob(f"{DATA}/{symbol}/*/printvol/*.parquet")):
         if os.path.basename(path)[:10] < first_day:
             continue
         part = pd.read_parquet(path, columns=["ts_min", "printed"])
-        candidates.extend(_utc_ns(part.loc[part["printed"].isna(), "ts_min"]))
+        nulls = _utc_ns(part.loc[part["printed"].isna(), "ts_min"])
+        candidates.extend(ts for ts in nulls if ts not in v6_minutes)
     return {ts for ts in set(candidates) if _open_market(ts)}
 
 
@@ -231,15 +247,14 @@ def build_cum_series(
 
     - **v5** (midpoint): řádky `flow` zdroje midpoint (`stored_sources`); řádek
       jiného zdroje je mezera.
-    - **v6** (tisky, ADR-0057 bod 7): seance, která má řádek `flow` se zdrojem
-      `aggressor`, čte živou 1A (NULL = mezera, řádek jiného zdroje v ní taky);
-      hranici nesou řádky, ne datum (bod 8). Ostatní seance od `SHADOW_FROM` čtou
-      stín (`shadow_rows`), starší jsou mezera.
+    - **v6** (tisky, ADR-0057 bod 7): seance, která má za otevřeného trhu řádek
+      `flow` se zdrojem `aggressor`, čte živou 1A (NULL = mezera, řádek jiného
+      zdroje v ní taky); hranici nesou řádky, ne datum (bod 8). Řádky z denní
+      pauze se nepočítají: nasazení v pauze 16:00–17:00 CT patří ještě seanci D,
+      jejíž RTH je midpoint — D čte stín, 1A až D + 1. Ostatní seance od
+      `SHADOW_FROM` čtou stín (`shadow_rows`), starší jsou mezera.
     - `shadow_only` (brána parity, `replay_parity.py`): stín i v seancích s 1A,
-      touž cestou jako historie — srovnává se proti živé 1A.
-
-    Chybějící řádek bere hodnotu posledního řádku téže seance (`attach_cum_delta`),
-    jako živý `SetupEngine`, kterému zůstane `runtime.last_flow`.
+      touž transformací jako historie — srovnává se proti živé 1A.
     """
     flow = _flow_frame(symbol)
     parts: list[pd.DataFrame] = []
@@ -253,8 +268,9 @@ def build_cum_series(
     else:
         live_sessions: set[dt.date] = set()
         if flow is not None and not shadow_only:
-            aggressor = flow["source"] == SOURCE_AGGRESSOR
-            live_sessions = set(flow.loc[aggressor, "session"])
+            aggressor = flow[flow["source"] == SOURCE_AGGRESSOR]
+            opened = aggressor["ts_min"].map(_open_market).astype(bool)
+            live_sessions = set(aggressor.loc[opened, "session"])
             live = flow[flow["session"].isin(live_sessions)]
             measured = live["cum_delta"].where(live["source"] == SOURCE_AGGRESSOR)
             parts.append(live.assign(cum_delta=measured)[["ts_min", "session", "cum_delta"]])
@@ -293,8 +309,9 @@ def attach_cum_delta(
 ) -> pd.DataFrame:
     """Přidá minutám replaye `cum_delta` (NaN = mezera) a `cum_gap_before`.
 
-    Hodnota = poslední řádek řady téže seance do minuty včetně (živý engine drží
-    `runtime.last_flow`). `cum_gap_before` jako živý `SetupEngine` (ADR-0057 bod 4):
+    Hodnota pod v6 = poslední řádek řady téže seance do minuty včetně (živý engine
+    drží `runtime.last_flow`); pod v5 jen řádek téže minuty jako před #1590,
+    chybějící je mezera. `cum_gap_before` jako živý `SetupEngine` (ADR-0057 bod 4):
     mezi minulým a tímto řádkem historie leží minuta s mezerou (minuta bez baru
     nebo levels do historie nejde), a pod v6 i hranice seance 17:00 CT (#1581).
     """
@@ -311,6 +328,7 @@ def attach_cum_delta(
             on="ts_min",
             by="session",
             direction="backward",
+            tolerance=None if prints else pd.Timedelta(0),
         )
         gap_ts = list(series.loc[series["cum_delta"].isna(), "ts_min"])
     flags = [False] * len(frame)
