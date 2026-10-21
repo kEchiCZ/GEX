@@ -2,7 +2,8 @@
 #
 # Úloha „GEXLens walk-forward": po–pá 23:30 (po settle 22:00), jen když PC běží;
 # zmeškaný start se dožene při nejbližší příležitosti (StartWhenAvailable).
-# Skript sám ověří, že běží aplikace (PG kontejner), jinak tiše skončí.
+# Skript sám ověří, že běží aplikace (PG kontejner) a že je trh zavřený (#1568),
+# jinak tiše skončí.
 # Výstup se připisuje do data/reports/walkforward-nightly.log.
 # Spustit jednou pod účtem, který má docker i uv: pwsh scripts/register-walkforward-task.ps1
 # Odregistrace: Unregister-ScheduledTask -TaskName 'GEXLens walk-forward' -Confirm:$false

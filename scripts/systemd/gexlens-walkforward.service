@@ -12,7 +12,7 @@ Requires=docker.service
 Type=oneshot
 User=gex
 WorkingDirectory=/srv/gexlens
-# Skript sám ověří běžící gex-postgres-1 a bez něj tiše skončí (exit 0)
+# Skript sám ověří běžící gex-postgres-1 a zavřený trh (#1568), jinak tiše skončí (exit 0)
 ExecStart=/usr/bin/pwsh -NoProfile -File /srv/gexlens/scripts/walkforward-nightly.ps1
 StandardOutput=append:/srv/gexlens/data/reports/walkforward-nightly.log
 StandardError=append:/srv/gexlens/data/reports/walkforward-nightly.log
