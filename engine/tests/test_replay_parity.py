@@ -79,3 +79,31 @@ def test_obraceny_smer_ma_nulovou_shodu_znamenka() -> None:
     assert result.windows > 0
     assert result.sign_share == 0.0
     assert result.r == pytest.approx(-1.0)
+
+
+def _session(r: float | None, sign: float | None, gap: int = 0) -> Any:
+    return parity.CumParity(
+        minutes=1000, gap_one_side=gap, gap_both=0, windows=990, r=r, sign_share=sign
+    )
+
+
+def test_brana_b_projde_u_stropu_posunu_o_minutu() -> None:
+    # strop 14.–20. 10. (ES): r 0,843–0,950, znaménko 86–89 %, mezera ≤ 1,1 %
+    results = [_session(r, 0.87, gap=11) for r in (0.843, 0.916, 0.95, 0.92, 0.9)]
+    assert parity.gate_failures(results) == []
+
+
+def test_brana_b_neprojde_pod_prahy() -> None:
+    results = [_session(0.9, 0.9) for _ in range(4)] + [_session(0.74, 0.79, gap=250)]
+    failures = parity.gate_failures(results)
+    assert any("nejnižší r 0.740" in f for f in failures)
+    assert any("shoda znaménka 79.0%" in f for f in failures)
+    assert any("mezera jen v jedné řadě" in f for f in failures)
+    # medián 0,9 je nad 0,85 — ten důvod v seznamu není
+    assert not any(f.startswith("medián") for f in failures)
+
+
+def test_brana_b_chce_pet_seanci_s_r() -> None:
+    failures = parity.gate_failures([_session(0.9, 0.9) for _ in range(3)] + [_session(None, 0.9)])
+    assert "seancí 4 < 5" in failures
+    assert "seancí bez r 1" in failures

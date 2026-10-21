@@ -22,6 +22,9 @@ mechanikou v6 postaví CumΔ replaye ze stínu `cumdelta_dx` i v seancích s 1A,
 touž cestou jako historie 21. 9. → nasazení (štítek L → minuta L + 1). Proti
 živému feature logu (1A) se měří mezery (minuta s mezerou jen v jedné řadě)
 a 10min přírůstky CumΔ (Pearson r a shoda znaménka) — okno T1 a sklonu.
+Práh (varianta B, vlastník 21. 10. 2026): ≥ 5 seancí, medián r ≥ 0,85, žádná
+seance pod 0,75, znaménko ≥ 80 % v každé seanci, mezera jen v jedné řadě ≤ 2 %
+minut; verdikt `gate_failures` se vypíše pod souhrnem.
 
 Spuštění (engine kontejner):  python replay_parity.py --symbol ES --date 2026-08-24
 Brána po bumpu v6 (seance čárkou):
@@ -71,6 +74,13 @@ RTOL_COLUMNS = {"gamma_edge_up": 1e-6, "gamma_edge_dn": 1e-6}
 KNOWN_DIFF = {"call_flow", "put_flow", "opt_vol"}
 #: Okno přírůstků CumΔ brány stín ↔ 1A v minutách — okno T1 a sklonu (ADR-0057 bod 4)
 WINDOW_MIN = 10
+#: Práh brány stín ↔ 1A (ADR-0057 bod 7, doplněk 21. 10. 2026: vlastník varianta B).
+#: Strop daný samotným posunem štítku o 1 min (14.–20. 10.): r 0,843–0,950, znaménko 86–89 %.
+GATE_MIN_SESSIONS = 5
+GATE_MEDIAN_R = 0.85
+GATE_MIN_R = 0.75
+GATE_MIN_SIGN = 0.80
+GATE_MAX_ONE_SIDE_GAP = 0.02
 
 
 @dataclass(frozen=True)
@@ -130,6 +140,38 @@ def cum_parity(live: pd.Series, replay: pd.Series, minutes: int = WINDOW_MIN) ->
         r=r,
         sign_share=sign_share,
     )
+
+
+def gate_failures(results: list[CumParity]) -> list[str]:
+    """Důvody, proč brána stín ↔ 1A neprošla; prázdný seznam = prošla (ADR-0057 bod 7).
+
+    Seance bez r nebo bez shody znaménka (málo oken) bránu nedoloží, proto neprojde.
+    Mezera jen v jedné řadě se měří přes minuty všech seancí dohromady.
+    """
+    failures: list[str] = []
+    if len(results) < GATE_MIN_SESSIONS:
+        failures.append(f"seancí {len(results)} < {GATE_MIN_SESSIONS}")
+    rs = [c.r for c in results]
+    known = [r for r in rs if r is not None]
+    if len(known) < len(rs):
+        failures.append(f"seancí bez r {len(rs) - len(known)}")
+    if known and statistics.median(known) < GATE_MEDIAN_R:
+        failures.append(f"medián r {statistics.median(known):.3f} < {GATE_MEDIAN_R}")
+    if known and min(known) < GATE_MIN_R:
+        failures.append(f"nejnižší r {min(known):.3f} < {GATE_MIN_R}")
+    signs = [c.sign_share for c in results]
+    if any(s is None for s in signs):
+        failures.append(f"seancí bez shody znaménka {sum(1 for s in signs if s is None)}")
+    low = [s for s in signs if s is not None and s < GATE_MIN_SIGN]
+    if low:
+        failures.append(f"shoda znaménka {min(low):.1%} < {GATE_MIN_SIGN:.0%}")
+    minutes = sum(c.minutes for c in results)
+    one_side = sum(c.gap_one_side for c in results) / minutes if minutes else None
+    if one_side is None or one_side > GATE_MAX_ONE_SIDE_GAP:
+        failures.append(
+            f"mezera jen v jedné řadě {_fmt(one_side, pct=True)} > {GATE_MAX_ONE_SIDE_GAP:.0%}"
+        )
+    return failures
 
 
 def replay_features(
@@ -288,6 +330,10 @@ def main() -> None:
             f"{_fmt(min(signs) if signs else None, pct=True)}, mezera jen v jedné řadě "
             f"{_fmt(one_side, pct=True)} ==="
         )
+    if shadow_only:
+        failures = gate_failures(results)
+        verdict = "PROŠLA" if not failures else "NEPROŠLA — " + "; ".join(failures)
+        print(f"=== Brána stín ↔ 1A (ADR-0057 bod 7): {verdict} ===")
 
 
 if __name__ == "__main__":
