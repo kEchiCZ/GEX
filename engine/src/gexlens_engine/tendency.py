@@ -31,8 +31,9 @@ from gexlens_engine.storage.tendency_store import TendencyRepository, votes_payl
 
 logger = logging.getLogger(__name__)
 
-# Okno sklonů (Cum Δ, cena, SentIndex) — délka okna sklonu CumΔ, jediná pro
-# tendenci i potvrzení COMBINED v news-engine (ADR-0057 bod 4, #1589)
+# Okno sklonů (Cum Δ, cena, SentIndex) = okno sklonu CumΔ (ADR-0057 bod 4):
+# jediná délka pro sklon CumΔ v tendenci i v potvrzení COMBINED v news-engine
+# (#1589); sklon ceny a SentIndexu se měří přes totéž okno jako CumΔ
 SLOPE_LOOKBACK_MIN = FLOW_WINDOW_MIN
 SENTIMENT_SUBDIR = "sentiment"
 #: Škrcení warningu o chybějící partici SentIndexu (#1136)

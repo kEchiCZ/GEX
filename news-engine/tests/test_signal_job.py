@@ -513,7 +513,7 @@ def test_stary_kontext_neplati(tmp_path: Path) -> None:
     assert load_gex_context(tmp_path, "ES", now) is None
 
     write_bars(tmp_path, [(stale, 7600.0), (minute - dt.timedelta(minutes=2), 7601.0)])
-    # 0DTE po settle už nepíše → flip z další expirace s čerstvým řádkem
+    # Aktivní 0DTE se zpozdil, sekundár D+1 píše dál → flip chybí, ne flip D+1
     write_levels(tmp_path, "20261021", [(stale, 7500.0)])
     write_levels(tmp_path, "20261022", [(minute - dt.timedelta(minutes=1), 7590.0)])
     write_flow(tmp_path, flow_series(stale - dt.timedelta(minutes=15), stale, source="aggressor"))
@@ -522,21 +522,40 @@ def test_stary_kontext_neplati(tmp_path: Path) -> None:
 
     assert context is not None
     assert context.spot == 7601.0
-    assert context.flip == 7590.0
+    assert context.flip is None
+    assert context.flip_ts is None
     assert context.cum_delta_slope is None
     assert context.cum_delta_source is None
 
-    write_levels(tmp_path, "20261022", [(stale, 7590.0)])
-    context = load_gex_context(tmp_path, "ES", now)
+
+def test_flip_po_settle_z_dalsi_expirace(tmp_path: Path) -> None:
+    """0DTE po settle (16:00 ET = 20:00 UTC) už nepíše → flip z další expirace."""
+    before = dt.datetime(2026, 10, 21, 19, 58, 30, tzinfo=dt.UTC)
+    after = dt.datetime(2026, 10, 21, 20, 30, 30, tzinfo=dt.UTC)
+    write_bars(tmp_path, [(before.replace(second=0), 7600.0), (after.replace(second=0), 7601.0)])
+    write_levels(tmp_path, "20261021", [(before.replace(second=0), 7500.0)])
+    write_levels(
+        tmp_path,
+        "20261022",
+        [(before.replace(second=0), 7580.0), (after.replace(second=0), 7590.0)],
+    )
+
+    context = load_gex_context(tmp_path, "ES", before)
     assert context is not None
-    assert context.flip is None
+    assert context.flip == 7500.0  # před settle je aktivní 0DTE
+
+    context = load_gex_context(tmp_path, "ES", after)
+    assert context is not None
+    assert context.flip == 7590.0
+    assert context.flip_ts == after.replace(second=0)
 
 
-def seed_combined_context(tmp_path: Path, now: dt.datetime, *, flip: float) -> None:
-    """Spot 7600, sklon chybí (mezera tisků v okně), flip podle parametru."""
+def seed_combined_context(tmp_path: Path, now: dt.datetime, *, flip: float | None) -> None:
+    """Spot 7600, sklon chybí (mezera tisků v okně), flip podle parametru (None = bez levels)."""
     minute = now.replace(second=0, microsecond=0)
     write_bars(tmp_path, [(minute, 7600.0)])
-    write_levels(tmp_path, now.strftime("%Y%m%d"), [(minute, flip)])
+    if flip is not None:
+        write_levels(tmp_path, now.strftime("%Y%m%d"), [(minute, flip)])
     rows = flow_series(minute - dt.timedelta(minutes=15), minute, source="aggressor")
     rows[-4] = (rows[-4][0], None, None, "aggressor")
     write_flow(tmp_path, rows)
@@ -559,11 +578,15 @@ def test_combined_bez_sklonu_potvrdi_flip(tmp_path: Path) -> None:
     assert combined["ts"] == NOW.isoformat()
 
 
-def test_combined_bez_sklonu_a_bez_flipu_nevznikne(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "flip",
+    [7650.0, None],  # spot pod flipem → long nepodporuje; flip chybí úplně
+)
+def test_combined_bez_sklonu_a_bez_flipu_nevznikne(tmp_path: Path, flip: float | None) -> None:
     engine = make_db(tmp_path)
     seed_event(engine, 1)
     seed_bucket(engine)
-    seed_combined_context(tmp_path, NOW, flip=7650.0)  # spot pod flipem → long nepodporuje
+    seed_combined_context(tmp_path, NOW, flip=flip)
     job = SignalJob(engine, tmp_path, symbols=("ES",))
 
     assert job.run(NOW, states={"ES": "RiskOn"}) == 1

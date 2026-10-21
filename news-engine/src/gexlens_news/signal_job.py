@@ -33,6 +33,7 @@ from gexlens_engine.compute.cumdelta import (
     flow_window_sum,
 )
 from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.compute.settle import history_expiry_settle
 from gexlens_engine.storage.parquet_store import FLOW_SCHEMA
 from gexlens_engine.storage.sentiment import (
     news_classifications,
@@ -150,10 +151,11 @@ def load_gex_context(data_dir: Any, symbol: str, now: dt.datetime) -> GexContext
     """GEX kontext z parquet vrstev enginu k okamžiku `now`; None = kontext chybí.
 
     Spot = poslední bar podkladu, flip = poslední řádek levels nejbližší
-    expirace s čerstvým řádkem (po settle tak ne flip expirovaného řetězu),
-    sklon CumΔ podle `cum_delta_slope`. Řádky po `now` se nečtou (#1583)
-    a řádek starší než `CONTEXT_MAX_LAG` za minutou `now` neplatí: starý spot
-    = kontext chybí, starý flip nebo sklon = noha nepodporuje (#1589).
+    expirace před vlastním settle, která má řádky (aktivní řetěz; po settle
+    tak ne flip expirovaného řetězu), sklon CumΔ podle `cum_delta_slope`.
+    Řádky po `now` se nečtou (#1583) a řádek starší než `CONTEXT_MAX_LAG`
+    za minutou `now` neplatí: starý spot = kontext chybí, starý flip nebo
+    sklon = noha nepodporuje (#1589).
     """
     symbol_dir = Path(data_dir) / "derived" / symbol
     days = _partition_days(now)
@@ -185,6 +187,12 @@ def load_gex_context(data_dir: Any, symbol: str, now: dt.datetime) -> GexContext
         if path.is_dir() and path.name.isdigit() and path.name >= today_compact
     )
     for expiry in expiries:
+        # Expirace po vlastním settle už levels nepíše. Nejbližší nevypořádaná
+        # s řádky je aktivní řetěz a flip dává jen ona: zpožděný aktivní řetěz
+        # = flip chybí, ne potichu flip sekundáru D+1 (ten levels píše taky)
+        settle, _inferred = history_expiry_settle(expiry, symbol)
+        if settle is not None and settle <= now:
+            continue
         try:
             levels_rows = _read_rows(
                 [symbol_dir / expiry / "levels" / f"{day.isoformat()}.parquet" for day in days],
@@ -194,11 +202,13 @@ def load_gex_context(data_dir: Any, symbol: str, now: dt.datetime) -> GexContext
         except Exception:
             logger.exception("GEX kontext %s: levels %s nečitelné", symbol, expiry)
             break
+        if not levels_rows:
+            continue  # expirace, kterou engine teď nesbírá
         if fresh(levels_rows):
             last = levels_rows[-1]
             flip = float(last["flip"]) if last["flip"] is not None else None
             flip_ts = last["ts_min"]
-            break
+        break
 
     try:
         flow_rows = _read_rows(
