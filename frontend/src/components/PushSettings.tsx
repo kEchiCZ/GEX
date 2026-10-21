@@ -64,10 +64,13 @@ async function fetchPushStatus(): Promise<PushStatus | null> {
 export function PushSettings({
   values,
   saveAll,
+  cumdeltaSource,
 }: {
   values: Record<string, unknown>
   /** Zápis na server; lokálně se projeví jen přijaté hodnoty, chyba se propustí ven */
   saveAll: (entries: [string, unknown][]) => Promise<void>
+  /** Zdroj CumΔ běžícího enginu (`/status`, ADR-0057) — mění dopad přihlášení na mobilu */
+  cumdeltaSource?: 'midpoint' | 'aggressor'
 }) {
   // undefined = načítá se, null = API nedostupné nebo cizí tvar
   const [status, setStatus] = useState<PushStatus | null | undefined>(undefined)
@@ -109,9 +112,10 @@ export function PushSettings({
               : 'Telegram bot není nastaven — přihlašovací údaje bota a chat id patří do .env (GEXLENS_PUSH_TELEGRAM_*), viz ADMIN manuál.'}
       </p>
       <p className="muted">
-        Zvoneček dostává vždy všechno, tyto přepínače řídí jen Telegram. Popis druhu ukáže tooltip.
-        Během přihlášení na mobilu k IBKR stojí CumΔ, takže setupy s potvrzením tokem (T1, T4, T8)
-        nevznikají; upozornění „IBKR přihlášen jinde“ o tom přijde.
+        Zvoneček dostává vždy všechno, tyto přepínače řídí jen Telegram. Popis druhu ukáže tooltip.{' '}
+        {cumdeltaSource === 'aggressor'
+          ? 'Během přihlášení na mobilu k IBKR běží CumΔ dál z tisků tastytrade (ADR-0057); setupy s potvrzením tokem (T1, T4 a kontra-režim T2) stojí jen při mezeře tisků. Upozornění „IBKR přihlášen jinde“ přijde i tak.'
+          : 'Během přihlášení na mobilu k IBKR stojí CumΔ, takže setupy s potvrzením tokem (T1, T4 a kontra-režim T2) nevznikají; upozornění „IBKR přihlášen jinde“ o tom přijde.'}
       </p>
       {status && (
         <>

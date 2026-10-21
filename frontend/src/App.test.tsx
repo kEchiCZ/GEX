@@ -192,6 +192,19 @@ test('fallback na tastytrade je vidět v hlavičce, jinak chip nesvítí (#614)'
     ws.push('status', { engine: 'online', chain_source: 'tasty', spot_source: 'tasty' })
   })
   expect(screen.getByTestId('fallback-chip').textContent).toContain('řetěz + cena: tastytrade')
+  // Pod v5 CumΔ za fallbacku stojí, pod tisky (v6) běží dál (ADR-0057, #1632)
+  expect(screen.getByTestId('fallback-chip').getAttribute('title')).toContain('stojí CumΔ')
+  act(() => {
+    ws.push('status', {
+      engine: 'online',
+      chain_source: 'tasty',
+      spot_source: 'ibkr',
+      cumdelta_source: 'aggressor',
+    })
+  })
+  const title = screen.getByTestId('fallback-chip').getAttribute('title')
+  expect(title).toContain('CumΔ a net objem běží dál z tisků')
+  expect(title).not.toContain('stojí CumΔ')
 })
 
 test('den bez dat nemá měřitelnou osu, takže OHLC badge ani časová značka nesvítí (#470)', () => {

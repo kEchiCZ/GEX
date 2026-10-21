@@ -761,7 +761,7 @@ Sběr dat se na ~1–2 minuty přeruší.`)
 
       {/* Push na Telegram (#1175, #1284): hlavní vypínač + přepínače per druh =
           serverová nastavení, ukládají se hned přes saveAll (chyba se ukáže) */}
-      <PushSettings values={values} saveAll={saveAll} />
+      <PushSettings values={values} saveAll={saveAll} cumdeltaSource={status.cumdelta_source} />
 
       {/* Scénáře dne (#1173): disk snímků + ruční úklid */}
       <ScenarioSettings />

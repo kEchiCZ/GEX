@@ -69,6 +69,22 @@ describe('obsah legendy', () => {
     expect(flow.how).toMatch(/agresor/i)
   })
 
+  test('Cum Δ je opční tok a agresora slibuje až od v6, ne „delta futures“ (#1579, #1632)', () => {
+    const cum = allItems.find((item) => item.name === 'Cum Δ')!
+    expect(cum.what).toMatch(/OPČNÍCH/)
+    expect(cum.what).not.toMatch(/delta futures/)
+    expect(cum.what).not.toMatch(/agresora známe/)
+    expect(cum.what).toMatch(/CVD/)
+    expect(cum.up).toMatch(/^Od v6/)
+  })
+
+  test('Opt Vol přizná minutu po mezeře v objemu a FA stav kalibrace (#1632)', () => {
+    const optVol = allItems.find((item) => item.name === 'Opt Vol')!
+    expect(optVol.how).toMatch(/První minuta po mezeře v objemu .* je 0/)
+    const fa = allItems.find((item) => item.name === 'Zdroj OI: FA odhad')!
+    expect(fa.how).toMatch(/nekalibrováno n\/5/)
+  })
+
   test('barvy ukázek jsou sdílené s grafem, ne opsané', () => {
     const maxPain = allItems.find((item) => item.name === 'Max Pain')!
     const entry = allItems.find((item) => item.name === 'Vstup')!
