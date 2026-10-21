@@ -1647,7 +1647,9 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
 
 /** Průběžné maximum kumulativního volume per strike přes sloupce `0..upTo-1`
  * (#1602); NaN = strike zatím objem nenesl. Buňka bez objemu (maska 0: řádek
- * chybí, NULL z tasty fallbacku, minuta bez snapshotu) referenci nemění. */
+ * chybí, NULL z tasty fallbacku, minuta bez snapshotu) referenci nemění.
+ * Catch-up minuta (#518) i minuta po mezeře v objemu (#1632) ji posouvají
+ * stejně jako ostatní buňky s objemem — přírůstek jen nekreslí. */
 function volumeReference(
   volume: Float32Array,
   known: Float32Array,
@@ -1695,6 +1697,13 @@ Sémantika sloupců je shodná s původními celodenními průchody:
   strike (#1602) jen z buněk s objemem, takže díra ve sběru (#459), NULL ani
   chybějící strike nepřidají celý kumulativ; catch-up minuta (#518) referenci
   jen posune; Δ Flow vážené |delta| (SPEC 4.6)
+* Minuta po mezeře v objemu (#1632, rozhodnutí B 21. 10.) — per strike a
+  strana: buňka, jejíž strike v předchozí minutě osy objem nenesl (maska 0:
+  NULL z tasty fallbacku, díra ve sběru #459, strike mimo pásmo), nese
+  přírůstek celé mezery, ne minuty obchodů. Kreslí se jako 0 a referenci jen
+  posune, stejně jako catch-up; řada [100, NULL, 130, 150] dá 0, 0, 0, 20.
+  Daily (API `daily_totals`) objem mezery dál počítá, součet dne se nemění.
+  Sloupec závisí jen na sobě a na předchozím, takže memo `upTo` platí dál.
 * Evo OI (#573) — Σ OI přes striky; minuta bez snapshotu drží schod
 
 Cache se mutuje in-place — je to čistá memoizace (výsledek téhož vstupu),
@@ -1764,16 +1773,21 @@ function ensureDerived(
     let deltaFlowPut = 0
     for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
       const index = strikeIdx * stride + minuteIdx
+      // Minuta po mezeře v objemu (#1632): předchozí sloupec téhož striku bez
+      // objemu. Minuta 0 dne předchůdce nemá — reference je tam NaN a první
+      // výskyt dá 0 i tak (index − 1 by četl cizí řádek matice)
       if (inputs.callVolumeKnown[index] !== 0) {
         const callIncrement = volumeIncrement(callReference, strikeIdx, inputs.callVolume[index])
-        if (counted && callIncrement > 0) {
+        const callAfterGap = minuteIdx > 0 && inputs.callVolumeKnown[index - 1] === 0
+        if (counted && !callAfterGap && callIncrement > 0) {
           optVolCall += callIncrement
           deltaFlowCall += callIncrement * Math.abs(inputs.callDelta[index])
         }
       }
       if (inputs.putVolumeKnown[index] !== 0) {
         const putIncrement = volumeIncrement(putReference, strikeIdx, inputs.putVolume[index])
-        if (counted && putIncrement > 0) {
+        const putAfterGap = minuteIdx > 0 && inputs.putVolumeKnown[index - 1] === 0
+        if (counted && !putAfterGap && putIncrement > 0) {
           optVolPut += putIncrement
           deltaFlowPut += putIncrement * Math.abs(inputs.putDelta[index])
         }
