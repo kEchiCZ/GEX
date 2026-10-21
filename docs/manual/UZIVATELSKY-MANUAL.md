@@ -977,7 +977,7 @@ nepotvrdilo. Detail v tooltipu badge.
 Dropdown **Signály** v řádku přepínačů: **Off / NEWS / COMBINED** (obě větve se počítají vždy, dropdown jen vybírá zobrazenou):
 
 - **NEWS** — reakce čistě na zprávu (kategorie × důležitost × překvapení vs. konsensus).
-- **COMBINED** — totéž se souhlasem GEX kontextu (poloha vůči flipu, nebo sklon Cum Δ). Přes mezeru tisků (od mechaniky v6) sklon nehlasuje a potvrdit může jen flip (ADR-0057).
+- **COMBINED** — totéž se souhlasem GEX kontextu (poloha vůči flipu, nebo sklon Cum Δ). Přes mezeru tisků (od mechaniky v6) sklon nehlasuje a potvrdit může jen flip (ADR-0057). Od v6 je sklon tok za posledních 10 minut **v téže seanci**, takže v prvních 10 minutách po otevření Globexu (17:00 CT) také nehlasuje. Kontext se čte k okamžiku vzniku signálu: pozdější minuty brána nevidí a cena, flip ani sklon starší než 2 minuty se nepoužijí (#1589, #1583).
 
 Signál se ukáže jako **šipka na cenové křivce** (▲ Long teal / ▼ Short červená, sytost = síla) s **vodorovnou stopou platnosti** do své expirace. Tooltip u crosshairu nese režim, zdůvodnění, **n vzorků a Wilson LB**. Při nepotvrzené změně stavu sentimentu nese šipka **⚠**.
 

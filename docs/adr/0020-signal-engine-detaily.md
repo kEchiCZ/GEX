@@ -30,6 +30,21 @@ otevřené čtyři kvantitativní detaily, bez kterých nejdou psát golden test
    signál negeneruje (chybějící kontext ≠ neutrální kontext; větev má
    měřit přidanou hodnotu kontextu, SPEC 6.3). Kontext: spot nad/pod flipem
    NEBO sklon CumΔ za posledních 10 minut.
+   *Doplněk 21. 10. 2026 (#1589, #1583, ADR-0057 bod 4):*
+   - Kontext se čte k okamžiku vzniku signálu. Razítko je čas těsně před
+     výpočtem, ne začátek cyklu news-engine, a řádky po něm se nečtou.
+   - Řádek starší než 2 min za minutou signálu neplatí: starý spot znamená,
+     že kontext chybí; starý flip nebo sklon znamená, že ta noha nepodporuje.
+     Flip se bere z nejbližší expirace s čerstvým řádkem, takže po settle
+     nejde z expirovaného řetězu.
+   - Sklon z tisků (řádky flow se zdrojem `aggressor`) = Σ flowΔ za 10 min
+     v seanci, táž čistá funkce jako u tendence (`compute/cumdelta.flow_window_sum`).
+     Mezera, neúplné okno nebo okno přes začátek seance (17:00 CT) znamená, že
+     sklon chybí: noha nepodporuje a flip potvrdit může.
+   - Pod midpointem zůstává rozdíl CumΔ jako dřív (ADR-0057 bod 11).
+     Zlom poznají řádky, ne datum.
+   - `inputs.gex` nese zdroj CumΔ (`cum_delta_source`, ADR-0057 bod 8)
+     a minuty řádků, ze kterých kontext je.
 
 Dedup: jeden signál per (event, mode) — anti-spam; event se po expiraci
 signálu znovu nepoužívá (dedup okno = lookback kandidátů 8 h > max τ).
