@@ -1095,7 +1095,7 @@ nepotvrdilo. Detail v tooltipu badge.</p>
 <p>Dropdown <strong>Signály</strong> v řádku přepínačů: <strong>Off / NEWS / COMBINED</strong> (obě větve se počítají vždy, dropdown jen vybírá zobrazenou):</p>
 <ul>
 <li><strong>NEWS</strong> — reakce čistě na zprávu (kategorie × důležitost × překvapení vs. konsensus).</li>
-<li><strong>COMBINED</strong> — totéž se souhlasem GEX kontextu (poloha vůči flipu, nebo sklon Cum Δ). Přes mezeru tisků (od mechaniky v6) sklon nehlasuje a potvrdit může jen flip (ADR-0057).</li>
+<li><strong>COMBINED</strong> — totéž se souhlasem GEX kontextu (poloha vůči flipu, nebo sklon Cum Δ). Přes mezeru tisků (od mechaniky v6) sklon nehlasuje a potvrdit může jen flip (ADR-0057). Od v6 je sklon tok za posledních 10 minut <strong>v téže seanci</strong>, takže v prvních 10 minutách po otevření Globexu (17:00 CT) také nehlasuje. Kontext se čte k okamžiku vzniku signálu: pozdější minuty brána nevidí a cena, flip ani sklon starší než 2 minuty se nepoužijí (#1589, #1583).</li>
 </ul>
 <p>Signál se ukáže jako <strong>šipka na cenové křivce</strong> (▲ Long teal / ▼ Short červená, sytost = síla) s <strong>vodorovnou stopou platnosti</strong> do své expirace. Tooltip u crosshairu nese režim, zdůvodnění, <strong>n vzorků a Wilson LB</strong>. Při nepotvrzené změně stavu sentimentu nese šipka <strong>⚠</strong>.</p>
 <p><strong>Svátky a zkrácené seance (v1.29, #1308).</strong> Aplikace zná svátky US trhu

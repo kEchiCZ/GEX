@@ -26,10 +26,27 @@ otevřené čtyři kvantitativní detaily, bez kterých nejdou psát golden test
    Síla klasifikace už nese confidence×magnitude (SPEC kap. 4); další
    škálování (Wilson LB, hloubka vlny) by míchalo jistotu bucketu do síly
    eventu — bucket jistotu UI ukazuje zvlášť (n, Wilson LB, SPEC 6.4).
-4. **COMBINED vyžaduje dostupný GEX kontext** — bez barů/levels se COMBINED
-   signál negeneruje (chybějící kontext ≠ neutrální kontext; větev má
-   měřit přidanou hodnotu kontextu, SPEC 6.3). Kontext: spot nad/pod flipem
+4. **COMBINED vyžaduje dostupný GEX kontext** — bez barů (spotu) se COMBINED
+   signál negeneruje, chybějící flip nebo sklon jen nepodporuje (chybějící
+   kontext ≠ neutrální kontext; větev má měřit přidanou hodnotu kontextu,
+   SPEC 6.3). Kontext: spot nad/pod flipem
    NEBO sklon CumΔ za posledních 10 minut.
+   *Doplněk 21. 10. 2026 (#1589, #1583, ADR-0057 bod 4):*
+   - Kontext se čte k okamžiku vzniku signálu. Razítko je čas těsně před
+     výpočtem, ne začátek cyklu news-engine, a řádky po něm se nečtou.
+   - Řádek starší než 2 min za minutou signálu neplatí: starý spot znamená,
+     že kontext chybí; starý flip nebo sklon znamená, že ta noha nepodporuje.
+     Flip dává jen aktivní řetěz, tedy nejbližší expirace před vlastním settle,
+     která má řádky. Po settle tak flip nejde z expirovaného řetězu. Zpožděný
+     aktivní řetěz znamená, že flip chybí; flip sekundáru D+1 ho nenahradí.
+   - Sklon z tisků (řádky flow se zdrojem `aggressor`) = Σ flowΔ za 10 min
+     v seanci, táž čistá funkce jako u tendence (`compute/cumdelta.flow_window_sum`).
+     Mezera, neúplné okno nebo okno přes začátek seance (17:00 CT) znamená, že
+     sklon chybí: noha nepodporuje a flip potvrdit může.
+   - Pod midpointem zůstává rozdíl CumΔ jako dřív (ADR-0057 bod 11).
+     Zlom poznají řádky, ne datum.
+   - `inputs.gex` nese zdroj CumΔ (`cum_delta_source`, ADR-0057 bod 8)
+     a minuty řádků, ze kterých kontext je.
 
 Dedup: jeden signál per (event, mode) — anti-spam; event se po expiraci
 signálu znovu nepoužívá (dedup okno = lookback kandidátů 8 h > max τ).

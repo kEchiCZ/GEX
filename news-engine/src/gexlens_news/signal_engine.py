@@ -54,11 +54,23 @@ class BucketStats:
 
 @dataclass(frozen=True)
 class GexContext:
-    """GEX kontext pro COMBINED (SPEC 6.1): spot vs. flip + směr CumΔ."""
+    """GEX kontext pro COMBINED (SPEC 6.1): spot vs. flip + směr CumΔ.
+
+    Chybějící flip nebo sklon (mezera, neúplné okno, starý řádek) = noha
+    nepodporuje; druhá noha potvrdit může (ADR-0057 bod 4).
+    """
 
     spot: float
     flip: float | None
     cum_delta_slope: float | None
+    # Zdroj CumΔ sklonu (ADR-0057 bod 8): zlom midpoint → tisky nesou řádky
+    # signálu; None = bez čerstvého řádku flow
+    cum_delta_source: str | None = None
+    # Minuty řádků, ze kterých kontext je — doklad, že brána nečetla minuty
+    # po razítku signálu (#1583); None = noha bez řádku
+    spot_ts: dt.datetime | None = None
+    flip_ts: dt.datetime | None = None
+    slope_ts: dt.datetime | None = None
 
     def supports(self, direction: str) -> bool:
         """Long: spot nad flipem NEBO CumΔ rostoucí; short zrcadlově."""
@@ -71,7 +83,18 @@ class GexContext:
         return below_flip or falling
 
     def snapshot(self) -> dict[str, Any]:
-        return {"spot": self.spot, "flip": self.flip, "cum_delta_slope": self.cum_delta_slope}
+        def iso(ts: dt.datetime | None) -> str | None:
+            return ts.isoformat() if ts is not None else None
+
+        return {
+            "spot": self.spot,
+            "flip": self.flip,
+            "cum_delta_slope": self.cum_delta_slope,
+            "cum_delta_source": self.cum_delta_source,
+            "spot_ts": iso(self.spot_ts),
+            "flip_ts": iso(self.flip_ts),
+            "slope_ts": iso(self.slope_ts),
+        }
 
 
 @dataclass(frozen=True)

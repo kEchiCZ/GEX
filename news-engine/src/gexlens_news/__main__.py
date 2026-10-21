@@ -473,7 +473,12 @@ async def run(settings: NewsSettings) -> None:
             # Kanál `signals` běží vždy (S9); UI ho zobrazuje dle režimu.
             if states:
                 try:
-                    await asyncio.to_thread(signal_job.run, now, states=states)
+                    # Čerstvý okamžik až tady (#1583): cyklus trvá minuty a `now`
+                    # ze začátku by signálu dalo razítko, ke kterému brána
+                    # COMBINED četla kontext z pozdějších minut a zakládala
+                    # signály po vlastní expiraci
+                    signal_now = dt.datetime.now(dt.UTC)
+                    await asyncio.to_thread(signal_job.run, signal_now, states=states)
                     if publisher is not None:
                         for created in signal_job.last_created:
                             await publisher.publish("signals", created)
