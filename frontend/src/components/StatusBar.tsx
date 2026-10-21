@@ -1,6 +1,27 @@
 /** Stavová lišta pipeline (SPEC 3.7 + 7.1) — živě ze status kanálu /ws/live. */
-import { daysLabel, useFaAlpha } from '../hooks/useFaAlpha'
+import { daysLabel, faAlphaBadge, useFaAlpha, type FaAlphaBadge } from '../hooks/useFaAlpha'
 import { useAppState } from '../state/AppState'
+
+/** Tooltip badge FA α — odrážky a `\n` (vzor `ivRankTooltip`). */
+function faAlphaTooltip(badge: FaAlphaBadge): string {
+  if (badge.kind === 'uncalibrated') {
+    return [
+      `FA odhad OI je vypnutý do kalibrace z tisků (ADR-0057 bod 6): ${badge.days} z ${badge.minDays} platných dnů.`,
+      '• α se kalibruje z čistého objemu tisků se stranou agresora od burzy',
+      '• den s mezerou tisků za otevřeného trhu bod nedá',
+      '• stav z midpoint testu (před mechanikou v6) je jiná veličina a nepočítá se',
+      '• do té doby engine FA vrstvu (odhad OI, FA levels, FA profil) nepíše',
+    ].join('\n')
+  }
+  return [
+    'Kalibrovaná α flow-adjusted odhadu OI (ADR-0011):',
+    '• medián poměru skutečného ΔOI k čistému toku z ranních validací, EMA přes dny',
+    '• počet = kolik čistých dnů už kalibrace započetla',
+    badge.source === 'aggressor'
+      ? '• čistý tok z tisků se stranou agresora od burzy (ADR-0057)'
+      : '• čistý tok z midpoint testu (mechanika v5)',
+  ].join('\n')
+}
 
 function formatBytes(bytes?: number): string {
   if (bytes === undefined) return '—'
@@ -16,8 +37,13 @@ function formatBytes(bytes?: number): string {
 
 export function StatusBar() {
   const { status, symbol } = useAppState()
-  // Kalibrovaná FA α (#232 fáze 2) — badge jen když už existuje první bod
-  const faAlpha = useFaAlpha(symbol)
+  // Kalibrovaná FA α (#232 fáze 2); pod tisky „nekalibrováno n/5“ (ADR-0057 bod 6)
+  const faAlpha = faAlphaBadge(
+    useFaAlpha(),
+    symbol,
+    status.cumdelta_source,
+    Object.keys(status.cumdelta_coverage ?? {}),
+  )
   const greeks =
     status.greeks_complete !== undefined && status.greeks_total !== undefined
       ? `Greeks ${status.greeks_complete}/${status.greeks_total}`
@@ -45,15 +71,10 @@ export function StatusBar() {
       {lines && <span data-testid="status-lines">{lines}</span>}
       <span data-testid="status-disk">{disk}</span>
       {faAlpha && (
-        <span
-          data-testid="status-fa-alpha"
-          title={
-            'Kalibrovaná α flow-adjusted odhadu OI (ADR-0011): medián poměru skutečného ' +
-            'ΔOI k net klasifikovanému toku z ranních validací, EMA přes dny. ' +
-            'Počet = kolik čistých dnů už kalibrace započetla.'
-          }
-        >
-          FA α={faAlpha.alpha.toFixed(2)} · {daysLabel(faAlpha.days)}
+        <span data-testid="status-fa-alpha" title={faAlphaTooltip(faAlpha)}>
+          {faAlpha.kind === 'calibrated'
+            ? `FA α=${faAlpha.alpha.toFixed(2)} · ${daysLabel(faAlpha.days)}`
+            : `FA nekalibrováno ${faAlpha.days}/${faAlpha.minDays}`}
         </span>
       )}
       <span data-testid="status-ibkr">
