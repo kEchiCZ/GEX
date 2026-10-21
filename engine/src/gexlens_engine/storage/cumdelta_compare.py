@@ -65,6 +65,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT, stored_sources
 from gexlens_engine.compute.marketclock import outside_us_rth
 from gexlens_engine.compute.settle import is_trading_session, session_bounds
 from gexlens_engine.storage.parquet_store import (
@@ -372,10 +373,15 @@ class LiveCoverage:
 
 
 def load_live_series(
-    derived_dir: Path, symbol: str, session: dt.date
+    derived_dir: Path, symbol: str, session: dt.date, source: str = SOURCE_MIDPOINT
 ) -> tuple[dict[dt.datetime, tuple[float, float]], LiveCoverage | None]:
     """Živá řada seance: ts → (cum_delta, flow_delta) z partic UTC dnů D−1 + D,
-    plus součty pokrytí trade větví (#1071); None = žádná minuta pokrytí nenese."""
+    plus součty pokrytí trade větví (#1071); None = žádná minuta pokrytí nenese.
+
+    Jen řádky zdroje `source` (`cumdelta.stored_sources`, #1590): po bumpu v6
+    nesou partice tisky (`aggressor`) a srovnání se stínem je o midpoint řadě.
+    Minuta s mezerou (NULL, jen pod tisky) do řady nejde."""
+    own = stored_sources(source)
     bounds = session_bounds(session)
     series: dict[dt.datetime, tuple[float, float]] = {}
     printed = unknown = fallback = fallback_rth = classified_rth = structured = 0.0
@@ -386,10 +392,12 @@ def load_live_series(
         path = derived_dir / symbol / "flow" / f"{day.isoformat()}.parquet"
         for row in _read_rows(path, FLOW_SCHEMA):
             ts = _as_utc(row["ts_min"])  # type: ignore[arg-type]
-            if not _in_session(ts, bounds):
+            if not _in_session(ts, bounds) or row.get("source") not in own:
                 continue
-            cum = float(row.get("cum_delta") or 0.0)  # type: ignore[arg-type]
-            flow = float(row.get("flow_delta") or 0.0)  # type: ignore[arg-type]
+            if row.get("cum_delta") is None or row.get("flow_delta") is None:
+                continue  # mezera trade větve (ADR-0057 bod 3), ne nula
+            cum = float(row["cum_delta"])  # type: ignore[arg-type]
+            flow = float(row["flow_delta"])  # type: ignore[arg-type]
             series[ts] = (cum, flow)
             if row.get("printed_volume") is None:
                 continue  # minuta bez trade větve / partice před #1071
@@ -843,13 +851,15 @@ def load_hybrid_parts(
     if not printvol:
         return None
     net_rows: list[tuple[ContractMinute, float]] = []
+    # Hybrid skládá midpoint tok — net tisků (v6, `netflow.source`) do něj nepatří (#1590)
+    midpoint = stored_sources(SOURCE_MIDPOINT)
     for exp in windows:
         for day in days:
             path = derived_dir / symbol / exp / "netflow" / f"{day}.parquet"
             for row in _read_rows(path, NETFLOW_SCHEMA):
                 ts = _as_utc(row["ts_min"])  # type: ignore[arg-type]
-                if not _in_session(ts, bounds):
-                    continue  # předchozí seance — jiný kumulativ
+                if not _in_session(ts, bounds) or row.get("source") not in midpoint:
+                    continue  # předchozí seance — jiný kumulativ; jiný zdroj netu
                 key = (exp, ts, float(row["strike"]), str(row["right"]))  # type: ignore[arg-type]
                 net_rows.append((key, float(row.get("net_volume") or 0.0)))  # type: ignore[arg-type]
     increments = net_increments(net_rows, windows)
