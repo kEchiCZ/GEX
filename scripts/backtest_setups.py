@@ -224,7 +224,9 @@ def _flow_frame(symbol: str) -> pd.DataFrame | None:
     return flow
 
 
-def build_cum_series(symbol: str, prints: bool) -> pd.DataFrame | None:
+def build_cum_series(
+    symbol: str, prints: bool, *, shadow_only: bool = False
+) -> pd.DataFrame | None:
     """CumΔ symbolu pro rozhodnutí v minutě: `ts_min`, `session`, `cum_delta` (NaN = mezera).
 
     - **v5** (midpoint): řádky `flow` zdroje midpoint (`stored_sources`); řádek
@@ -233,6 +235,8 @@ def build_cum_series(symbol: str, prints: bool) -> pd.DataFrame | None:
       `aggressor`, čte živou 1A (NULL = mezera, řádek jiného zdroje v ní taky);
       hranici nesou řádky, ne datum (bod 8). Ostatní seance od `SHADOW_FROM` čtou
       stín (`shadow_rows`), starší jsou mezera.
+    - `shadow_only` (brána parity, `replay_parity.py`): stín i v seancích s 1A,
+      touž cestou jako historie — srovnává se proti živé 1A.
 
     Chybějící řádek bere hodnotu posledního řádku téže seance (`attach_cum_delta`),
     jako živý `SetupEngine`, kterému zůstane `runtime.last_flow`.
@@ -248,7 +252,7 @@ def build_cum_series(symbol: str, prints: bool) -> pd.DataFrame | None:
         )
     else:
         live_sessions: set[dt.date] = set()
-        if flow is not None:
+        if flow is not None and not shadow_only:
             aggressor = flow["source"] == SOURCE_AGGRESSOR
             live_sessions = set(flow.loc[aggressor, "session"])
             live = flow[flow["session"].isin(live_sessions)]
@@ -271,14 +275,16 @@ def build_cum_series(symbol: str, prints: bool) -> pd.DataFrame | None:
     )
 
 
-_CUM: dict[tuple[str, bool], pd.DataFrame | None] = {}
+_CUM: dict[tuple[str, bool, bool], pd.DataFrame | None] = {}
 
 
-def cum_delta_series(symbol: str, prints: bool) -> pd.DataFrame | None:
+def cum_delta_series(
+    symbol: str, prints: bool, *, shadow_only: bool = False
+) -> pd.DataFrame | None:
     """`build_cum_series` jednou za symbol a mechaniku — společná všem expiracím."""
-    key = (symbol, prints)
+    key = (symbol, prints, shadow_only)
     if key not in _CUM:
-        _CUM[key] = build_cum_series(symbol, prints)
+        _CUM[key] = build_cum_series(symbol, prints, shadow_only=shadow_only)
     return _CUM[key]
 
 
@@ -335,12 +341,18 @@ def max_pain_for(repo: OIEodRepository, symbol: str, expiry: str, day: dt.date) 
 
 
 def build_minutes(
-    symbol: str, expiry: str, repo: OIEodRepository, prints: bool = CUMDELTA_PRINTS
+    symbol: str,
+    expiry: str,
+    repo: OIEodRepository,
+    prints: bool = CUMDELTA_PRINTS,
+    *,
+    shadow_only: bool = False,
 ) -> list[MinuteInputs]:
     """MinuteInputs jednoho obchodního dne (expirace = adresář derived).
 
     `prints` = mechanika replaye: CumΔ z tisků (v6, ADR-0057 bod 7), jinak
-    midpoint (v5); výchozí je mechanika kódu (`cum_delta_series`).
+    midpoint (v5); výchozí je mechanika kódu. `shadow_only` čte pod v6 stín
+    i v seancích s 1A (brána parity, `cum_delta_series`).
     """
     bars = load_series(f"{DATA}/{symbol}/bars/*.parquet")
     levels = load_series(f"{DATA}/{symbol}/{expiry}/levels/*.parquet")
@@ -364,7 +376,8 @@ def build_minutes(
         return []
     # CumΔ podle mechaniky + mezera mezi řádky historie (#1590); minuta bez řádku
     # bere poslední hodnotu seance jako živý engine (dřív left merge → NaN)
-    frame = attach_cum_delta(frame, cum_delta_series(symbol, prints), prints)
+    series = cum_delta_series(symbol, prints, shadow_only=shadow_only)
+    frame = attach_cum_delta(frame, series, prints)
     # Hranice gamma masy (#600) z uložených Dyn GEX profilů — dřív harness
     # tohle pole nechával None, takže se live vs. replay lišily (#796)
     edges_by_ts: dict[object, tuple[float | None, float | None]] = {}

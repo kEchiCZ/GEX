@@ -352,3 +352,21 @@ def test_build_minutes_mezera_je_none_a_nese_ji_dalsi_radek(data_root: Path) -> 
     assert [m.ts.strftime("%H:%M") for m in minutes] == ["14:01", "14:02", "14:04"]
     assert [m.cum_delta for m in minutes] == [5.0, None, 6.0]
     assert [m.cum_gap_before for m in minutes] == [False, False, True]
+
+
+def test_v6_shadow_only_cte_stin_i_v_seanci_s_1a(data_root: Path) -> None:
+    derived = data_root / "derived" / "ES"
+    monday = "2026-11-02"
+    _write(derived / "cumdelta_dx" / f"{monday}.parquet", _shadow([ts(monday, "15:00")], [3.0]))
+    _write(
+        derived / "flow" / f"{monday}.parquet",
+        _flow(
+            [
+                (ts(monday, "15:00"), 8.0, "aggressor", 1.0),
+                (ts(monday, "15:01"), 9.0, "aggressor", 1.0),
+            ]
+        ),
+    )
+    assert _values(bt.build_cum_series("ES", prints=True))[ts(monday, "15:01")] == 9.0
+    shadow = _values(bt.build_cum_series("ES", prints=True, shadow_only=True))
+    assert shadow == {ts(monday, "15:01"): 3.0}  # štítek 15:00 → minuta 15:01
