@@ -136,6 +136,33 @@ test('Settings nese stav enginu a log událostí (náhrada Console, #705)', asyn
   expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull()
 })
 
+test('řádek Cum Δ: podíl tisků null = „—“, pod tisky text bez midpoint fallbacku (#1632)', async () => {
+  mockApi()
+  renderApp()
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('status', {
+      engine: 'online',
+      cumdelta_source: 'aggressor',
+      cumdelta_coverage: {
+        ES: { printed_share: 0.36, printed_share_total: 0.33 },
+        NQ: { printed_share: null, printed_share_total: null },
+      },
+    })
+  })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  const block = screen.getByTestId('engine-status')
+  expect(block.textContent).toContain('ES: tisky 36 % objemu (z celého přírůstku 33 %)')
+  // Bez spárovaného objemu se podíl neměří — „—“, ne 0 % (ADR-0057 doplněk 18. 10.)
+  expect(block.textContent).toContain('NQ: tisky — objemu (z celého přírůstku —)')
+  expect(block.textContent).toContain('minuta bez tisků je mezera')
+  expect(block.textContent).not.toContain('fallback')
+  // Zdroj určuje mechanika enginu — v Settings není čím ho přepnout
+  expect(screen.queryByRole('combobox', { name: /zdroj cum/i })).toBeNull()
+})
+
 test('řádek Spojení ukazuje délku výpadku IBKR, jen když pole přijde (#770)', async () => {
   mockApi()
   renderApp()
