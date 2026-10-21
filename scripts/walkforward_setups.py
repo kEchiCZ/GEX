@@ -12,11 +12,17 @@ Baseline = platná verze parameter store (tabulka `setup_params`), bez DB
 defaulty kódu. Bloky: per symbol a portfolio (ES+NQ sečtené per seance,
 ADR-0030). Seance = expirace řetězu (0DTE), tj. jeden den archivu.
 
+Mechanika replaye (`--mechanics`, výchozí mechanika kódu) určuje zdroj CumΔ
+(#1590, ADR-0057 bod 7): v5 midpoint, v6 tisky — stín `cumdelta_dx` od 21. 9.
+2026 do nasazení, pak živá 1A. Vzorky v5 se do v6 nepřenášejí (ADR-0034 bod 6),
+proto v6 bere seance až od `SHADOW_FROM` (`--from` nesmí být dřív).
+
 Použití (z hostitele je compose PG na portu 55432, ne na URL z .env — viz
 `scripts/walkforward-nightly.ps1`, který URL složí bez výpisu hesla):
     uv run python scripts/walkforward_setups.py --db "postgresql+psycopg://gexlens:…@127.0.0.1:55432/gexlens"
         [--symbols ES,NQ] [--grid configs/walkforward_grid.json]
         [--in-sample 20] [--out-sample 5] [--metric sharpe|sum_r]
+        [--mechanics 5|6] [--from 2026-09-21]
         [--out data/reports/walkforward-2026-09-09.md] [--json]
 """
 
@@ -39,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_setups as bt  # noqa: E402 — sousední skript, ne balík
 
 from gexlens_engine.compute.setups import (  # noqa: E402
+    CUMDELTA_PRINTS,
     SETUP_MECHANICS_VERSION,
     SetupParams,
     params_from_dict,
@@ -80,9 +87,17 @@ def session_date(expiry: str) -> dt.date:
 
 
 def daily_series(
-    symbol: str, candidates: dict[str, SetupParams], repo: OIEodRepository
+    symbol: str,
+    candidates: dict[str, SetupParams],
+    repo: OIEodRepository,
+    *,
+    prints: bool = CUMDELTA_PRINTS,
+    start: dt.date | None = None,
 ) -> dict[str, dict[dt.date, float]]:
-    """Denní ΣR per kandidát z replaye všech expirací symbolu v archivu."""
+    """Denní ΣR per kandidát z replaye expirací symbolu v archivu od seance `start`.
+
+    `prints` = mechanika replaye (CumΔ z tisků pod v6, `bt.build_minutes`).
+    """
     expiries = sorted(
         os.path.basename(p)
         for p in glob.glob(f"{bt.DATA}/{symbol}/*")
@@ -90,10 +105,12 @@ def daily_series(
     )
     series: dict[str, dict[dt.date, float]] = {name: {} for name in candidates}
     for expiry in expiries:
-        minutes = bt.build_minutes(symbol, expiry, repo)
+        day = session_date(expiry)
+        if start is not None and day < start:
+            continue
+        minutes = bt.build_minutes(symbol, expiry, repo, prints=prints)
         if len(minutes) < 60:
             continue
-        day = session_date(expiry)
         for name, params in candidates.items():
             rows = bt.replay(minutes, params, expiry, symbol)
             series[name][day] = float(sum(r["r"] for r in rows if r["r"] is not None))
@@ -147,9 +164,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--metric", choices=("sharpe", "sum_r"), default=WalkForwardParams.metric)
     parser.add_argument("--out", help="soubor pro markdown report (default stdout)")
     parser.add_argument("--json", action="store_true", help="místo markdownu JSON (folds, řady)")
+    parser.add_argument(
+        "--mechanics",
+        type=int,
+        choices=(5, 6),
+        default=SETUP_MECHANICS_VERSION,
+        help="mechanika replaye: 5 = CumΔ midpoint, 6 = CumΔ z tisků (ADR-0057 bod 7)",
+    )
+    parser.add_argument(
+        "--from",
+        dest="start",
+        type=dt.date.fromisoformat,
+        help=f"první seance (pod v6 výchozí a nejdřív {bt.SHADOW_FROM.isoformat()})",
+    )
     args = parser.parse_args(argv)
     if not args.db:
         parser.error("--db nebo GEXLENS_DATABASE_URL (Max Pain z OI archivu + baseline ze store)")
+    prints = args.mechanics >= 6
+    start: dt.date | None = args.start
+    if prints:
+        # Starší seance nemají CumΔ z tisků (mezera) — v6 je nepoužije (ADR-0057 bod 7)
+        if start is not None and start < bt.SHADOW_FROM:
+            parser.error(f"--from {start} je pod v6 před stínem tisků ({bt.SHADOW_FROM})")
+        start = start or bt.SHADOW_FROM
     bt.set_data_root(args.data)
     engine = create_engine(args.db)
     oi_repo = OIEodRepository(engine)
@@ -159,14 +196,21 @@ def main(argv: list[str] | None = None) -> int:
     store.ensure_schema()
     stored = store.latest()
     baseline = stored.params if stored is not None else SetupParams()
-    baseline_label = f"store v{stored.version}" if stored is not None else "defaulty kódu"
+    baseline_label = (
+        f"store v{stored.version} (mechanika v{stored.mechanics_version})"
+        if stored is not None
+        else "defaulty kódu"
+    )
     candidates = load_grid(Path(args.grid), baseline)
     wf_params = WalkForwardParams(
         in_sample_days=args.in_sample, out_sample_days=args.out_sample, metric=args.metric
     )
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
-    per_symbol = {symbol: daily_series(symbol, candidates, oi_repo) for symbol in symbols}
+    per_symbol = {
+        symbol: daily_series(symbol, candidates, oi_repo, prints=prints, start=start)
+        for symbol in symbols
+    }
     blocks: dict[str, dict[str, dict[dt.date, float]]] = dict(per_symbol)
     if len(symbols) > 1:
         blocks["portfolio " + "+".join(symbols)] = portfolio(per_symbol)
@@ -175,9 +219,12 @@ def main(argv: list[str] | None = None) -> int:
         for block, series in blocks.items()
     }
 
+    cum_source = "tisky (stín od 21. 9., pak 1A)" if prints else "midpoint"
     title = (
         f"Walk-forward parametrů setupů — {dt.date.today().isoformat()} · "
-        f"mechanika v{SETUP_MECHANICS_VERSION} · baseline {baseline_label} · "
+        f"mechanika v{args.mechanics} (CumΔ {cum_source}) · "
+        f"seance od {start.isoformat() if start else 'začátku archivu'} · "
+        f"baseline {baseline_label} · "
         f"IS {wf_params.in_sample_days} / OOS {wf_params.out_sample_days} seancí · "
         f"metrika {wf_params.metric} · kandidátů {len(candidates) - 1}"
     )
@@ -185,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         payload: dict[str, Any] = {
             "title": title,
             "baseline": baseline_label,
+            "mechanics": args.mechanics,
+            "from": start.isoformat() if start else None,
             "candidates": {name: params_to_dict(p) for name, p in candidates.items()},
             "blocks": {
                 block: {

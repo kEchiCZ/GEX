@@ -206,7 +206,7 @@ def test_walkforward_predava_symbol_do_replaye(
         (tmp_path / symbol / "20260918").mkdir(parents=True)
         (tmp_path / symbol / "bars").mkdir()  # nečíselné adresáře nejsou expirace
     monkeypatch.setattr(bt, "DATA", str(tmp_path))
-    monkeypatch.setattr(bt, "build_minutes", lambda symbol, expiry, repo: minutes)
+    monkeypatch.setattr(bt, "build_minutes", lambda symbol, expiry, repo, prints: minutes)
     _one_setup_at(bt, created)
 
     day = dt.date(2026, 9, 18)
@@ -217,3 +217,44 @@ def test_walkforward_predava_symbol_do_replaye(
     assert module.daily_series("ESU6", {"baseline": SetupParams()}, None) == {
         "baseline": {day: 0.0}
     }
+
+
+def _walkforward(monkeypatch: pytest.MonkeyPatch) -> Any:
+    monkeypatch.delitem(sys.modules, "backtest_setups", raising=False)
+    spec = importlib.util.spec_from_file_location(
+        "walkforward_setups", SCRIPT.with_name("walkforward_setups.py")
+    )
+    assert spec is not None and spec.loader is not None
+    module: Any = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_walkforward_v6_bere_seance_od_stinu_a_predava_mechaniku(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1590: seance před 21. 9. 2026 nemají CumΔ z tisků — walk-forward v6 je nepoužije."""
+    module = _walkforward(monkeypatch)
+    bt = module.bt
+    for expiry in ("20260918", "20260921", "20260922"):
+        (tmp_path / "ES" / expiry).mkdir(parents=True)
+    monkeypatch.setattr(bt, "DATA", str(tmp_path))
+    calls: list[tuple[str, bool]] = []
+
+    def fake_build(symbol: str, expiry: str, repo: object, prints: bool) -> list[MinuteInputs]:
+        calls.append((expiry, prints))
+        return []
+
+    monkeypatch.setattr(bt, "build_minutes", fake_build)
+    module.daily_series("ES", {"baseline": SetupParams()}, None, prints=True, start=bt.SHADOW_FROM)
+    assert calls == [("20260921", True), ("20260922", True)]
+    calls.clear()
+    module.daily_series("ES", {"baseline": SetupParams()}, None, prints=False)
+    assert calls == [("20260918", False), ("20260921", False), ("20260922", False)]
+
+
+def test_walkforward_v6_odmitne_from_pred_stinem(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _walkforward(monkeypatch)
+    with pytest.raises(SystemExit):
+        module.main(["--db", "sqlite://", "--mechanics", "6", "--from", "2026-09-18"])
