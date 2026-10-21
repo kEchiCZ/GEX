@@ -7,6 +7,10 @@
 # Spouštět po settle (např. 23:30) ručně nebo z Task Scheduleru (registrace:
 # `scripts/register-walkforward-task.ps1`, úloha „GEXLens walk-forward"):
 #   pwsh -NoProfile -File scripts/walkforward-nightly.ps1
+# Při otevřeném trhu se přeskočí (#1568): replay je ~12–15 min plného CPU vedle
+# enginu. V týdnech posunu letního času (USA letní, Evropa ne) je 23:30 = 17:30 CT,
+# Globex otevřený — po–čt se běh přeskočí, v pátek už je víkendová zavírka.
+# Vědomý ruční běh za otevřeného trhu: -Force.
 # Připojení k DB: GEXLENS_HOST_DATABASE_URL, jinak se složí z GEXLENS_PG_PASSWORD
 # (prostředí nebo .env) a portu 55432; hodnotu nikdy nevypisuje.
 [CmdletBinding()]
@@ -16,13 +20,23 @@ param(
     [int]$OutSample = 5,
     [ValidateSet('sharpe', 'sum_r')][string]$Metric = 'sharpe',
     # Kolik dní reportů držet (adresář je mimo retention job enginu)
-    [int]$KeepDays = 90
+    [int]$KeepDays = 90,
+    # Spustit i za otevřeného trhu (jen vědomě ručně, ne z úlohy)
+    [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
-function Write-Step($text) { Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $text" }
+. (Join-Path $PSScriptRoot 'lib\GlobexClock.ps1')
+. (Join-Path $PSScriptRoot 'lib\DockerHost.ps1')
+
+# Brána trhu (#1568): zdroj pravdy compute/marketclock.is_market_closed (svátky CME),
+# bez .venv náhradou Get-GlobexClock. Tichý konec s hláškou jako u PG níže.
+if (-not $Force -and -not (Test-MarketClosed)) {
+    Write-Step "Trh je otevřený (CT $((Get-GlobexClock).Label)) — walk-forward se přeskakuje (-Force jen vědomě)."
+    exit 0
+}
 
 # Běží aplikace? Bez PG kontejneru není z čeho číst (Max Pain, baseline ze store)
 # — Task Scheduler pouští úlohu i po probuzení PC, kdy compose ještě nejede.

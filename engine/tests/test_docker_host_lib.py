@@ -147,6 +147,10 @@ def test_pocty_radku_pg_prirustek_a_nova_tabulka_v_poradku() -> None:
         ("2026-12-25 15:00", True),  # Vánoce
         ("2026-11-26 19:00", True),  # Díkůvzdání po 12:00 CT
         ("2026-11-26 17:00", False),  # Díkůvzdání dopoledne CT — obchoduje se
+        # Walk-forward 23:30 místního času v týdnu posunu letního času (#1568):
+        # pondělí 23:30 SEČ = 17:30 CDT otevřeno, pátek 23:30 SEČ už víkend
+        ("2026-10-26 22:30", False),
+        ("2026-10-30 22:30", True),
     ],
 )
 def test_trh_zavreny_podle_marketclock(utc: str, closed: bool) -> None:
