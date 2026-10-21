@@ -59,7 +59,18 @@ export interface RawDay {
   /** Spot per minuta (OTM/ITM klasifikace) — díry se forward-fillují. */
   spotSeries: (number | null)[]
   staleAge: Float32Array | null
+  /** Minuty se snímkem, ale bez OI vrstvy (FA mezera, ADR-0057 bod 4, #1632):
+  módy čtoucí OI tam nekreslí nic, čistě objemové módy beze změny. Chybí = OI
+  všude, kde je snímek. */
+  oiGapMinutes?: boolean[]
 }
+
+/** Módy jen z objemu — FA mezera (`oiGapMinutes`) se jich netýká. */
+const VOLUME_ONLY_MODES: ReadonlySet<MeasuredHeatmapMode> = new Set([
+  'vol_otm',
+  'vol_itm',
+  'vol_signed',
+])
 
 /** Váhy OI+OTM blendu (SPEC 4.3, stejné defaulty jako engine). */
 const OI_WEIGHT = 0.6
@@ -172,7 +183,10 @@ function composeModeGrid(raw: RawDay, mode: MeasuredHeatmapMode, scale: HeatmapS
   const callVega = raw.callVega ?? new Float32Array(stride * strikes.length)
   const putVega = raw.putVega ?? new Float32Array(stride * strikes.length)
 
+  const oiGapApplies = raw.oiGapMinutes !== undefined && !VOLUME_ONLY_MODES.has(mode)
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
+    // Minuta bez OI vrstvy zůstane prázdná (nuly = mezera jako díra ve sběru)
+    if (oiGapApplies && raw.oiGapMinutes?.[minuteIdx]) continue
     const spot = spots[minuteIdx]
     // OI+OTM: složky se normalizují na společné maximum per minuta (jako engine per snapshot)
     let maxOi = 0

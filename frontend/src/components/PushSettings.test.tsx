@@ -218,3 +218,17 @@ test('bez bota řekne, kam patří údaje', async () => {
     expect(screen.getByTestId('push-status').textContent).toContain('není nastaven'),
   )
 })
+
+test('dopad přihlášení na mobilu podle zdroje CumΔ (ADR-0057, #1632)', async () => {
+  stubStatus(STATUS)
+  const { rerender } = render(
+    <PushSettings values={{}} saveAll={async () => undefined} cumdeltaSource="midpoint" />,
+  )
+  await waitFor(() => expect(screen.getByTestId('push-status')).toBeDefined())
+  const note = () => screen.getByText(/Zvoneček dostává vždy všechno/).textContent ?? ''
+  expect(note()).toContain('stojí CumΔ')
+  // T8 je rezervované číslo bez šablony — tok čtou T1, T4 a kontra-režim T2
+  expect(note()).not.toContain('T8')
+  rerender(<PushSettings values={{}} saveAll={async () => undefined} cumdeltaSource="aggressor" />)
+  expect(note()).toContain('běží CumΔ dál z tisků')
+})

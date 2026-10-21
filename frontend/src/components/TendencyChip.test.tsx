@@ -54,3 +54,43 @@ test('ukazuje pásmo, po kliku rozpad hlasů s badge nekalibrováno (#350)', asy
   expect(popover.textContent).toContain('Poloha vůči Gamma Flipu')
   expect(popover.textContent).toContain('cena nad těžištěm 7445')
 })
+
+test('hlas s vahou 0 je zašedlý s textem a tooltipem, ostatní beze změny (#1632)', async () => {
+  // Tendence v5 (E-0.12 C): poloha mezi zdmi hlasuje s vahou 0
+  const row = {
+    ...ROW,
+    weights_version: 5,
+    votes: [...ROW.votes, { name: 'walls_distance', vote: 1, weight: 0, detail: 'blíž put zdi' }],
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            String(input).includes('/tendency/') ? { tendency: [row] } : { expiries: [] },
+          ),
+      }),
+    ),
+  )
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(
+    <AppStateProvider socket={socket}>
+      <TendencyChip />
+    </AppStateProvider>,
+  )
+  fireEvent.click(await screen.findByTestId('tendency-chip'))
+  const items = screen.getByRole('dialog', { name: 'Rozpad hlasů tendence' }).querySelectorAll('li')
+  const zero = [...items].find((item) => item.textContent?.includes('blíž put zdi'))!
+  expect(zero.className).toBe('tendency-vote-zero')
+  expect(zero.textContent).toContain('váha 0, do skóre nevstupuje')
+  expect(zero.getAttribute('title')).toContain('\n• ')
+  // Hlasy s vahou > 0 (pod v4 všechny) se nemění
+  const flip = [...items].find((item) => item.textContent?.includes('cena nad flipem'))!
+  expect(flip.className).toBe('')
+  expect(flip.getAttribute('title')).toBeNull()
+  expect(flip.textContent).not.toContain('váha 0')
+})

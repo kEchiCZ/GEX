@@ -218,10 +218,10 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         swatch: { kind: 'chip', color: '#e8c14b', label: 'FA' },
         where:
           'Přepínač „OI" v řádku přepínačů (Měřené / FA odhad). Aktivní FA značí tečkovaný okraj přepínače a badge „FA odhad" nad grafem.',
-        what: 'OI vrstvy heatmapy, Dyn GEX podklad i GEX křivka pravého profilu se místo měřeného ranního archivu počítají z odhadu OI_est = ranní OI + α·čistý klasifikovaný tok (ADR-0011). Vidí tedy i positioning postavený DNES, který ranní OI nezná — u 0DTE je to většina gammy. FA levels linie (čárkované) vychází z téhož odhadu.',
+        what: 'OI vrstvy heatmapy, Dyn GEX podklad i GEX křivka pravého profilu se místo měřeného ranního archivu počítají z odhadu OI_est = ranní OI + α·čistý tok (ADR-0011; do mechaniky v6 z midpoint testu, od v6 jen z tisků se stranou agresora od burzy, ADR-0057). Vidí tedy i positioning postavený DNES, který ranní OI nezná — u 0DTE je to většina gammy. FA levels linie (čárkované) vychází z téhož odhadu.',
         up: 'Nová zeď/flip z FA odhadu výš než měřené → dnešní tok staví positioning nad cenou; měřené vrstvy ho uvidí až zítra ráno.',
         down: 'FA put zeď/flip níž než měřené → dnes se staví ochrana pod trhem.',
-        how: 'Je to model, ne měření: intradenní tok je klasifikovaný odhad a α hrubý kalibrační faktor (engine ho každé ráno ladí proti skutečnému ΔOI — badge „FA α" ve stavové liště). Vol, Δ Flow, Cum Δ i OI Δ složka pravého profilu zůstávají VŽDY měřené. Default je Měřené; volba se pamatuje per symbol.',
+        how: 'Je to model, ne měření: čistý tok nese jen outright agresi a α je hrubý kalibrační faktor (engine ho každé ráno ladí proti skutečnému ΔOI — badge „FA α" ve stavové liště). Od v6 FA jede až po 5 dnech kalibrace z tisků, do té doby badge ukazuje „FA nekalibrováno n/5". Minuta bez FA řad (mezera tisků, FA vypnutá) je v grafu mezera — graf nedrží poslední FA profil ani tiše nepřejde na měřené OI. Vol, Δ Flow, Cum Δ i OI Δ složka pravého profilu zůstávají VŽDY měřené. Default je Měřené; volba se pamatuje per symbol.',
       },
       {
         name: 'Dyn GEX plocha',
@@ -302,7 +302,7 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         swatch: { kind: 'signal' },
         where:
           'Hlavní graf, trojúhelník na cenové křivce; zapíná dropdown „Signály“ (Off / NEWS / COMBINED).',
-        what: 'Long/Short nápověda ze zpráv: vznikne, jen když je potvrzený denní stav (RiskOn/RiskOff), přišla čerstvá zpráva ve směru stavu A její typ má v historii dost změřených reakcí se spolehlivou úspěšností (n ≥ 30, spodní mez hit-rate > 50 %). Sytost šipky = síla; vodorovná stopa vede do konce platnosti. Režim NEWS bere jen zprávy, COMBINED navíc vyžaduje souhlas GEX kontextu (cena vs. flip, sklon Cum Δ).',
+        what: 'Long/Short nápověda ze zpráv: vznikne, jen když je potvrzený denní stav (RiskOn/RiskOff), přišla čerstvá zpráva ve směru stavu A její typ má v historii dost změřených reakcí se spolehlivou úspěšností (n ≥ 30, spodní mez hit-rate > 50 %). Sytost šipky = síla; vodorovná stopa vede do konce platnosti. Režim NEWS bere jen zprávy, COMBINED navíc vyžaduje souhlas GEX kontextu (cena vs. flip, nebo sklon Cum Δ). Sklon přes mezeru tisků (od v6) nehlasuje — potvrdit pak může jen flip (ADR-0057).',
         up: '▲ zelenomodrá pod cenou = long signál. Tooltip u kurzoru ukáže zdůvodnění, počet vzorků a hit-rate.',
         down: '▼ červená nad cenou = short signál. Badge ⚠ u šipky znamená nepotvrzenou změnu stavu — signál může předčasně vyhasnout.',
         how: 'Není to příkaz k obchodu — je to statistika minulých reakcí na podobné zprávy. Dokud model nemá dost dat, dropdown ukazuje „sbírám data“ a signály nechodí.',
@@ -352,6 +352,7 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         what: 'Kolik opčních kontraktů se v dané minutě zobchodovalo, rozdělené na strany.',
         up: 'Skok zelených sloupců → čerstvý zájem o cally. Nová zeď se často objeví do pár minut po takovém skoku.',
         down: 'Skok červených sloupců → nakupuje se ochrana, staví se put pozice pod cenou.',
+        how: 'Počítá se jen objem nad dosavadním maximem kontraktu v seanci (#1602). První minuta po mezeře v objemu (fallback tastytrade, díra ve sběru) je 0 — nesla by objem celé mezery, ne jedné minuty; součet dne v Daily ho započte. Platí i pro Δ Flow C/P.',
       },
       {
         name: 'Δ Flow C/P',
@@ -366,10 +367,10 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         name: 'Cum Δ',
         swatch: { kind: 'area', positive: UP_COLOR, negative: DOWN_COLOR },
         where: 'Čtvrtý panel; plocha nad nulou zeleně, pod nulou červeně.',
-        what: 'Kumulativní delta futures — průběžný součet toho, jestli obchody vznikaly agresivním nákupem, nebo prodejem. Na rozdíl od Δ Flow tady agresora známe.',
-        up: 'Cena roste A Cum Δ roste s ní → za růstem stojí agresivní kupci, pohyb má podporu a spíš pokračuje.',
-        down: 'Cena klesá A Cum Δ klesá → agresivní prodejci, propad má za sebou skutečný tok.',
-        how: 'Nejcennější je rozchod: cena udělá nové maximum, ale Cum Δ ne → růst už netlačí kupci a často následuje obrat dolů. Obráceně stejně.',
+        what: 'Kumulativní delta-vážený tok OPČNÍCH obchodů (ne podkladu — ten ukazuje linka CVD podkladu ve stejném panelu). Do mechaniky v6 dává znaménko minutový midpoint test, který podle měření jde proti ceně (#1018) — směr toku do v6 čti z linky CVD. Od v6 nese plocha jen tisky se stranou agresora od burzy (ADR-0057); minuta bez tisků je mezera a dny se znaménkem z midpointu se nekreslí.',
+        up: 'Od v6: cena roste A Cum Δ roste s ní → za růstem stojí agresivní kupci call delty / prodejci put delty, pohyb má podporu a spíš pokračuje.',
+        down: 'Od v6: cena klesá A Cum Δ klesá → agresivní prodejci call delty / kupci put delty, propad má za sebou skutečný tok.',
+        how: 'Nejcennější je rozchod: cena udělá nové maximum, ale Cum Δ ne → růst už netlačí kupci a často následuje obrat dolů. Obráceně stejně. Objem bez tisku (nohy spreadů, bloky) do toku nejde.',
       },
       {
         name: 'Sentiment',

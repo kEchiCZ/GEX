@@ -32,6 +32,13 @@ export function ScenarioStatsSection({ symbol }: { symbol: string }) {
         Nakreslená očekávaná cesta se po termínu porovná se skutečností: zásah cíle 1 a 2 v pořadí,
         největší odchylka close od cesty (body i EM). Závěr až od n ≥ 30 — do té doby jen sběr;
         scénáře vznikají výhradně dopředu.
+        {stats?.rules_version != null && (
+          <span data-testid="scenario-rules-version">
+            {' '}
+            Automatické jen z aktuální verze pravidel verdiktu (v{stats.rules_version}), ruční
+            všechny.
+          </span>
+        )}
       </p>
       {stats === null ? (
         <p className="muted">Statistiky nejsou k dispozici.</p>

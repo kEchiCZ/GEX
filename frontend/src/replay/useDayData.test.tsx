@@ -35,7 +35,7 @@ function makeInputs(): ReplayInputs {
     putOi: new Float32Array([200]),
     callOiEst: new Float32Array([100]),
     putOiEst: new Float32Array([200]),
-    hasOiEst: false,
+    faMinutes: new Set<string>(),
     callPrinted: new Float32Array([0]),
     putPrinted: new Float32Array([0]),
     callStructured: new Float32Array([0]),

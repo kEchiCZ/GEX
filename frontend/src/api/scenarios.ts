@@ -61,6 +61,8 @@ export interface ScenarioRationale {
 
 export interface ScenarioStats {
   symbol: string | null
+  /** Verze pravidel verdiktu, ze které jsou automatické scénáře (#1588); ruční ji nemají. */
+  rules_version?: number
   preliminary: boolean
   n: number
   hit1: number

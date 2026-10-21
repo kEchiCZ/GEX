@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.20 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.32 · říjen 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); od verze 1.9 slouží <strong>tastytrade</strong> jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -49,12 +49,12 @@
 <li><strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma), <strong>call wall</strong>, <strong>put wall</strong>, <strong>centroid</strong> a <strong>Max Pain</strong>, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. Volitelné <strong>Walls</strong> módy (Peak/Center/Smooth/Flip/Ridge vše/Ridge dominantní) a preset <strong>✦ Čistý pohled</strong> (dominantní hřeben + Max Pain + cena jedním kliknutím).</li>
 <li><strong>Multi-instrument</strong> — watchlist v sidebaru: přidej ticker (ES, NQ, RTY…) a engine ho začne sbírat <strong>do několika sekund</strong>; svíčky a Vol panel se zpětně doplní za celý den, opční data (OI, Greeks) běží od momentu přidání. Kliknutím přepínáš celou aplikaci.</li>
 <li><strong>Více expirací najednou</strong> — vedle aktivního řetězu se sbírá i následující expirace (čtení positioningu příští seance) a pravý profil umí <strong>Σ souhrn přes expirace</strong>.</li>
-<li><strong>Živý tok</strong> — kumulativní delta flow (Cum Δ) s klasifikací agresora + <strong>Δ Flow C/P</strong> (tok zvlášť za call/put stranu).</li>
+<li><strong>Živý tok</strong> — kumulativní delta flow opcí (Cum Δ; od mechaniky v6 jen z tisků se stranou agresora od burzy, do té doby čti směr z linky CVD podkladu, kap. 8) + <strong>Δ Flow C/P</strong> (tok zvlášť za call/put stranu).</li>
 <li><strong>ΔOI vs. včera</strong> — kde přes noc přibyly/ubyly otevřené pozice (tooltip profilu).</li>
 <li><strong>Replay</strong> — skrytý za tlačítkem ⏮ Replay; slider přehraje vývoj dne rychlostí 1×/5×/20×. Aplikace defaultně jede vždy live.</li>
 <li><strong>Anotace</strong> — šipky, linie a kreslení od ruky přímo do grafu; uložené k instrumentu a dni, přežijí restart.</li>
-<li><strong>News a sentiment (SentimentLens)</strong> — vlastní news-engine sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy), klasifikuje směr a důležitost, počítá <strong>SentIndex</strong> a stav <strong>RISK ON / RISK OFF</strong>. V grafu markery zpráv (klik = dialog s detaily a dopadem Long/Short), obrazovka <strong>News</strong> s feedem a nadcházejícími událostmi.</li>
-<li><strong>Signály</strong> — empiricky gate-ované Long/Short nápovědy ze zpráv (šipky na ceně); pouštějí se, až když daný typ zprávy má statisticky ověřenou reakci (n ≥ 30, Wilson LB &gt; 0,50).</li>
+<li><strong>News a sentiment (SentimentLens)</strong> — vlastní news-engine sbírá zprávy a makro kalendář (ForexFactory, oficiální feedy Fedu, ECB, Bílého domu, BLS (CPI, PPI, zaměstnanost) a BEA (GDP, PCE), zpravodajské feedy), klasifikuje směr a důležitost, počítá <strong>SentIndex</strong> a stav <strong>RISK ON / RISK OFF</strong>. V grafu markery zpráv (klik = dialog s detaily a dopadem Long/Short), obrazovka <strong>News</strong> s feedem a nadcházejícími událostmi.</li>
+<li><strong>Signály</strong> — empiricky gate-ované Long/Short nápovědy ze zpráv (šipky na ceně); pouštějí se, až když daný typ zprávy má statisticky ověřenou reakci (n ≥ 30, Wilson LB &gt; 0,50, průměrná reakce aspoň 1 bp).</li>
 <li><strong>Tendence</strong> — souhrnný chip v hlavičce (Strong Short … Strong Long) z 12 složek positioningu a toku, s rozpadem hlasů po kliknutí.</li>
 <li><strong>Setup detektor</strong> — šablony T1–T5 a T7 (odraz od zdi, neúspěšný průraz, Max Pain pin, gamma momentum, divergenční spring, pokračování trendu) s kartou, liniemi v grafu, P/L evidencí a hodnocením.</li>
 <li><strong>Dashboard, Řetěz, Stats, Settings</strong> — provozní obrazovky pro přehled, opční tabulku, statistiky a konfiguraci (stav enginu je v Settings).</li>
@@ -116,7 +116,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Hlavička — spodní řádek</strong></td>
-<td><strong>V jakém je to stavu</strong>: <strong>GEX režim badge</strong> (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem; když flip leží <strong>mimo měřené pásmo</strong> — celý Dyn GEX profil je na jedné straně nuly — badge se od v1.13 neztratí, režim se odvodí ze znaménka profilu u spotu a tooltip to přizná, #864), <strong>chip Tendence</strong> (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno&quot;), <strong>chip stavu sentimentu</strong> RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna), <strong>settle watch</strong>, <strong>chip gamma útesu</strong> a vpravo <strong>ukazatele pokrytí dat</strong>, indikátor ● Live / ○ Offline a zvonek notifikací.</td>
+<td><strong>V jakém je to stavu</strong>: <strong>GEX režim badge</strong> (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem; když flip leží <strong>mimo měřené pásmo</strong> — celý Dyn GEX profil je na jedné straně nuly — badge se od v1.13 neztratí, režim se odvodí ze znaménka profilu u spotu a tooltip to přizná, #864), <strong>chip Tendence</strong> (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno&quot;; hlas s vahou 0 — od v6 poloha mezi zdmi — je v rozpadu zašedlý s textem „váha 0, do skóre nevstupuje“, #1632), <strong>chip stavu sentimentu</strong> RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna), <strong>settle watch</strong>, <strong>chip gamma útesu</strong> a vpravo <strong>ukazatele pokrytí dat</strong>, indikátor ● Live / ○ Offline a zvonek notifikací.</td>
 </tr>
 <tr>
 <td><strong>Řádek timeframe</strong></td>
@@ -124,11 +124,11 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Řádek přepínačů</strong></td>
-<td>Dropdown <strong>Dyn plocha</strong> (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; <strong>výchozí je Dyn GEX</strong> (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Dropdown <strong>Vrstvy (n)</strong> (v1.16, #1084) — multi-výběr vrstev v grafu: <strong>GEX Levels</strong> (flip/centroid/Max Pain + <strong>OI zdi</strong>, viz kap. 5), <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), <strong>Zdi</strong> (call/put wall linie), <strong>2. zeď</strong> (druhá nejsilnější koncentrace strany, tečkovaně), <strong>FA levels</strong> (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI). Dropdown <strong>Panely (n)</strong> (v1.16, #1084) — multi-výběr spodních panelů v pořadí, jak se kreslí shora dolů: <strong>Vol / Opt Vol / Δ Flow C/P / Evo OI / Cum Δ / Sentiment</strong>; panel Sentiment má vlastní položku, nezávislou na checkboxu News. Závorka u obou dropdownů ukazuje počet zapnutých („žádný“ = nic). Checkboxy přímo v liště: <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong> (markery zpráv) s dropdownem <strong>Vše/Významné</strong> (filtr markerů na importance ≥ 2), dropdown <strong>Signály</strong> (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá.</td>
+<td>Dropdown <strong>Dyn plocha</strong> (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; <strong>výchozí je Dyn GEX</strong> (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Dropdown <strong>Vrstvy (n)</strong> (v1.16, #1084) — multi-výběr vrstev v grafu: <strong>GEX Levels</strong> (flip/centroid/Max Pain + <strong>OI zdi</strong>, viz kap. 5), <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), <strong>Zdi</strong> (call/put wall linie), <strong>2. zeď</strong> (druhá nejsilnější koncentrace strany, tečkovaně), <strong>FA levels</strong> (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI). Dropdown <strong>Panely (n)</strong> (v1.16, #1084) — multi-výběr spodních panelů v pořadí, jak se kreslí shora dolů: <strong>Vol / Opt Vol / Δ Flow C/P / Evo OI / Cum Δ / Sentiment</strong>; panel Sentiment má vlastní položku, nezávislou na checkboxu News. Závorka u obou dropdownů ukazuje počet zapnutých („žádný“ = nic). Checkboxy přímo v liště: <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong> (markery zpráv) s dropdownem <strong>Významné/Vše</strong> (výchozí Významné — stejná definice jako upozornění na zprávy, kap. 14), dropdown <strong>Signály</strong> (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá.</td>
 </tr>
 <tr>
 <td><strong>Chipy stavu trhu</strong></td>
-<td><strong>Settle watch</strong> — segment „settle 22:00 · nad/pod X ±d b&quot;: klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?&quot; na jeden pohled. <strong>Chip „odpadá X % gammy&quot;</strong> — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. <strong>Chip ⌛ kalendáře expirací</strong> (v1.20, #1189) — jen v kvartálním expiračním týdnu: „roll proběhl 10. 9. · expirace U6 pá 18. 9. 15:30&quot;, „OPEX týden&quot;, „kvartální expirace U6 dnes 15:30 (SOQ)&quot;, „po OPEXu — bez opční podpory&quot;; tooltip vysvětluje, co fáze znamená. Stejné ⌛ jsou v ose grafu (jako TradingView) a v Briefingu je karta <strong>Expirační týden</strong>.</td>
+<td><strong>Settle watch</strong> — segment „settle 22:00 · nad/pod X ±d b&quot;: klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?&quot; na jeden pohled. <strong>Chip „odpadá X % gammy&quot;</strong> — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. <strong>Chip ⌛ kalendáře expirací</strong> (v1.20, #1189) — jen v kvartálním expiračním týdnu: „roll proběhl 10. 9. · expirace U6 pá 18. 9. 15:30&quot;, „OPEX týden&quot;, „kvartální expirace U6 dnes 15:30 (SOQ)&quot;, „po OPEXu — bez opční podpory&quot;; tooltip vysvětluje, co fáze znamená. Stejné ⌛ jsou v ose grafu (jako TradingView) a v Briefingu je karta <strong>Expirační týden</strong>. <strong>Chip ◌ „tenká mapa (n/3)&quot;</strong> (v1.21, #1245) — jen když pozicování, které by cenu tlumilo nebo pinovalo, právě chybí: aspoň dvě ze tří podmínek — <em>tenká gamma</em> (celkové GEX i gamma u ceny pod 25. percentilem posledních 20 seancí téhož symbolu; prahy jsou relativní, ES a NQ se liší o řády), <em>slabé zdi</em> (dominance obou &lt; 25 %), <em>slitá mapa</em> (flip, obě zdi a max pain do 0,25 % ceny od sebe — referenční 21. 9. 2026 po kvartálním OPEX: vše na 7 650). Tooltip vypisuje ✓/✗/? per podmínku. Co z toho plyne: nic netlumí a nic nepinuje, pohyby jsou delší v obou směrech, zdi jen orientační, setupy od zdi a pin k Max Pain nedávají smysl, dokud se mapa neobnoví. Liší se od útesu gammy: útes říká, co po settle <strong>odpadlo</strong>, tenká mapa, co <strong>teď zbylo</strong> (a může nastat i mimo OPEX, po prudkém pohybu mimo pozicování). Fáze 1 jen ukazuje, nic se neblokuje.</td>
 </tr>
 <tr>
 <td><strong>Ukazatele pokrytí dat</strong></td>
@@ -136,7 +136,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Přepínač OI</strong></td>
-<td><strong>Měřené / FA odhad</strong> — zdroj Open Interest pro heatmapu i profil (persistováno per symbol, default Měřené). FA odhad = OI dopočtené z klasifikovaného toku (netflow×α): k dispozici dřív než publikovaný archiv, ale je to odhad — při pochybnosti věř Měřeným. FA má i vlastní Dyn GEX plochu v dropdownu Dyn plocha a vlastní FA levels.</td>
+<td><strong>Měřené / FA odhad</strong> — zdroj Open Interest pro heatmapu i profil (persistováno per symbol, default Měřené). FA odhad = OI dopočtené z klasifikovaného toku (netflow×α): k dispozici dřív než publikovaný archiv, ale je to odhad — při pochybnosti věř Měřeným. FA má i vlastní Dyn GEX plochu v dropdownu Dyn plocha a vlastní FA levels. <strong>Minuta bez FA řad je v režimu FA mezera</strong> (ADR-0057 bod 4, #1632): OI vrstvy, Dyn GEX podklad i GEX křivka pravého profilu tam nic nekreslí, poslední FA profil se přes ni nedrží a graf tiše nepřejde na měřené OI. Takovou minutu dělá mezera tisků (od mechaniky v6), FA vypnutá do kalibrace (prvních 5 dnů v6) nebo řetěz po settle; díra ve sběru (minuta bez snímku) se kreslí stejně jako v měřeném režimu. Den úplně bez FA ukáže badge <strong>„FA odhad · den bez FA“</strong> — tak vypadá i sekundární expirace (FA píše jen aktivní řetěz) a ad-hoc pohled; měřené OI vrátí přepínač OI → Měřené.</td>
 </tr>
 <tr>
 <td><strong>Lišta grafu</strong></td>
@@ -188,8 +188,8 @@ svátek), otevře se <strong>poslední seance, která data má</strong> — typi
 (#946). Doskok se vždy ohlásí bannerem nad grafem s oběma daty: <em>„Pro
 2026-08-31 nejsou uložená data — zobrazena poslední seance 2026-08-28. Mimo
 obchodní dny je to očekávané; ve všední den to znamená, že sběr neběžel.&quot;</em>
-Aplikace nezná kalendář svátků, podle data poznáš sám, jestli je to
-v pořádku; ruční volba expirace v selektoru banner zruší. Čerstvě přidaný
+Banner svátek od výpadku sběru nerozlišuje, podle data poznáš sám, jestli
+je to v pořádku; ruční volba expirace v selektoru banner zruší. Čerstvě přidaný
 ticker bez dat zůstává u vybrané expirace s hláškou demo dat.</p>
 <hr>
 <h2>5. Heatmapa podrobně</h2>
@@ -461,10 +461,12 @@ podle zdi umisťuje stop, o ní jinak neví.</p>
 hladina prostě nekreslí. Proto se OI zdi nemíchají mezi gamma zdi.</li>
 <li><strong>Cenovka nese i podíl outright objemu</strong> (v1.14, #1007): <code>· 74 % outright</code> říká,
 kolik dnešního objemu na striku zdi vytiskly outright obchody se stranou od
-burzy; zbytek je strukturovaný objem (nohy spreadů, bloky). Zeď z outright
-drží dealer jako plnou pozici, zeď ze spreadů má gammu částečně
-vykompenzovanou. Zatím jen informace — kreslení zdi to nemění, dokud
-kalibrace nedoloží rozdíl v chování ceny. Stejné číslo má i GEX žebřík.</li>
+burzy; zbytek je strukturovaný objem (nohy spreadů, bloky). Hypotéza: zeď
+z outright drží dealer jako plnou pozici, zeď ze spreadů má gammu částečně
+vykompenzovanou. <strong>Měření 8. 10. 2026 je neprůkazné</strong> (v1.31, #1019): zdi
+s outright ≥ 40 % drží bodově o 5–10 p. b. líp, ale na 13 seancích to nejde
+odlišit od náhody; přeměření po ≥ 40 seancích. Do té doby jen informace —
+kreslení zdi, setupy ani upozornění to nemění. Stejné číslo má i GEX žebřík.</li>
 <li><strong>Cenovka nese podíl na OI své strany</strong>: nízké procento = plochý profil,
 „zeď&quot; je jen nejvyšší z mnoha srovnatelných striků. <strong>Slabé zdi (pod 20 %)
 se nekreslí vůbec</strong> — práh leží v mezeře naměřeného rozdělení (hodnoty se
@@ -481,13 +483,27 @@ veličin vysvětluje i <strong>Legenda</strong> v sidebaru.</li>
 </ul>
 <h3>News markery — zprávy přímo v grafu</h3>
 <p>Se zapnutým <strong>News</strong> se na časové ose kreslí značky zpráv a makro událostí (krátký tick těsně nad pásem popisků seancí u spodní hrany + glyf kategorie nad ním: 🏛 Fed, 📊 inflace, 👷 trh práce…; od v1.13 mají pevnou výšku v pixelech a nerostou s výškou grafu — dřív zabíraly spodní třetinu plochy, #980; klik na marker trefí jen tenhle spodní pás, výš patří klik heatmapě):</p>
+<p><strong>Všechny zprávy zobrazeného dne</strong> (v1.21, #1290): graf načítá zprávy po seancích — celý
+obchodní den (17:00–17:00 CT) jedním dotazem, bez stropu počtu. Dřív bral posledních 100
+zpráv, což při toku ~150 zpráv za hodinu pokrylo jen ~30–40 minut, a markery starších
+zpráv během dne mizely. Nové zprávy dorazí živě (do ~2 s), každou minutu se navíc dotáhne
+úsek od posledního úspěšného dotažení s 30min rezervou (klasifikace, výsledek makra, výpadek
+API). Celý den se načte znovu po výpadku spojení a také po <strong>vypnutí a zapnutí</strong> vrstvy
+News, návratu z Daily nebo z prohlížení jiného dne — během pauzy graf zprávy neodebíral
+a díra by jinak zůstala do obnovení stránky. Když se zprávy nepodaří načíst, nad grafem se
+ukáže hláška <strong>s dnem, který chybí</strong> — prázdný pás markerů pak neznamená den bez zpráv;
+hláška zmizí, jakmile se ten den načte (další pokus do minuty). Zprávy víkendu (pátek 17:00 – neděle 17:00 CT) na ose žádné seance neleží; najdeš
+je v záložce News a v upozornění před otevřením.</p>
 <ul>
 <li><strong>Barva = změřený dopad</strong>: teal kladný sentiment, červená záporný, šedá neutrální/nezměřený. <strong>Jas a tloušťka = důležitost</strong> — okrajová zpráva nekřičí jako FOMC.</li>
-<li>Víc zpráv v téže minutě = <strong>jeden marker s počtem</strong> (cluster).</li>
-<li><strong>Nadcházející plánované eventy</strong> (CPI ve 14:30…) se kreslí <strong>dutě čárkovaně do projekční zóny</strong> vpravo od živé hrany — vidíš je dřív, než přijdou.</li>
-<li><strong>Klik na marker otevře dialog</strong> se zprávami dané minuty: čas, kategorie, důležitost (! až !!!), titulek, případný souhrn a <strong>očekávaný dopad na trh — Long ▲ / Short ▼ / Neutrální</strong> (u klasifikovaných zpráv podle směru, jinak podle znaménka skóre; stejná logika, jakou se barví marker). U makro událostí navíc <strong>očekávání / minule / výsledek</strong>, u nadcházejících odpočet. Zavření: ×, Esc, nebo klik mimo.</li>
+<li>Víc zpráv v témže sloupci grafu (minuta na 1m, pět minut na 5m…) = <strong>jeden marker s počtem</strong> (cluster). Zpráva padne do sloupce <strong>podle času</strong>: 13:02 na 5m do sloupce 13:00 (v1.21 — dřív se na 5m a delších timeframech zprávy mimo hranici sloupce nekreslily vůbec). Zprávy z <strong>denní pauzy CME</strong> (16–17 CT, v Praze 23–24) vlastní sloupec nemají a přimknou se k poslednímu sloupci před pauzou.</li>
+<li><strong>Oddálený celý den</strong> (v1.21): s filtrem Vše je za seanci 1 000–1 250 markerů. Pod ~4 px na sloupec se kreslí jen čárky, glyf dostanou jen významné zprávy (bez počtu) a glyfy se nepřekrývají — přednost má důležitější zpráva; po přiblížení se glyfy i počty vrátí. Kreslí se jen markery ve výřezu. Klik trefí to, co je <strong>nakreslené</strong>: nejdřív glyf (v jeho šíři přednost důležitější zprávě), jinak nejbližší čárku — ne sousední drobnou zprávu se skrytým glyfem.</li>
+<li><strong>Nadcházející plánované eventy</strong> (CPI ve 14:30…) se kreslí <strong>dutě čárkovaně do projekční zóny</strong> vpravo od živé hrany — vidíš je dřív, než přijdou. Dutý je jen <strong>plánovaný</strong> event z kalendáře; čerstvý titulek je vždy plný marker na živé hraně, i když dorazil pár vteřin po posledním tiku.</li>
+<li><strong>Klik na marker otevře dialog</strong> se zprávami daného sloupce: čas, kategorie, důležitost (! až !!!), titulek, případný souhrn a <strong>očekávaný dopad na trh — Long ▲ / Short ▼ / Neutrální</strong> (u klasifikovaných zpráv podle směru, jinak podle znaménka skóre; stejná logika, jakou se barví marker). U makro událostí navíc <strong>očekávání / minule / výsledek</strong>, u nadcházejících odpočet. <strong>Nejvýznamnější zpráva je nahoře</strong> (v1.22, #1305): nejdřív kalendář s dopadem High, pak kalendář Medium (a rozhodnutí ECB, BoE, BoJ), pak zprávy s důležitostí 3 a 2; pod nimi nevýznamné zprávy podle důležitosti; uvnitř každého stupně podle času. Cluster nad 6 zpráv (na 60m i ~200) nevýznamné <strong>sbalí</strong> pod tlačítko „+N nevýznamných zpráv&quot; — rozbalíš je jedním klikem. Zavření: ×, Esc, nebo klik mimo.</li>
 <li><strong>Verdikt vydané makro události (v1.12):</strong> jakmile dorazí výsledek, dialog pod čísly ukáže <strong>„nižší/vyšší než očekávání (±X σ)&quot;</strong> a při překvapení ≥ 0,5 σ i <strong>směr → risk-on ▲ / risk-off ▼</strong>. <strong>Proč z pohledu tradera:</strong> holé „2,7 vs 2,9&quot; musíš v hlavě přepočítat přes polaritu řady (nižší CPI = dobrá zpráva, nižší payrolls = špatná) — přesně v minutách, kdy sleduješ reakci spotu; verdikt to udělá za tebe včetně velikosti překvapení v σ řady (−1,4 σ je jiná káva než −0,5 σ). <strong>Jak číst:</strong> šipka je odhad z konvence řady, ne signál — tooltip připomíná, že polarita je režimově závislá (v období „good news is bad news&quot; se obrací); pod 0,5 σ se směr neukazuje vůbec, protože překvapení na úrovni šumu žádný směr nenese. Výsledek u high-impact událostí dorazí do ~1–2 minut od vydání (burst dotahování).</li>
-<li>Dropdown <strong>Vše / Významné</strong> vedle checkboxu News omezí markery jen na zprávy s <strong>důležitostí ≥ 2</strong> — plocha se nezahltí drobnými titulky, FOMC/CPI zůstávají.</li>
+<li>Dropdown <strong>Významné / Vše</strong> vedle checkboxu News (v1.22, #1305): <strong>výchozí je Významné</strong> — v grafu jsou jen zprávy, které splní <strong>stejnou definici jako upozornění na reakci trhu</strong> (viz „Co je významná zpráva“ v kap. 14): kalendář USD High/Medium a rozhodnutí ECB, BoE a BoJ, zprávy s důležitostí 2 a 3 kromě výsledků firem. Za den je to asi 50 markerů místo 1 000–1 250 při „Vše“. Definici počítá server a graf ji jen přebírá, takže graf a upozornění se nerozejdou. Volba „Vše“ zůstává a pamatuje se; kdo měl dřív uložené „Vše“, uvidí po aktualizaci jednou výchozí „Významné“.</li>
+<li><strong>Proklik ze zvonečku</strong> ukáže v grafu i zprávy upozornění, které podle dnešní definice významné nejsou (upozornění z doby před zpřesněním klasifikace) — marker se objeví i s filtrem Významné a graf se na něj posune.</li>
+<li><strong>Markery historických dnů</strong> (v1.21): při posunu do minulosti (kap. Historie přes hranici dne) se zprávy dotáhnou i pro starší seance. V jejich dialogu je u času i <strong>datum</strong> a akce ⧉ +15/+60 min a pre/post chybí — okno umí jen osa zobrazeného dne.</li>
 </ul>
 <h3>Stale buňky</h3>
 <p>Pokud se některý strike nepodařilo obnovit (výpadek dat), jeho buňky jsou <strong>vyšedlé s nižší sytostí</strong> — poznáš tak stará data od živých. Souhrn běží ve stavové liště (<code>Repair: retrying N…</code>).</p>
@@ -500,15 +516,17 @@ veličin vysvětluje i <strong>Legenda</strong> v sidebaru.</li>
 </ul>
 <p>Graf se při načtení <strong>automaticky napasuje na cenové pásmo dne</strong> (svíčky vyplní výšku); okolní zóny heatmapy dosáhneš tažením/kolečkem za osu Y, reset vrací napasovaný pohled. Po startu s <strong>málem dat</strong> (ráno) mají svíčky <strong>fixní šířku</strong> ukotvenou k pravému okraji — neroztahují se přes celý graf jako dřív.</p>
 <p>Posuvníkem <strong>Viditelnost</strong> (10–100 %) cenovou vrstvu zeslabíš, aby nepřebíjela heatmapu pod ní — užitečné hlavně u svíček. <strong>Štítek aktuální ceny zůstává vždy plně viditelný.</strong></p>
-<h3>Historie přes hranici dne — jen cena (v1.13, #788)</h3>
+<h3>Historie přes hranici dne — cena a zprávy (v1.13, #788; zprávy v1.21, #1290)</h3>
 <p>Bary podkladu se drží navždy (ES i NQ od července 2024), takže graf nekončí
 začátkem dnešní seance: <strong>doscrolluj doleva</strong> a starší seance se dotáhnou
 samy, den po dni, až na začátek archivu. Platí přitom:</p>
 <ul>
-<li><strong>Jen cena.</strong> Heatmapa, profil ani spodní panely se pro minulé dny
+<li><strong>Cena a zprávy.</strong> Heatmapa, profil ani spodní panely se pro minulé dny
 nestaví — positioning každého dne stojí na jiném 0DTE řetězu a míchat ho
-do dnešní osy by lhalo. Historie je <strong>ztlumená</strong> a na hranici dneška je
-popisek „← historie (jen cena)&quot;; mezi dny jsou předěly s datem.</li>
+do dnešní osy by lhalo. <strong>Markery zpráv</strong> se pro minulé dny kreslí
+(v1.21, #1290), dotahují se po dnech spolu s cenou. Historie je
+<strong>ztlumená</strong> a na hranici dneška je popisek „← historie (cena a zprávy)&quot;;
+mezi dny jsou předěly s datem.</li>
 <li><strong>Kotva na dnešku:</strong> dotažení staršího dne s pohledem nepohne ani o pixel.
 Dny stojí zády k sobě po obchodních minutách — víkend ani pauza CME
 nevyrábí mezeru.</li>
@@ -555,7 +573,7 @@ backfill, jiný den nebo symbol, #977).</p>
 </li>
 <li><p>Tlačítka <strong>1× / 2× / 4×</strong> zvětšují měřítko pruhů</p>
 </li>
-<li><p>Tlačítko <strong>Kontrakty / Prémie $</strong> (v1.17, #1126) přepíná jednotku pruhů, čísel, osy i Vol leaderů. <strong>Kontrakty</strong> = Δ-vážené počty (výchozí). <strong>Prémie $</strong> = <code>volume × mid × multiplikátor</code> per strana a strike (OI složka = OI × týž mid) — říká, <strong>kam tekly peníze, ne kolik kontraktů</strong>: 1 000 kontraktů levných křídel za pár dolarů nepřebije 100 ATM kontraktů za násobně víc. Stejná definice jako jednotka Prémie $ v panelu PUT / CALL: mid (bid+ask)/2 je k zobrazené minutě, u objemu tedy aproximace (neváží cenu v okamžiku obchodu). Strana se zmrzlou kotací nebo bez midu má pruh nulový (tooltip řádku ukáže „— (bez midu)“); je-li takových kontraktů přes 30 %, hlavička nese štítek <strong>bez midu N %</strong>. Bez jediného použitelného midu (Σ souhrn přes expirace, replay bez kotací, načítání) profil spadne zpět na kontrakty a řekne to štítkem <strong>Prémie nedostupné → kontrakty</strong>. Dvoutónový rozklad outright/struktura (níže) platí v obou jednotkách; v diferenčním módu B−A (kap. 8b) zůstává rozdíl v kontraktech. Volba se pamatuje.</p>
+<li><p>Tlačítko <strong>Kontrakty / Prémie $</strong> (v1.17, #1126) přepíná jednotku pruhů, čísel, osy i Vol leaderů. <strong>Kontrakty</strong> = Δ-vážené počty (výchozí). <strong>Prémie $</strong> = <code>volume × mid × multiplikátor</code> per strana a strike (OI složka = OI × týž mid) — říká, <strong>kam tekly peníze, ne kolik kontraktů</strong>: 1 000 kontraktů levných křídel za pár dolarů nepřebije 100 ATM kontraktů za násobně víc. Stejná definice jako jednotka Prémie $ v panelu PUT / CALL: mid (bid+ask)/2 je k zobrazené minutě, u objemu tedy aproximace (neváží cenu v okamžiku obchodu). Strana se zmrzlou kotací nebo bez midu má pruh nulový (tooltip řádku ukáže „— (bez midu)“); je-li takových kontraktů přes 30 %, hlavička nese štítek <strong>bez midu N %</strong>. Bez jediného použitelného midu (Σ souhrn přes expirace, replay bez kotací, načítání) profil spadne zpět na kontrakty a řekne to štítkem <strong>Prémie nedostupné → kontrakty</strong>. Když aplikace nezná multiplikátor kontraktu (API ho vrací se seznamem expirací, #1400), profil zůstane v kontraktech se štítkem <strong>Multiplikátor neznámý → kontrakty</strong>. Dvoutónový rozklad outright/struktura (níže) platí v obou jednotkách; v diferenčním módu B−A (kap. 8b) zůstává rozdíl v kontraktech. Volba se pamatuje.</p>
 </li>
 <li><p>Tlačítko <strong>Σ</strong> = souhrn přes všechny sbírané expirace tohoto instrumentu (pondělní + úterní řetěz…). Hlavička se změní na „Σ expirací&quot;; heatmapa zůstává u zvolené expirace. Celkový positioning bez přepínání.</p>
 </li>
@@ -589,9 +607,12 @@ kontraktu ale patří; rozdíl je tedy účetní, ne odhad.</li>
 <ul>
 <li><strong>Důvěra v Cum Δ na striku.</strong> Cum Δ z tisků popisuje jen outright; u striku,
 kde 60 % objemu nikdy nevytisklo trade, vypovídá o menšině dění.</li>
-<li><strong>Kvalita zdi.</strong> Zeď z outright objemu drží dealer jako plnou pozici, zeď ze
-spreadů má gammu částečně vykompenzovanou druhou nohou — stejné OI, slabší
-tlak. Proto totéž číslo nese cenovka OI zdí a žebříku.</li>
+<li><strong>Kvalita zdi — zatím hypotéza.</strong> Zeď z outright objemu by měl dealer držet
+jako plnou pozici, zeď ze spreadů má gammu částečně vykompenzovanou druhou
+nohou — stejné OI, slabší tlak. Měření 8. 10. 2026 (v1.31, #1019) rozdíl
+v chování ceny neprokázalo ani nevyvrátilo (bodově +5 až +10 p. b. pro outright
+zdi, neprůkazně); proto totéž číslo nese cenovka OI zdí a žebříku jen jako
+informace.</li>
 <li><strong>Záměr na 0DTE.</strong> Rostoucí strukturovaný objem kolem úrovně = sázka na
 rozsah; prudce rostoucí outright nad cenou = pokus o průraz.</li>
 </ul>
@@ -649,15 +670,15 @@ z minula.</p>
 </tr>
 <tr>
 <td><strong>Opt Vol</strong></td>
-<td>Minutový objem opcí, <strong>barevně call (teal) / put (červená)</strong> vedle sebe</td>
+<td>Minutový objem opcí, <strong>barevně call (teal) / put (červená)</strong> vedle sebe. Počítá se jen objem <strong>nad dosavadním maximem</strong> denního objemu kontraktu v seanci (#1602): IBKR číslo kmitá (862 ↔ 863) a v pauze Globexu propadá, dřív se každý návrat započetl znovu a Opt Vol byl v RTH nadsazený o 12–70 %. Minuta bez objemu (fallback tastytrade) nepřidá nic a po návratu IBKR nenese celý denní objem. <strong>První minuta po mezeře v objemu je 0</strong> (#1632): strike, který v předchozí minutě objem nenesl (fallback tastytrade, díra ve sběru, strike nově v pásmu), by v ní ukázal objem celé mezery, ne jedné minuty — ES 2. 10. po 3 h fallbacku by minuta 19:18 UTC nesla C 44 243 / P 49 343. Přírůstek jen posune maximum, další minuta počítá od něj (řada 100 → bez objemu → 130 → 150 dá 0, 0, 0, 20). V <strong>Daily</strong> ose = součet za seanci, objem mezery v něm zůstává (intradenní panel je za den s mezerou menší než Daily; ES 2. 10. o 38 %); počítá se ze snímků při čtení, takže je opravený i zpětně (ES 15. 10.: 349 944 místo 501 501). Setupy T3 (aktivita) a T4 (podíl Δ Flow) a hlas tendence <code>delta_flow</code> počítají objem po staru až do mechaniky v6 (#1403), do té doby se s panelem mírně rozcházejí.</td>
 </tr>
 <tr>
 <td><strong>Δ Flow C/P</strong></td>
-<td>Delta-vážený opční tok zvlášť za call a put stranu (|Δ| × přírůstek volume). Z něj čteš, <strong>na které straně se právě obchoduje</strong> — např. „uzavírání callů&quot; = call sloupce slábnou. Default vypnutý (checkbox Δ Flow C/P).</td>
+<td>Delta-vážený opční tok zvlášť za call a put stranu (|Δ| × přírůstek volume nad dosavadním maximem, stejně jako Opt Vol, včetně nuly v první minutě po mezeře v objemu). Z něj čteš, <strong>na které straně se právě obchoduje</strong> — např. „uzavírání callů&quot; = call sloupce slábnou. Default vypnutý (checkbox Δ Flow C/P).</td>
 </tr>
 <tr>
 <td><strong>Cum Δ</strong></td>
-<td>Kumulativní delta flow jako plocha <strong>nad nulou (zelená) / pod nulou (červená)</strong>. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Znaménko dnes dává minutový midpoint test (poslední cena vs. střed bid/ask) pro celý řetěz; přesnější strana agresora od burzy z dxFeed pro celý sbíraný řetěz přijde s #615 (v1.14 — ADR-0032). Resetuje se na začátku obchodního dne.</td>
+<td>Kumulativní delta-vážený tok <strong>opčních</strong> obchodů (ne podkladu) jako plocha <strong>nad nulou (zelená) / pod nulou (červená)</strong>. <strong>Do mechaniky v6 (#1403)</strong> dává znaménko minutový midpoint test (poslední cena vs. střed bid/ask), který podle měření jde <strong>proti</strong> pohybu ceny (#1018) — směr toku do v6 čti z <strong>linky CVD podkladu</strong> (níže). Od v6 nese plocha jen tisky se stranou agresora od burzy (dxFeed <code>TimeAndSale</code>, ADR-0057): roste = agresivní kupci call delty / prodejci put delty, klesá = opačně; objem bez tisku (nohy spreadů, bloky) do toku nejde. Minuta, kdy tisky z tastytrade neběžely, je <strong>mezera</strong>: plocha se přeruší (žádná spojnice), hodnota pod crosshairem je „—“ a Cum Δ po ní pokračuje od poslední měřené úrovně. Jakmile engine běží na v6, minuty se znaménkem z midpoint testu se <strong>nekreslí</strong> — legenda ukáže „· midpoint, obrácené znaménko (#1018)“ a linka CVD podkladu zůstává (data se nemažou, #1588). V agregaci TF koš nese poslední měřenou úroveň (koš celý v mezeře = mezera), v playbacku plocha končí na pozici přetáčení, chip okna Rozsah ⧉ ukáže přes mezeru „— (neměřeno)“ (kap. 8b). V <strong>Daily</strong> ose = poslední měřená úroveň dne; den s mezerou má pod crosshairem „neúplný (N min bez tisků)“, den bez měření je mezera. Resetuje se na začátku obchodního dne.</td>
 </tr>
 <tr>
 <td><strong>Evo OI</strong></td>
@@ -668,6 +689,19 @@ z minula.</p>
 <td>SentIndex z news-engine (zapíná checkbox <strong>News</strong>): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v <strong>Daily</strong> pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek). V replay staršího dne panel od v1.13 ukazuje řadu <strong>zobrazeného dne</strong> a při přetáčení drží osu s ostatními panely (dřív bral dnešní řadu a při přetáčení se posouval doleva, #976).</td>
 </tr>
 </tbody></table>
+<p><strong>Linka CVD podkladu v panelu Cum Δ</strong> (agresivní nákupy − prodeje ve futures,
+#829): stranu agresora dává přímo burza (dxFeed <code>TimeAndSale</code>), nic se neklasifikuje.
+Linka má <strong>vlastní měřítko</strong> — čte se tvar a strana od nuly, ne výška proti ploše;
+legenda „· CVD podkladu“, pod crosshairem „· CVD …“. Popisek <strong>„· osa od X“</strong>:
+kumulativ se resetuje na open Globex seance (17:00 CT), první minuta osy ale už
+nese nasčítaný tok — výchylku čti proti této hodnotě, ne proti nule.
+Popisek „od HH:MM“ (engine startoval uprostřed seance) popisuje kap. 15 (catch-up).
+V <strong>Daily</strong> se linka zatím nekreslí: poslední minuta seance leží v pauze Globexu, kde je CVD 0 (#1633). Linka se živě posouvá <strong>každou minutu</strong>. Zůstává i v timeframu <strong>5m a víc</strong>
+(koš ukazuje poslední hodnotu; popisek panelu „od HH:MM“ zůstává také) a v playbacku
+končí na pozici přetáčení. Do opravy #1578 stála živě až hodinu na hodnotě
+z posledního načtení dne. V agregaci a v playbacku zmizela úplně, v playbacku
+i s panelem Evo OI. Schodovitá čára Evo OI v playbacku končí na pozici přetáčení
+a za ní ukazuje „—“; dřív za pozicí spadla na nulu (#1591).</p>
 <p><strong>Ovládání panelů (v1.12).</strong> Každý spodní panel jde ovládat myší jako graf:</p>
 <ul>
 <li><strong>vodorovné tažení</strong> posouvá sdílenou časovou osu — hlavní graf i ostatní
@@ -828,17 +862,21 @@ k oknu&quot;: kontext „kde OI sedí vůči výběru&quot;, ne tvrzení, že se
 <hr>
 <h3>Scénář dne — automaticky z verdiktu dne, nebo nakreslený (v1.18, #1173)</h3>
 <p><strong>Automatický scénář</strong> (výchozí, varianta A): 15 minut před US openem engine
-sám sestaví scénář pro každý symbol z <strong>verdiktu dne</strong> — stejné hlasování,
-jaké vidíš v Briefingu (trend vyšších a nižších TF, tendence, sentiment,
-cena vs. včerejší close, ΔOI přes noc, gamma režim). Při verdiktu long/short
+sám sestaví scénář pro každý symbol z <strong>verdiktu dne</strong>, který v téže minutě
+spočítal a uložil (kap. 11f, #1595; trend vyšších a nižších TF, tendence,
+sentiment, cena vs. včerejší close, ΔOI přes noc, gamma režim). Scénář je
+jeden na seanci a vznikne v <strong>první minutě okna s úplným verdiktem</strong> —
+výpadek čtení dat nebo restart enginu ho jen odloží o minutu. Směr je verdikt
+té minuty; uložený verdikt dne je poslední stav před openem, takže se od
+scénáře může lišit. Při verdiktu long/short
 jsou cíle <strong>nejbližší úrovně obratu ve směru</strong> (zdi, flip, těžiště, PDH/PDL/
 PDC, ONH/ONL, ±EM; max 2), cesta vstup → cíl 1 → cíl 2, termín settle dne.
 Při verdiktu „bez převahy&quot; nebo „čekat na zprávu&quot; scénář nevznikne a log
-enginu řekne proč. Cesta se <strong>kreslí živě do heatmapy</strong> (modrá čárkovaná
+enginu řekne proč; verdikt dne se uloží i tak. Cesta se <strong>kreslí živě do heatmapy</strong> (modrá čárkovaná
 čára) a snímek PNG si aplikace pořídí sama, jakmile máš graf otevřený. Karta
 scénáře nese štítek <strong>auto</strong> a rozbalovací <strong>hlasy verdiktu</strong> (proč právě
 tenhle směr a cíle). Nastavení: <code>GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN</code>
-(ADMIN manuál; 0 = vypnuto).</p>
+(ADMIN manuál; 0 = vypnutý scénář, verdikt dne se ukládá dál).</p>
 <p><img src="img/briefing-auto-scenar.jpg" alt="Briefing 18. 9. 2026 (SOQ den): automatický scénář dne SHORT (skóre −3) — vstup 7701,5 → ONL 7696 → PDL 7617,5, náčrt cesty v kartě Scénář dne, vedle karta Expirační týden a Kouč"></p>
 <p><strong>Ruční scénář</strong> (doplněk, štítek „ručně&quot;): nakresli na <strong>živém</strong> grafu
 očekávanou cestu ceny (šipka nebo freehand) a klikni <strong>✎ Scénář</strong>: aplikace
@@ -852,11 +890,19 @@ Výsledek: <strong>trefa</strong> (cíl 1 a případný cíl 2 po něm), <strong
 cíl 2 ne), <strong>mimo</strong> (cíl 1 ne). Kde to vidíš: <strong>Briefing → Scénář dne</strong>
 (otevřené scénáře se snímkem + poslední vyhodnocené), <strong>Stats → Scénáře dne</strong>
 (track record <strong>zvlášť pro auto a ruční</strong> scénáře: hit rate cílů, pořadí,
-medián odchylky — brána n ≥ 30 jako u verdiktu dne), alert ve zvonku
+medián odchylky — brána n ≥ 30 jako u verdiktu dne; automatické jen z aktuální
+verze pravidel verdiktu, stejně jako Verdikt dne — sekce verzi vypíše, např.
+„(v3)“, #1632), alert ve zvonku
 (a Telegramu) při vzniku i po vyhodnocení.</p>
 <p>Zásady: scénář vzniká <strong>jen dopředu</strong> — na živém dni (v replay minulého dne
 tlačítko není) a vyhodnocuje se výhradně z barů po jeho vzniku; nic se
-nedopočítává zpětně. Snímky leží na disku (<code>data/scenarios/</code>); nad <strong>1 GB</strong>
+nedopočítává zpětně. Scénář patří k <strong>obchodnímu dni</strong> (po–pá): o víkendu
+automatický scénář nevzniká, termín ručního scénáře musí být obchodní den
+(dialog o víkendu předvyplní pondělí a víkendový termín nepustí — nemá settle)
+a scénář s termínem mimo seanci (víkendové z doby před #1309) se uzavře bez
+upozornění: karta ukáže <strong>bez výsledku</strong> a „termín mimo obchodní seanci&quot; (díra
+v barech obchodního dne zůstává „bez barů v okně — nešlo posoudit&quot;) a do track
+recordu se nepočítá. Snímky leží na disku (<code>data/scenarios/</code>); nad <strong>1 GB</strong>
 přijde alert „pročisti&quot; — mazání je ruční v Settings → Scénáře dne (mizí jen
 PNG, výsledky zůstávají).</p>
 <h3>Technická poznámka k ukotvení</h3>
@@ -869,10 +915,21 @@ a den) a dožívají s retencí dat.</p>
 <p><img src="img/dashboard.png" alt="Dashboard"></p>
 <hr>
 <h2>11b. Řetěz — Greeks &amp; OI tabulka</h2>
-<p>Obrazovka <strong>Řetěz</strong> v sidebaru ukazuje klasickou opční tabulku vybrané expirace: <strong>call strana vlevo, strike uprostřed, put vpravo</strong>, sloupce Bid/Ask/Last/Vol/IV/Δ/Γ/Θ/Vega/OI/ΔOI (put strana zrcadlově, ať OI sousedí se strikem). Data jsou <strong>živý pohled z poslední minuty</strong> sběru, obnovují se každou minutu; ΔOI porovnává s posledním archivovaným dnem. Řádek nejblíž aktuální ceně je zvýrazněný (ATM), strany se zastaralými kotacemi jsou ztlumené. Expirace se přepíná selektorem v hlavičce — funguje i pro zítřejší řetěz.</p>
+<p>Obrazovka <strong>Řetěz</strong> v sidebaru ukazuje klasickou opční tabulku vybrané expirace: <strong>call strana vlevo, strike uprostřed, put vpravo</strong>, sloupce Bid/Ask/Last/Vol/IV/Δ/Γ/Θ/Vega/OI/ΔOI (put strana zrcadlově, ať OI sousedí se strikem). Data jsou <strong>živý pohled z poslední minuty</strong> sběru, obnovují se každou minutu; ΔOI porovnává s posledním archivovaným <strong>obchodním</strong> dnem (v pondělí s pátkem, #1309). Řádek nejblíž aktuální ceně je zvýrazněný (ATM), strany se zastaralými kotacemi jsou ztlumené. Expirace se přepíná selektorem v hlavičce — funguje i pro zítřejší řetěz.</p>
 <hr>
 <h2>11c. News a sentiment (SentimentLens)</h2>
-<p>Vlastní <strong>news-engine</strong> běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy, Alpaca, broker pásku z IBKR), klasifikuje <strong>kategorii, důležitost (1–3) a směr dopadu</strong>, a počítá z nich <strong>SentIndex</strong> — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.</p>
+<p>Vlastní <strong>news-engine</strong> běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, oficiální feedy Fedu, ECB, Bílého domu, BLS (CPI, PPI, zaměstnanost) a BEA (GDP, PCE), zpravodajské feedy, Alpaca, broker pásku z IBKR), klasifikuje <strong>kategorii, důležitost (1–3) a směr dopadu</strong>, a počítá z nich <strong>SentIndex</strong> — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.</p>
+<p><strong>Důležitost 1–3 se čte z předmětu titulku a ze zdroje</strong> (v1.22, #1293). Dřív
+stačilo klíčové slovo kdekoli v titulku nebo shrnutí, takže článek o osobních
+financích se zmínkou „payroll tax“ dostal nejvyšší důležitost a jen asi každá
+jedenáctá zpráva s důležitostí 3 byla opravdu zásadní. Teď: důležitost 3 mají jen
+události (rozhodnutí Fedu, vydaná US data s číslem, pohyb ropy, eskalace nebo
+příměří, cla), 2 téma jako předmět zprávy, zmínka a názor 1; sociální sítě bez
+kurátora nejvýš 1, agregátory o stupeň méně; kalendář podle dopadu a měny (USD
+High 3, Medium 2, rozhodnutí ECB/BoE/BoJ 2, ostatní měny 1). Na ohodnoceném vzorku
+je teď zásadních 8 z 10 zpráv s důležitostí 3 (dřív necelá 1 z 10). Kategorie se
+také bere z předmětu — pohyb ropy kvůli válce je <strong>Energie</strong>, ne geopolitika.
+Historie zpráv se překlasifikuje jednorázově (verze klasifikace zůstávají).</p>
 <p><strong>Klasifikace jede na pravidlech, ne na AI modelu.</strong> LLM větev (Gemini) je od
 srpna 2026 zakonzervovaná: měřením se ukázalo, že hodnotu nepřidávala — proti
 pravidlům měla horší úspěšnost (0,484 vs. 0,516) a statistickou branou neprošla
@@ -883,6 +940,43 @@ prvních pár desítek znaků, takže se rozhodovalo prakticky jen podle titulku
 nově se ukládá plné znění a modelu jde titulek + úvodní odstavec. Celý článek
 záměrně ne — stovky slov na zprávu by se při dnešní velikosti vzorku naučily
 nazpaměť místo zobecnění.</p>
+<h3>Karta Breaking news (v1.32, E-6.28)</h3>
+<p>Karta ukazuje <strong>významné zprávy posledních 12 h s naměřeným dopadem na ES i NQ</strong>.
+Najdete ji na dvou místech:</p>
+<ul>
+<li><strong>v hlavním pohledu (Graf)</strong> jako štítek <strong>⚡ Breaking news</strong> v levém dolním rohu heatmapy.
+Kliknutím se rozbalí panel, ✕ ho sbalí. Volba se pamatuje. Sbalený panel graf nezmenšuje
+a na server se neptá;</li>
+<li><strong>na stránce News</strong> jako sekce nad tématy a feedem.</li>
+</ul>
+<p><img src="img/graf-breaking-news-stitek.png" alt="Sbalená karta: štítek ⚡ Breaking news v levém dolním rohu heatmapy (ES 1m, 12. 10. 2026)"></p>
+<p><img src="img/graf-breaking-news-panel.png" alt="Rozbalený panel: dvě zprávy z 12:26 SELČ s dopadem „běží 1 min“, štítkem „článek, zatím nepotvrzeno“, ⚠ u dopadu a zdroji se zpožděním (ES 1m, 12. 10. 2026)"></p>
+<p>Každá položka nese:</p>
+<ul>
+<li><strong>čas zprávy</strong> a stáří („před 3 min“), titulek;</li>
+<li><strong>štítky:</strong> skupina (Makro data, Centrální banky, Geopolitika, Firmy, Ostatní), téma
+(Fed, Cla, Írán, Energie…), <strong>zásadní</strong> u zpráv s nejvyšší důležitostí;</li>
+<li><strong>„článek, zatím nepotvrzeno“</strong>, když zprávu zatím přinesl jen článek (CNBC, Yahoo,
+Finnhub…) a ne oficiální zdroj nebo headline feed (Benzinga, kurátoři Bluesky). Štítek
+zmizí, jakmile stejnou zprávu přinese tier 1–2. Článek jde na kartu, jen když dorazil do
+<strong>60 min od publikace</strong>: staré články doručené se zpožděním kartu nezahlcují;</li>
+<li><strong>dopad ES a NQ v bp:</strong> hlavní číslo je změna ceny od posledního close před zprávou
+(zelená nahoru, červená dolů). Vedle je <strong>výchylka</strong> (↑/↓ bp, high/low od minuty zprávy),
+aby se neztratil whipsaw. Prvních 5 minut je u čísla <strong>„běží X min“</strong> a číslo se mění.
+Pak je <strong>zafixované</strong> („5 min“) a odpovídá Δ5m, které později ukáže feed zpráv;</li>
+<li><strong>⚠</strong> u dopadu = do okna spadla jiná významná zpráva jiného typu, pohyb tedy nejde přičíst
+jen téhle;</li>
+<li><strong>„trh zavřený“</strong> místo čísla, když zpráva přišla mimo obchodní dobu (nebo těsně před
+pauzou či víkendem). Reakci na otevření ukáže feed zpráv. <strong>„bez dat“</strong> znamená, že trh byl
+podle rozvrhu otevřený, ale cenová data po zprávě chybí (výpadek), tedy mezera, ne nula;</li>
+<li><strong>zdroje se zpožděním:</strong> kdo zprávu přinesl a za jak dlouho od publikace (<code>alpaca +1 s</code>,
+<code>rss_news +6 min</code>).</li>
+</ul>
+<p>Karta se obnovuje à 15 s a hned po příchodu nové významné zprávy. Nová zpráva má kategorii
+a důležitost do ~1 s od příjmu. Pod seznamem je čas stavu („stav k 14:37:30“) a při plném
+počtu i „50 nejnovějších“. Karta je <strong>vždy živá</strong>: i při prohlížení historického dne nebo
+v playbacku ukazuje zprávy posledních 12 h, ne zprávy zobrazeného okamžiku. Skóre z textu se na kartě neukazuje (#740), rozhoduje
+naměřená reakce trhu.</p>
 <h3>Obrazovka News</h3>
 <p>Feed je od srpna 2026 <strong>kartový</strong>: každá zpráva je karta s kategorií,
 relativním stářím („před 16 s&quot;), typem, důležitostí, skóre klasifikace
@@ -917,7 +1011,8 @@ proklik</strong> — otevře téma v panelu Témata i se zdrojovými zprávami.<
 <li><strong>Nadcházející</strong> — nejbližší plánované události s odpočtem a konsensem (např. „CPI za 1 h 12 m · konsensus 2,9 (min. 3,0)&quot;).</li>
 <li><strong>Tabulka zpráv</strong> — čas, kategorie, titulek, typ, důležitost, skóre. U řádků s nejistou klasifikací je tužka ✎ — můžeš <strong>ručně opravit směr nebo kategorii</strong> (uloží se jako korekce, model se z ní učí — review fronta).</li>
 <li><strong>Zdroje zpráv</strong> (dole) — audit všech používaných zdrojů: co má téct vs. co
-reálně teče (dnešek / denní průměr, podíl významných zpráv, poslední událost)
+reálně teče (dnešek / denní průměr, podíl významných zpráv — stejná definice
+jako filtr grafu a upozornění, poslední událost)
 a <strong>přepínač Aktivní</strong> — vypnutý zdroj se při startu news-engine vůbec
 nespustí. Pod tabulkou jsou <strong>editovatelné seznamy</strong>: Bluesky kurátoři
 (handle nebo <code>did:…</code>, jejichž každý post se bere), Reddit subreddity
@@ -1000,11 +1095,19 @@ nepotvrdilo. Detail v tooltipu badge.</p>
 <p>Dropdown <strong>Signály</strong> v řádku přepínačů: <strong>Off / NEWS / COMBINED</strong> (obě větve se počítají vždy, dropdown jen vybírá zobrazenou):</p>
 <ul>
 <li><strong>NEWS</strong> — reakce čistě na zprávu (kategorie × důležitost × překvapení vs. konsensus).</li>
-<li><strong>COMBINED</strong> — totéž se souhlasem GEX kontextu (režim, poloha vůči flipu).</li>
+<li><strong>COMBINED</strong> — totéž se souhlasem GEX kontextu (poloha vůči flipu, nebo sklon Cum Δ). Přes mezeru tisků (od mechaniky v6) sklon nehlasuje a potvrdit může jen flip (ADR-0057).</li>
 </ul>
 <p>Signál se ukáže jako <strong>šipka na cenové křivce</strong> (▲ Long teal / ▼ Short červená, sytost = síla) s <strong>vodorovnou stopou platnosti</strong> do své expirace. Tooltip u crosshairu nese režim, zdůvodnění, <strong>n vzorků a Wilson LB</strong>. Při nepotvrzené změně stavu sentimentu nese šipka <strong>⚠</strong>.</p>
+<p><strong>Svátky a zkrácené seance (v1.29, #1308).</strong> Aplikace zná svátky US trhu
+(Nový rok, MLK, Presidents Day, Velký pátek, Memorial Day, Juneteenth, 4. 7.,
+Labor Day, Den díkůvzdání, Vánoce) i zkrácené seance (den po Dni díkůvzdání,
+Štědrý den, 3. 7.). Svátek není obchodní den: nevzniká scénář ani verdikt dne
+a nechodí upozornění na chybějící data. O Vánocích, Novém roce a Velkém pátku
+je Globex zavřený celý den, o ostatních svátcích se obchoduje do 12:00 CT
+(19:00 našeho času). Zkrácená seance končí v 13:00 ET (19:00 našeho času) a
+v tu chvíli je i settle a přechod na další expiraci.</p>
 <p><strong>Jen v obchodní době (v1.13, #968).</strong> Signály vznikají výhradně, když se ES/NQ obchodují (neděle 17:00 CT → pátek 16:00 CT, mimo denní pauzu CME 16:00–17:00 CT). Doklad z produkce: 21 z 39 signálů vzniklo se zavřeným trhem a <strong>ani jeden</strong> neměl vyhodnocení — bez barů není z čeho výnos změřit — a hlavně se nedal obchodovat: než trh otevřel, positioning byl jinde. Expirace starších signálů a dopočet jejich výsledků běží dál i o víkendu.</p>
-<p><strong>Empirická gate:</strong> signál z daného typu zprávy se pouští, <strong>až když má bucket n ≥ 30 změřených reakcí a spodní mez úspěšnosti (Wilson LB) &gt; 0,50</strong>. Dokud žádný bucket gate neprošel, u dropdownu běží „⏳ sběr dat X %&quot; — aplikace se přiznaně učí, místo aby střílela od boku. Statistiky jsou <strong>režimově podmíněné</strong> (RiskOn/RiskOff/Neutral, gamma ±): když má režimový pohled dost dat, použije se přednostně, jinak se korektně spadne na celkový.</p>
+<p><strong>Empirická gate:</strong> signál z daného typu zprávy se pouští, <strong>až když má bucket n ≥ 30 změřených reakcí, spodní mez úspěšnosti (Wilson LB) &gt; 0,50 a průměrnou reakci aspoň 1 bp</strong> (ADR-0042 — spolehlivý směr s nulovým pohybem není obchodovatelný). Dokud žádný bucket gate neprošel, u dropdownu běží „⏳ sběr dat X %&quot; — aplikace se přiznaně učí, místo aby střílela od boku. Statistiky jsou <strong>režimově podmíněné</strong> (RiskOn/RiskOff/Neutral, gamma ±): když má režimový pohled dost dat, použije se přednostně, jinak se korektně spadne na celkový.</p>
 <h3>Obrazovka Stats</h3>
 <table>
 <thead>
@@ -1031,11 +1134,15 @@ nepotvrdilo. Detail v tooltipu badge.</p>
 </tr>
 <tr>
 <td><strong>Výkon setupů</strong> (v1.10)</td>
-<td><strong>Sharpe ratio a equity křivka</strong> simulace: denní ΣR přes všechny symboly watchlistu (jen aktuální mechanika detektoru), anualizovaný Sharpe celkem + za posledních 30 seancí, max drawdown a <strong>USD simulace</strong> s exekucí micro kontrakty dle kalkulačky (Trading nastavení) včetně nákladů. Do 60 seancí varování o malém vzorku — potvrzení cíle Sharpe &gt; 2 vyžaduje 400+ seancí</td>
+<td><strong>Sharpe ratio a equity křivka</strong> simulace: denní ΣR přes všechny symboly watchlistu (jen aktuální mechanika detektoru), anualizovaný Sharpe celkem + za posledních 30 seancí, max drawdown, karta <strong>Všechny setupy — 1 kontrakt</strong> (čistě, hrubě, poplatky), <strong>Účet 50k</strong> (jen obchodovatelné) a <strong>USD simulace</strong> s exekucí micro kontrakty dle kalkulačky (Trading nastavení) včetně nákladů. Od v1.23 vše z celé historie, počítá server (#1319) — dřív jen posledních 200 setupů na symbol. Do 60 seancí varování o malém vzorku — potvrzení cíle Sharpe &gt; 2 vyžaduje 400+ seancí</td>
 </tr>
 <tr>
 <td><strong>Setupy per režim</strong></td>
-<td>Úspěšnost šablon T1–T7 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí</td>
+<td>Úspěšnost šablon T1–T7 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí (cíl vs. stop, timeouty mimo; celá historie aktuální mechaniky)</td>
+</tr>
+<tr>
+<td><strong>Releasy — předem registrované hypotézy</strong> (v1.22, #1296)</td>
+<td>Živý stav hypotéz o reakci trhu na ohlášené releasy: <strong>H1</strong> teplejší jádro inflace → za 15 min níž (ES, NQ), <strong>H3</strong> po CPI je ES za 60 min výš (jen ES, do upozornění nejde), <strong>M1</strong> výchylka za 15 min nad běžným dnem u CPI/NFP/FOMC/PPI/PCE (ES, NQ). Sloupce: stav (ověřuje se šedá / ověřeno zelená / zamítnuto červená), živě k/n, 95% interval, další kontrolní bod a historie výzkumu (jen popisně). Počítají se jen releasy od 1. 10. 2026 a rozhoduje se jen při n = 10, 20 a 30: ověřeno = dolní mez intervalu nad 50 %, zamítnuto = horní mez pod 50 % nebo n = 30 bez ověření; kritéria se už nemění a rozhodnutí je konečné — pozdější oprava dat ho nezmění (tooltip nadpisu). U řádku rozbalíš posledních 10 releasů (✔/✘ a výnos či výchylka v bp). Když se data nenačtou, sekce ukáže chybu</td>
 </tr>
 <tr>
 <td><strong>Track record</strong></td>
@@ -1158,15 +1265,15 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 </thead>
 <tbody><tr>
 <td><strong>Shrnutí dne</strong> (v1.16, #1090)</td>
-<td>Přes celou šířku nahoře. <strong>Trend a směr</strong> (čtení z karty Trend); <strong>Verdikt dne</strong> — <em>Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk</em> z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule — <strong>po útesu ≥ 50 % gammy minulé seance pozitivní gamma nehlasuje</strong> (v1.18, #1241: tenká gamma netlumí); práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat&quot;; High-impact zpráva před US openem = „Počkat na tisk&quot;. <strong>Úrovně obratu</strong> — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. <strong>Zprávy dne</strong> — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off&quot;), typická velikost z naměřených reakcí kategorie (medián |ret| v 5/15/60 min, n), nebo poctivé „bez měřené reakce&quot;. Verdikt je <strong>heuristika</strong> — ukládá se per seance a symbol a engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve <strong>Stats → Verdikt dne</strong> (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku.</td>
+<td>Přes celou šířku nahoře. <strong>Trend a směr</strong> (čtení z karty Trend); <strong>Verdikt dne</strong> — <em>Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk</em> z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule — <strong>po útesu ≥ 50 % gammy minulé seance nebo ve stavu tenká mapa pozitivní gamma nehlasuje</strong> (v1.18, #1241: tenká gamma netlumí; v1.21, #1245: při souběhu útesu a tenké mapy je to jeden nulový hlas s oběma důvody, ne dva); práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat&quot;; High-impact zpráva před US openem = „Počkat na tisk&quot;. <strong>Úrovně obratu</strong> — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. <strong>Zprávy dne</strong> — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off&quot;), typická velikost z naměřených reakcí kategorie (medián |ret| v 5/15/60 min, n), nebo poctivé „bez měřené reakce&quot;. Verdikt je <strong>heuristika</strong> a <strong>počítá a ukládá ho engine</strong> (#1595), ne Briefing — pro každou obchodní seanci a symbol, který engine sbírá (dnes ES a NQ), bez ohledu na to, jestli máš Briefing otevřený: od začátku seance (17:00 CT předchozího dne = 0:00 našeho času) každých 5 min, posledních 15 min před US openem (9:30 ET = 15:30 našeho času) každou minutu; v týdnech, kdy se USA a Evropa liší v přechodu na letní čas, jsou oba časy o hodinu jinak. Platí <strong>poslední stav před openem</strong>; od openu je verdikt zmrazený, protože se hodnotí pohyb od openu a hlas overnight by už nesl jeho část (#1585). Vstupy: <strong>včerejší close (PDC) = close k settle předchozí obchodní seance</strong> (16:00 ET, zkrácená seance 13:00 ET; v pondělí pátek), cena = živá cena enginu, gamma a ΔOI z <strong>aktivní expirace enginu</strong> — ne z expirace zvolené v hlavičce; při jiné zvolené expiraci se hlasy gammy a ΔOI mohou lišit od karet Režim a úrovně a ΔOI přes noc. Briefing verdikt <strong>nepočítá, jen ukáže uložený řádek</strong> (obnova každou minutu): před openem <strong>předběžný</strong> — „engine ho přepočítává každých 5 min, od 15:15 každou minutu; platí poslední stav před openem 15:30&quot; a stáří („uloženo 15:25, před 3 min&quot;); po openu <strong>zmrazený</strong> — „poslední zápis 15:29&quot;, bez živého přepočtu (ani „Počkat na tisk&quot; se po vyjití zprávy nezmění). Když enginu chyběl některý vstup (výpadek čtení API, po restartu ještě bez levels nebo tendence), karta to řekne: „předběžný, neúplný (chybí: gamma útes: HTTP 500) …&quot; nebo „zmrazený, neúplný (chybí: …)&quot;; úplný výpočet neúplný řádek přepíše, neúplný úplný nikdy. Bez řádku: „Verdikt zatím nevznikl&quot; (seance běží), po openu viditelná mezera „Verdikt pro tuto seanci nevznikl&quot; — nic se nedopočítává. Víkend a svátek NYSE: „Verdikt se nevydává — … není obchodní seance&quot; (#1309). Symbol, který engine nesbírá (ad-hoc pohled, symbol nad limitem instrumentů): „Engine pro tento symbol verdikt nepočítá&quot;. Chyba čtení je výslovná, s kódem („Verdikt se nepodařilo načíst (HTTP 503)&quot;), ne „bez verdiktu&quot;. Řádky do seance 16. 10. 2026 ukládal Briefing (jen když byl před openem otevřený, s PDC z poslední minuty Globexu), od 19. 10. engine — oboje pod verzí pravidel 3 (ADR-0035, dodatek 2026-10-17); zpětně se nic nedopočítává. Pět řádků z 9. 9.–2. 10. 2026 vzniklo nebo se přepsalo ještě po openu — track record je nepočítá (jejich hlasy už viděly část hodnoceného pohybu), ve výpisu zůstávají. Track record ukazuje <strong>jen aktuální verzi pravidel</strong> (dnes 3, s mechanikou v6 verze 4; Stats ji vypíše jako „Jen aktuální verze pravidel (v3)“, #1632): výsledky starších pravidel o současných nevypovídají, takže se nesčítají a po změně verze začíná track record od nuly (data zůstávají). Engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve <strong>Stats → Verdikt dne</strong> (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku; verdikt bere z uloženého řádku i s označením předběžný / zmrazený a časem zápisu, bez řádku ho vynechá — nikdy ho nepočítá.</td>
 </tr>
 <tr>
 <td><strong>Ranní checklist</strong> (v1.18, #1241)</td>
-<td>Šest bodů, které 21. 9. 2026 (trendový den po kvartálním OPEX, NQ +580 b od 15:30) měly odpověď v datech, ale byly roztroušené po panelech: <strong>útes gammy</strong> minulé seance (≥ 50 % = den rozsahu, ne pinu), <strong>vyšší TF trend</strong> (bias dne), <strong>nejbližší zeď s dominancí</strong> (&lt; 25 % = slabá zeď → průraz pravděpodobnější než odraz), <strong>gap vůči PDC a flipu</strong> (≥ 0,4 % a držení = komprese před průrazem ve směru gapu), <strong>tendence a Max Pain</strong> (váhu mají až posledních 90 min do expirace; přes den jen informace, dokud se mapa hýbe), <strong>riziko</strong> (max 50 $ / obchod, −100 $ = konec dne, 15 min pauza po stopu, max 4 obchody). ▲ = signál pro dnešek, ● = sledovat, ○ = v normálu, — = bez dat. Viz kap. 21b.</td>
+<td>Sedm bodů, které 21. 9. 2026 (trendový den po kvartálním OPEX, NQ +580 b od 15:30) měly odpověď v datech, ale byly roztroušené po panelech: <strong>útes gammy</strong> minulé seance (≥ 50 % = den rozsahu, ne pinu), <strong>stav mapy</strong> (v1.21, #1245: tenká mapa = nic netlumí a nic nepinuje, setupy od zdi a pin vynechat; „—&quot; = engine stav nevyhodnocuje), <strong>vyšší TF trend</strong> (bias dne), <strong>nejbližší zeď s dominancí</strong> (&lt; 25 % = slabá zeď → průraz pravděpodobnější než odraz), <strong>gap vůči PDC a flipu</strong> (≥ 0,4 % a držení = komprese před průrazem ve směru gapu), <strong>tendence a Max Pain</strong> (váhu mají až posledních 90 min do expirace; přes den jen informace, dokud se mapa hýbe), <strong>riziko</strong> (max 50 $ / obchod, −100 $ = konec dne, 15 min pauza po stopu, max 4 obchody). ▲ = signál pro dnešek, ● = sledovat, ○ = v normálu, — = bez dat. Viz kap. 21b.</td>
 </tr>
 <tr>
 <td><strong>Trend</strong> (v1.16, #1089)</td>
-<td>Trend podkladu <strong>shora dolů</strong>: týden, den, 4h, 1h, 15m — per timeframe struktura trhu (HH/HL = rostoucí, LH/LL = klesající) a EMA20/EMA50; ● = struktura i EMA souhlasí, ○ = jen jedna z nich. Nad tabulkou čtení pro den: vyšší TF (týden, den) určuje směr, nižší načasování — souhlas = obchodovat ve směru, nesoulad = nižší TF korigují, čekat na návrat. Málo svíček = „málo dat&quot;, nic se nedosazuje. Metoda v ADR-0035.</td>
+<td>Trend podkladu <strong>shora dolů</strong>: týden, den, 4h, 1h, 15m — per timeframe struktura trhu (HH/HL = rostoucí, LH/LL = klesající) a EMA20/EMA50; ● = struktura i EMA souhlasí, ○ = jen jedna z nich. Nad tabulkou čtení pro den: vyšší TF (týden, den) určuje směr, nižší načasování — souhlas = obchodovat ve směru, nesoulad = nižší TF korigují, čekat na návrat. Počty svíček W 80, D 120, 4h/1h/15m 120 — táž tabulka jako verdikt dne v enginu (#1595); hlasy trendu v uloženém verdiktu jsou ale stav před openem, karta je živá. Málo svíček = „málo dat&quot;, nic se nedosazuje. Metoda v ADR-0035.</td>
 </tr>
 <tr>
 <td><strong>Režim a úrovně</strong></td>
@@ -1178,7 +1285,7 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 </tr>
 <tr>
 <td><strong>Včera a overnight</strong></td>
-<td>Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena</td>
+<td>Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena. „Včerejší settle&quot; je zatím close poslední minuty Globexu předchozího uloženého dne (v pondělí neděle, tedy „—&quot;), ne close k settle jako PDC verdiktu dne — oprava #1596</td>
 </tr>
 <tr>
 <td><strong>Gamma dnes a přes týden</strong></td>
@@ -1190,7 +1297,7 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 </tr>
 <tr>
 <td><strong>ΔOI přes noc</strong></td>
-<td>Změna call/put OI vs. předchozí archivovaný den + top strike movers</td>
+<td>Změna call/put OI vs. předchozí archivovaný <strong>obchodní</strong> den + top strike movers. V pondělí proti pátku, o víkendu pátek proti čtvrtku (do #1309 se pondělí srovnávalo s nedělí, jejíž archiv nese už pondělní čísla → ΔOI ≈ 0). Počítají se jen striky, které nesou oba archivy — strike mimo včerejší obálku není „nové OI&quot;, ale neměřený; součty OI jsou celé</td>
 </tr>
 <tr>
 <td><strong>Sentiment</strong></td>
@@ -1323,14 +1430,23 @@ tendence hlásila short a v RTH nevznikl jediný long setup na NQ.</p>
 <p><strong>Co aplikace řekla špatně (a co je od v1.18 jinak)</strong></p>
 <ul>
 <li>Verdikt dne „bez převahy&quot;: hlasy tendence −1, ΔOI put −1 a „pozitivní gamma tlumí&quot; −1
-vyrušily trend +3. Nově po útesu ≥ 50 % gamma nehlasuje.</li>
+vyrušily trend +3. Nově po útesu ≥ 50 % gamma nehlasuje. Hlas ΔOI put −1 navíc
+srovnával pondělí s nedělí; proti pátku by u ES (0DTE) vyšel call +1 (#1309).</li>
 <li>Tendence short/strong short při +400 b: hlasy „poloha mezi zdmi&quot; a „Max Pain&quot; jsou
 mean-reversion. Nově poloha nehlasuje u zdi s dominancí &lt; 25 % nebo u zdi, která se
-za 30 min posunula ve směru ceny; Max Pain hlasuje jen ≤ 90 min do close.</li>
+za 30 min posunula ve směru ceny; Max Pain hlasuje jen ≤ 90 min do close.
+Od mechaniky v6 (#1403, tendence verze 5) poloha mezi zdmi do skóre nevstupuje
+vůbec (váha 0, revize vah 14. 9.–16. 10. nenašla edge, #1113) a Max Pain po settle
+nehlasuje (#1584).</li>
 <li>Setup T3 „Max Pain pin&quot; short s cílem 934 b pod cenou: nově jen do vzdálenosti
 šířky pásma zdí.</li>
-<li>Briefing v pondělí „overnight bez dat&quot;: PDC je nově settle poslední RTH seance,
-ne poslední minuta nedělního Globexu.</li>
+<li>Briefing v pondělí „overnight bez dat&quot;: PDC je nově settle poslední RTH seance
+(close k 16:00 ET, po zkrácené seanci k 13:00 ET), ne poslední minuta nedělního
+Globexu. Do #1595 to platilo jen pro automatický scénář v enginu — verdikt v Briefingu
+bral dál poslední Globex minutu a v pondělí hlasoval „bez dat&quot;; od seance 19. 10. 2026
+verdikt počítá jen engine. Karta Včera a overnight, gap v Ranním checklistu
+a PDH/PDL/PDC v Úrovních obratu i v grafu berou zatím předchozí uložený den
+(v pondělí neděli) a jeho poslední Globex minutu (#1596).</li>
 </ul>
 <p><strong>Ranní checklist (kartu najdeš v Briefingu nahoře)</strong></p>
 <ol>
@@ -1384,7 +1500,7 @@ které se přepne hned.</p>
 </tr>
 <tr>
 <td><strong>Stav enginu</strong></td>
-<td>Read-only stav: spojení + port (při výpadku IBKR i <strong>„bez spojení X min&quot;</strong>, #770), účet (paper), <strong>Zdroj dat</strong> (v1.13, #950: <code>řetěz ibkr · spot ibkr</code>, při fallbacku upozornění, že běží tastytrade), řádek <strong>IBKR</strong> se stavovým tlačítkem (v1.16, #1108: zelené <strong>Připojeno · IBKR</strong>, oranžové <strong>Přepojuji…</strong> zamčené do odpovědi enginu, červené <strong>Odpojeno — přepojit</strong>; stav je podle enginu, ne podle kliknutí, zelená i červená jsou klikatelné) + co provider dodává a <strong>badge aktivního zdroje řetězu/spotu</strong> (u druhého „záloha“) + čas posledního požadavku, řádek <strong>Cum Δ</strong> (v1.14, #615: zdroj znaménka <code>midpoint</code> / <code>dxfeed</code> a per symbol podíl objemu, který v dnešním dni přišel z tisků se stranou od burzy — pravdivý ukazatel pokrytí místo dřívější „šířky hot zóny“), Greeks X/Y + repair fronta, OI řetězu, lines %, <strong>chyby subskripce</strong> (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance&quot; a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
+<td>Read-only stav: spojení + port (při výpadku IBKR i <strong>„bez spojení X min&quot;</strong>, #770), účet (paper), <strong>Zdroj dat</strong> (v1.13, #950: <code>řetěz ibkr · spot ibkr</code>, při fallbacku upozornění, že běží tastytrade), řádek <strong>IBKR</strong> se stavovým tlačítkem (v1.16, #1108: zelené <strong>Připojeno · IBKR</strong>, oranžové <strong>Přepojuji…</strong> zamčené do odpovědi enginu, červené <strong>Odpojeno — přepojit</strong>; stav je podle enginu, ne podle kliknutí, zelená i červená jsou klikatelné) + co provider dodává a <strong>badge aktivního zdroje řetězu/spotu</strong> (u druhého „záloha“) + čas posledního požadavku, řádek <strong>Cum Δ</strong> (v1.14, #615: zdroj znaménka <code>midpoint</code>, od mechaniky v6 <code>aggressor</code> — znaménko jen z tisků se stranou od burzy, minuta bez tisků je mezera, ADR-0057; per symbol podíl objemu, který v dnešním dni přišel z tisků se stranou od burzy, a v závorce týž podíl z celého přírůstku objemu včetně struktury — pravdivý ukazatel pokrytí místo dřívější „šířky hot zóny“; „—“ = podíl se neměří, např. bez spárovaného objemu za fallbacku řetězu, #1632; zdroj určuje mechanika enginu, v Settings se nepřepíná), Greeks X/Y + repair fronta, OI řetězu, lines %, <strong>chyby subskripce</strong> (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance&quot; a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
 </tr>
 <tr>
 <td><strong>Tastytrade</strong> (v1.10)</td>
@@ -1470,121 +1586,474 @@ zůstanou ve formuláři. Téma (Dark/Light) se ukládá hned, zbytek přes Ulo�
 <hr>
 <h2>14. Notifikace a alerty</h2>
 <p><strong>Zvonek</strong> v hlavičce ukazuje badge s počtem nepřečtených alertů; kliknutím otevřeš historii (otevření badge vynuluje). Alerty chodí i za běhu do IBKR Console logu.</p>
-<p><strong>Push na Telegram (v1.18, #1175):</strong> totéž, co zvoní ve zvonku, může chodit i na
-mobil přes Telegram bota — jedna fronta, dva výstupy, žádná jiná logika.
-V Settings → <strong>Notifikace (Telegram)</strong> přepínáš kategorie: <strong>Setupy</strong> (vznik
-setupu, práh confidence v <code>.env</code>), <strong>Provoz</strong> (výpadek IBKR, degradovaný start,
-přetažení mobilem, disk, zaseknuté greeks — chodí i v tichých hodinách),
-<strong>Zprávy</strong> (anomálie, koncentrace opčního objemu), <strong>Ostatní</strong> (FA validace,
-drift, blízkost úrovně — default vypnuto). Tiché hodiny 23:00–06:00 (lokálně),
-duplicitní alert do 10 min se neposílá, denní strop 200. Nastavení bota
+<p><strong>Push na Telegram (v1.18, #1175; přepínače per druh #1284):</strong> totéž, co zvoní
+ve zvonku, může chodit i na mobil přes Telegram bota — jedna fronta, dva výstupy,
+žádná jiná logika. <strong>Zvonek dostává vždy všechno</strong>, nastavení níže platí jen pro
+Telegram. V Settings → <strong>Notifikace (Telegram)</strong>:</p>
+<ul>
+<li><strong>Posílat notifikace na Telegram</strong> — hlavní vypínač. Vypnutý = na Telegram
+neodejde nic, ani výpadky a noční údržba; přepínače pod ním zešednou, jejich
+hodnoty ale zůstanou uložené.</li>
+<li><strong>Setupy a burza</strong> — ve výchozím stavu zapnuté: Nový setup, Brzda ztráty,
+Konec zkoušky setupu, Paper účet, Scénář dne, Reakce trhu na zprávu, Zprávy před otevřením po
+víkendu, Očekávaný pohyb před releasem, Koncentrace opčního objemu, Kalendář
+expirací, Setup detektor prodělává; vypnuté (chodí často nebo jsou
+jen informační): Cena u GEX úrovně, Kandidát vzorce T6, Setup detektor se
+zotavil, Drift vzorců.</li>
+<li><strong>Chování aplikace</strong> — ve výchozím stavu zapnuté výpadky a degradace: Výpadek
+spojení s IBKR, IBKR přihlášen jinde, IBKR odmítá market data, Přepnutí na
+zálohu tastytrade, Záloha tastytrade nefunguje, Neúplná data opcí, Chybí OI,
+Instrument nejde spustit, Dochází místo na disku, Noční údržba selhala, Feed zpráv
+nefunguje (ten jako zprávy počká na konec tichých hodin);
+vypnuté diagnostika a zotavení: Kontrola datových toků, Greeks z dopočtu,
+Svíčky nechodí, Data opcí zase chodí, Málo místa pro Docker, Diagnostika modelu.</li>
+</ul>
+<p>Co přesně přepínač posílá, ukáže <strong>tooltip</strong> (najeď myší na název): popis, druhy
+ze zvonku, které pod něj patří, jestli chodí i v tichých hodinách a výchozí stav.
+Přepínač se uloží hned po kliknutí; když ho server odmítne, ukáže se chyba
+a přepínač zůstane, jak byl. Kdo měl dřív vypnutou kategorii (např. „Zprávy&quot;),
+má vypnuté i její nové přepínače, dokud je sám nezapne — nic se samo nezapne
+ani nevypne. <strong>Noční údržba selhala</strong> posílá skript mimo Docker (kompaktace VHDX,
+rollback deploye): do zvonku nejde, protože API v tu chvíli může stát, a při
+vypnutém Telegramu zůstane jen v logu skriptu.</p>
+<p>Tiché hodiny 23:00–06:00 (lokálně): provozní přepínače (ve výchozím stavu zapnuté
+v Chování aplikace a Setup detektor prodělává) chodí i v nich, ostatní ne —
+s jedinou výjimkou <strong>Zprávy před otevřením po víkendu</strong>: aktualizace 15 minut
+před nedělním otevřením padá na 23:45 a ráno by už nebyla k ničemu.
+Duplicitní alert do 10 min se neposílá, denní strop 200. Nastavení bota
 (přihlašovací údaje, chat id) dělá správce v <code>.env</code> — bez něj Settings ukážou
 „Telegram bot není nastaven&quot;. <strong>Když se přihlásíš na mobilu k IBKR</strong>, engine
-jede z tastytrade a CumΔ stojí: setupy s potvrzením tokem (T1, T4, T8)
-nevznikají, T2/T3/T7 a zprávy chodí dál; provozní alert o přetažení dostaneš.</p>
-<p>Zvonek je <strong>globální — sbírá alerty napříč všemi instrumenty</strong> ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu <strong>datum + čas</strong> notifikace a <strong>symbol instrumentu</strong> (např. <code>[NQ · setup]</code>). Naproti tomu <strong>karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.</strong></p>
-<p>Druhy alertů:</p>
+jede z tastytrade. Do mechaniky v6 CumΔ stojí: setupy s potvrzením tokem (T1,
+T4 a kontra-režim T2) nevznikají, ostatní setupy a zprávy chodí dál. Od v6
+běží CumΔ dál z tisků tastytrade a tyto setupy stojí jen při mezeře tisků
+(ADR-0057). Provozní alert o přetažení dostaneš v obou případech.</p>
+<p>Zvonek je <strong>globální — sbírá alerty napříč všemi instrumenty</strong> ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu <strong>datum + čas</strong> notifikace a <strong>symbol instrumentu</strong> (např. <code>[NQ · setup]</code>). Naproti tomu <strong>karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.</strong> Víceřádková upozornění (reakce trhu na zprávy, zprávy před otevřením) se ve zvonku zobrazí po řádcích jako na Telegramu.</p>
+<p><strong>Proklik na zprávy</strong> (v1.21, #1290): upozornění <em>Reakce trhu na zprávy</em>, <em>Zprávy před otevřením</em> a <em>Očekávaný pohyb před releasem</em> (#1296) jsou ve zvonku klikací („Otevřít zprávy v grafu&quot;). Klik přepne graf na instrument upozornění, zapne vrstvu <strong>News</strong> a otevře <strong>dialog se zprávami upozornění</strong> (s datem, když leží mimo zobrazený den). U reakce trhu navíc <strong>jednou posune graf</strong> tak, aby začátek shluku byl uprostřed (zoom i cenová osa zůstávají) — marker tam najdeš spolu s ostatními zprávami toho sloupce, <strong>i s filtrem Významné</strong>: zprávy upozornění projdou filtrem vždy, i když podle dnešní definice významné nejsou (upozornění z doby před zpřesněním klasifikace). Po návratu na graf z jiné obrazovky se pohled znovu neposouvá. U souhrnu před otevřením se graf neposouvá: víkendové zprávy na ose seance neleží. U upozornění před releasem se graf posune na release jen při kliku po releasu; klik před releasem otevře jen dialog se zprávami releasu (odhad, předchozí hodnota) a graf se ani později, v minutě releasu, sám neposune — pohled, který si mezitím nastavíš, zůstane. Zvonek drží upozornění jen v paměti stránky (posledních 50), po obnovení stránky je prázdný; z Telegramu vede k zprávě jen čas v textu upozornění („Reakce ES na zprávy z 13:00&quot;).</p>
+<p>Druhy alertů (sloupec <strong>Telegram</strong> = přepínač v Settings → Notifikace a jeho výchozí stav; úplný popis ukážou tooltipy přepínačů):</p>
 <table>
 <thead>
 <tr>
 <th>Alert</th>
 <th>Kdy</th>
+<th>Telegram</th>
 </tr>
 </thead>
 <tbody><tr>
 <td><strong>Cena u úrovně</strong></td>
 <td>Cena se přiblíží k flipu / call zdi / put zdi na ≤ 1 krok striků (ES ±5 b). Anti-spam: úroveň po vystřelení mlčí 15 min <strong>a</strong> znovu hlásí až poté, co cena od úrovně odešla (2× práh) — konsolidace u zdi tak pípne jednou, ne každou minutu</td>
-</tr>
-<tr>
-<td>Cum Δ skok</td>
-<td>Skok kumulativní delty o nastavený práh</td>
-</tr>
-<tr>
-<td>Dominantní strike</td>
-<td>Změna striku s největší koncentrací</td>
+<td>Cena u GEX úrovně (vyp.)</td>
 </tr>
 <tr>
 <td><strong>Výpadek spojení</strong></td>
-<td>TWS/Gateway nedostupné — hlásí se <strong>při přechodu</strong> do odpojeného stavu (od v1.13 se skutečně vyhodnocuje, #949; dřív byl alert mrtvý kód). Trvá-li výpadek přes 5 min, přijde navíc <strong>„IBKR spojení chybí už X min — sběr dat stojí&quot;</strong> a opakuje se, dokud se spojení nevrátí (#770); stejná doba je v Settings → Stav enginu jako „bez spojení X min&quot;</td>
+<td>TWS/Gateway nedostupné — hlásí se <strong>při přechodu</strong> do odpojeného stavu (od v1.13 se skutečně vyhodnocuje, #949; dřív byl alert mrtvý kód). Trvá-li výpadek přes 5 min, přijde navíc <strong>„IBKR spojení chybí už X min — sběr dat stojí&quot;</strong>, nebo <strong>„IBKR nedostupné už X min — data jedou ze zálohy tastytrade&quot;</strong>, když data sbírá záloha; připomene se po 15 min, po 1 h a pak jednou za 4 h, po obnovení přijde <strong>„IBKR spojení je zpět&quot;</strong> (v1.31, #1317; dřív à 5 min, #770); stejná doba je v Settings → Stav enginu jako „bez spojení X min&quot;</td>
+<td>Výpadek spojení s IBKR (zap.)</td>
 </tr>
 <tr>
 <td><strong>Disk limit</strong></td>
 <td>Obsazení dat překročilo limit ze Settings → Engine (hranově, jednou za překročení, #949). Nezaměňovat s alertem <strong>disk_space</strong> (volné místo disku pod 15 / 5 GB + výpis největších tabulek)</td>
+<td>Dochází místo na disku (zap.)</td>
 </tr>
 <tr>
 <td><strong>OI nedorazilo</strong></td>
 <td>IBKR nedodalo Open Interest — GEX vrstvy jedou dočasně z volume (viz Řešení potíží)</td>
+<td>Chybí OI (zap.)</td>
 </tr>
 <tr>
 <td><strong>Instrument nejde spustit</strong></td>
 <td>Ticker z watchlistu není futures s opčním řetězem (např. akcie) — engine to zkusí znovu za 30 minut</td>
+<td>Instrument nejde spustit (zap.)</td>
 </tr>
 <tr>
 <td>Obálka na stropu</td>
 <td>Pásmo strikes dosáhlo maxima šířky — vzdálený okraj se posouvá za cenou</td>
+<td>Diagnostika modelu (vyp.)</td>
 </tr>
 <tr>
 <td><strong>Svíčky se přestaly kreslit</strong></td>
-<td>Real-time bary z TWS nechodí, ale cena žije (mrtvé TWS farmy po noční přestávce) — pomáhá restart TWS; díra se po návratu doplní sama</td>
+<td>Real-time bary z TWS nechodí při otevřeném trhu (mrtvé TWS farmy po noční přestávce) — i když stojí i cena, to je zamrzlý stream (v1.31, #1347); pomáhá restart TWS, díra se po návratu doplní sama</td>
+<td>Svíčky nechodí (vyp.)</td>
 </tr>
 <tr>
 <td>Svíčky zase jedou</td>
 <td>Bary se vrátily — díra ve svíčkách se doplní backfillem</td>
+<td>Svíčky nechodí (vyp.)</td>
+</tr>
+<tr>
+<td><strong>Feed zpráv nefunguje</strong></td>
+<td>Jeden RSS feed zpráv (Fed, Yahoo, CNBC, MarketWatch, Reddit, vlastní feed) selhává bez přerušení déle než hodinu — zrušená adresa, chyba serveru nebo nečitelná odpověď. Ostatní feedy chodí dál, ale zprávy z tohoto chybí a zpětně se nedoplní. Hlásí se jednou za výpadek, i o víkendu, protože zprávy vycházejí pořád (v1.31, #1451)</td>
+<td>Feed zpráv nefunguje (zap.)</td>
+</tr>
+<tr>
+<td>Feed zpráv zase odpovídá</td>
+<td>První úspěšné stažení po ohlášeném výpadku, s jeho délkou</td>
+<td>Feed zpráv nefunguje (zap.)</td>
 </tr>
 <tr>
 <td><strong>Vol koncentrace</strong></td>
-<td>Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop)</td>
+<td>Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop). <strong>Při zavřeném trhu</strong> (víkend, denní pauza) se nehlásí: objem je zmrzlý z poslední seance (#1309)</td>
+<td>Koncentrace opčního objemu (zap.)</td>
 </tr>
 <tr>
 <td><strong>Nový setup</strong></td>
-<td>Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring)</td>
+<td>Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring). Od v1.27 nese šablonu s číslem (T7 trend_continuation), stádium buňky (AUTO / STÍN / ZKOUŠKA 3/10 s čerpáním) a druhý řádek s ØR hrubě a čistě, n / n potřebné a verdiktem brány — se štítkem <strong>edge neprokázán:</strong>, když dolní mez ØR není kladná, jinak <strong>Důkaz:</strong>. Na Telegram jen obchodovatelný setup</td>
+<td>Nový setup (zap.)</td>
+</tr>
+<tr>
+<td><strong>Konec zkoušky setupu</strong> (<code>setup_stage</code>, v1.27)</td>
+<td>Zkouška buňky v Knihovně vyčerpala rozpočet (počet setupů nebo ztrátu v R) a buňka je zpět na Auto — rozhoduje brána. Jednou na zkoušku; ve zvonku je klikací a otevře <strong>Setupy → Knihovna</strong>, kde jde zkouška obnovit (kap. 18)</td>
+<td>Konec zkoušky setupu (zap.)</td>
 </tr>
 <tr>
 <td><strong>FA validace</strong></td>
-<td>Ranní kalibrační bod FA vrstvy: po příchodu OI archivu engine porovná včerejší klasifikovaný volume s ΔOI (open-ratio ≈ α, korelace) a bod uloží pro kalibraci — čistě informační</td>
+<td>Kalibrační bod FA vrstvy: po finálním OI archivu dne (dvě shodná čtení po publikaci CME) engine porovná klasifikovaný volume posledního obchodního dne s ΔOI na stranách změřených po publikaci v obou dnech (dnešní strana jen z IBKR měření po dnešní publikaci, předchozí z IBKR nebo z tasty řádku obnoveného po publikaci toho dne; open-ratio ≈ α, korelace), a bod uloží pro kalibraci — čistě informační. Strany bez takového měření se nepočítají (#1314, #1605). Jen v obchodní den; v pondělí páteční volume proti ΔOI pátek → pondělí (#1309)</td>
+<td>Diagnostika modelu (vyp.)</td>
 </tr>
 <tr>
 <td><strong>Greeks se zasekly / zase jedou</strong></td>
 <td>Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí. <strong>Po settle expirující řady se nehlásí</strong> (v1.13, #959): vypořádaný řetěz se přestane kotovat, což je normální stav, ne porucha — dřív alert s radou „restart TWS&quot; chodil každý den po 22:00</td>
+<td>Neúplná data opcí (zap.) / Data opcí zase chodí (vyp.)</td>
 </tr>
 <tr>
 <td><strong>Chyba subskripce</strong></td>
 <td>TWS opakovaně odmítla data konkrétních kontraktů (error 354 „not subscribed&quot;); alert vypíše, o které kontrakty jde. Ojedinělé výskyty se nehlásí — ty patří ke krátkým výpadkům farem a data se vrátí sama. Když alert přijde, zkontroluj subskripce v Market Data Subscription Manager. Jde vypnout v Settings → Alerty</td>
+<td>IBKR odmítá market data (zap.)</td>
 </tr>
 <tr>
 <td><strong>Konkurenční relace</strong></td>
 <td>Stejný IBKR účet je přihlášený jinde (mobilní aplikace, Client Portal, druhá TWS) a přetahuje si market data. IBKR povoluje jen jednu aktivní market-data relaci na subskripci, takže data můžou vypadávat — pomůže odhlásit účet z ostatních míst. Sdílení dat s paper účtem tohle <strong>neřeší</strong>: sdílí se oprávnění, ne kapacita relace</td>
+<td>IBKR přihlášen jinde (zap.)</td>
 </tr>
 <tr>
-<td><strong>Setup detektor degradován/obnoven</strong></td>
-<td>Detektoru chybí vstup (např. OI pro Max Pain) — šablony na něm závislé se dočasně nevyhodnocují</td>
+<td><strong>Setup detektor prodělává / se zotavil</strong></td>
+<td>Denní sebekontrola: setupy symbolu za sledované okno prodělávají — alert doporučí vypnout nejhorší šablonu (<code>GEXLENS_SETUP_DISABLED_TEMPLATES</code>) nebo upravit prahy; „zotavil“ = výkonnost se vrátila nad práh</td>
+<td>Setup detektor prodělává (zap.) / se zotavil (vyp.)</td>
 </tr>
 <tr>
 <td><strong>T6 kandidát</strong></td>
 <td>Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech</td>
+<td>Kandidát vzorce T6 (vyp.)</td>
 </tr>
 <tr>
 <td><strong>Drift hlídka</strong></td>
 <td>Čerstvá úspěšnost signálového bucketu se statisticky rozešla s historickou — model přestává platit, signály z něj ber s rezervou (detail na Stats)</td>
+<td>Drift vzorců (vyp.)</td>
 </tr>
 <tr>
-<td><strong>News anomálie</strong></td>
-<td>Výrazný pohyb ceny bez odpovídající zprávy — něco hýbe trhem mimo pokryté zdroje</td>
+<td><strong>Reakce trhu na zprávy</strong> (<code>news_anomaly</code>)</td>
+<td>Trh se do 5 min po shluku zpráv s aspoň jednou <strong>významnou</strong> zprávou pohnul mimořádně — nad 97 % výchylek v tuto denní dobu i po zohlednění volatility poslední hodiny. Jedno upozornění na shluk a instrument, ES a NQ zvlášť (viz níže)</td>
+<td>Reakce trhu na zprávu (zap.)</td>
 </tr>
 <tr>
-<td><strong>Retro pass</strong></td>
-<td>Ranní přehodnocení včerejších klasifikací zpráv s odstupem — čistě informační</td>
+<td><strong>Očekávaný pohyb před releasem</strong> (<code>release_preview</code>)</td>
+<td>60 a 15 min před CPI, NFP, FOMC, PPI, PCE, Retail Sales a ISM Services: typická výchylka ES a NQ za 15 min po releasu, přepočtená na dnešní volatilitu, a úrovně v jejím dosahu; směr jen u jádra inflace jako hypotéza „ověřuje se“ (viz níže)</td>
+<td>Očekávaný pohyb před releasem (zap.)</td>
+</tr>
+<tr>
+<td><strong>Zprávy před otevřením po víkendu</strong> (<code>news_preopen</code>)</td>
+<td>V neděli 4 h před otevřením Globexu (20:00) souhrn <strong>zásadních</strong> zpráv za víkend se směrem, sklonem a úrovněmi poslední seance, 15 min před otevřením (23:45) aktualizace jen s novou zásadní zprávou; ES a NQ zvlášť, jen když nějaká zásadní vyšla (viz níže)</td>
+<td>Zprávy před otevřením po víkendu (zap., i v tichých hodinách)</td>
 </tr>
 </tbody></table>
+<h3>Upozornění na zprávy (#1291)</h3>
+<p>Pohyb trhu ze stejné chvíle nejde přisoudit jedné zprávě: v běžné minutě vyjde
+několik titulků a většina je šum. Aplikace proto hodnotí <strong>shluk zpráv</strong> a ohlásí
+ho jen tehdy, když v něm je aspoň jedna <strong>významná</strong> zpráva a trh se zároveň
+pohnul mimořádně. Mimořádný pohyb bez významné zprávy se neohlašuje.</p>
+<ul>
+<li><strong>Co je významná zpráva</strong> (v1.22, #1293, #1305 — stejná definice platí pro
+upozornění, předobchodní souhrn i filtr grafu „Významné“):<ul>
+<li><strong>ekonomický kalendář</strong>: USD s dopadem High nebo Medium a rozhodnutí ECB, BoE
+a BoJ (sazba, prohlášení, tisková konference); data ostatních měn (Kanada,
+Británie, Austrálie…) významná nejsou;</li>
+<li><strong>zpráva s důležitostí 2 nebo 3</strong>, kromě firemních výsledků a přepisů earnings calls.
+Důležitost 3 mají jen <strong>události</strong> — rozhodnutí Fedu, statement a minutes FOMC,
+předseda Fedu, vydaná US data s číslem (CPI, PCE, PPI, payrolls, retail sales,
+ISM/PMI, HDP), pohyb ropy, útok nebo příměří na Blízkém východě či kolem Tchaj-wanu,
+uvalení cel, snížení ratingu USA. Důležitost 2 má <strong>téma jako předmět zprávy</strong>
+(Fed, výnosy, inflace, trh práce, cla, obchodní dohoda, shutdown…);</li>
+<li><strong>agregátory</strong> (Yahoo Finance — zprávy k indexům S&amp;P 500 a Nasdaq, do 23. 9. 2026
+souhrnný feed i s převzatými WSJ, Barron&#39;s a IBD — a MarketWatch)
+mají o stupeň nižší důležitost — významné jsou jen jejich zprávy o události,
+souhrny a výhledy trhu ne; <strong>sociální sítě</strong> jen od kurátorovaných autorů
+(seznam v záložce News);</li>
+<li><strong>nevýznamné</strong> jsou zprávy, které klíčové slovo jen zmíní („… ahead of Fed“ o akcii
+nebo kryptu), osobní finance, výběr akcií, názory a otázky („Will the Fed hike?“),
+sport, sankce, cizí data, souhrny cizích burz („Indian shares…“, „Gulf
+bourses…“) a menší centrální banky.</li>
+</ul>
+</li>
+<li><strong>Shluk</strong> začíná první významnou zprávou a patří do něj vše do 2 minut po ní.</li>
+<li><strong>Mimořádný pohyb</strong>: největší výchylka ceny do 5 minut od začátku shluku (i když
+se cena vrátí — whipsaw po FOMC se počítá) je vyšší než u 97 % výchylek ve stejnou
+denní dobu za posledních 20 seancí <strong>a zároveň</strong> vysoká i vzhledem k tomu, jak
+rozjetý byl trh poslední hodinu. Klidná hodina a pak skok = upozornění; stejný
+skok v už divokém trhu ne.</li>
+<li><strong>ES a NQ zvlášť</strong>: každý instrument má svou výchylku i hranici; když se pohne
+jen NQ, přijde jen upozornění pro NQ.</li>
+<li><strong>Kdy přijde</strong>: 7–12 minut po začátku shluku (5 min okno + zápis svíček + cyklus
+news-engine). Další shluk téhož instrumentu do 15 minut se nehlásí — měří týž pohyb.</li>
+</ul>
+<p>Text upozornění:</p>
+<pre><code>Reakce ES na zprávy z 20:00: ↓ -19 bp za 5 min (97 % výchylek v tuto denní dobu do 9 bp)
+• USD Federal Funds Rate
+• USD FOMC Statement
+• …
+další významné: 4 · ostatní zprávy: 27
+</code></pre>
+<p>Čas je začátek shluku (lokálně), bp je výchylka se směrem, v závorce hranice obvyklé
+výchylky v tuto denní dobu. Vypíše se nejvýš 5 významných zpráv (kalendář High,
+Medium, pak podle důležitosti); zbytek jen počtem. Žádná pravděpodobnost se
+nepočítá — číslo v závorce je naměřené rozdělení z posledních 20 seancí.</p>
+<p><strong>Zprávy za zavřený trh:</strong> zprávy z víkendu nebo denní pauzy (a z posledních 5 minut
+před zavřením) se jednotlivě neohlašují — gap na otevření je součet všeho, co se
+za zavřený trh stalo, a jedné zprávě ho přisoudit nejde. Na víkend se ale dá
+připravit: <strong>před nedělním otevřením</strong> přijde upozornění na každý instrument zvlášť,
+jen když za zavřený trh vyšla aspoň jedna <strong>zásadní</strong> zpráva:</p>
+<ul>
+<li><strong>Zásadní zpráva</strong> je přísnější výběr z významných (v1.22, #1293): významný
+ekonomický kalendář nebo zpráva s nejvyšší důležitostí 3 (událost) — včetně ropy,
+bez ohledu na kategorii; kurátorovaný autor jen s důležitostí 3. Jen ty jdou do
+výčtu a do sklonu; ostatní významné a běžné zprávy jsou jen počet. Když za víkend
+vyšly jen významné, ale žádná zásadní, nepřijde nic.</li>
+<li><strong>hlavní souhrn 4 h před otevřením Globexu</strong> — v běžném týdnu v neděli ve 20:00;</li>
+<li><strong>aktualizace 15 min před otevřením</strong> (23:45) — jen když od hlavního souhrnu vyšla
+nová zásadní zpráva (ta, kterou hlavní souhrn ještě neznal, i když přišla pozdě).
+Když ve 20:00 ještě žádná zásadní nebyla, je to první upozornění a vypadá jako
+souhrn.</li>
+</ul>
+<p>Časy se počítají od otevření Globexu v Chicagu (neděle 17:00 CT), ne jako pevné
+hodiny: poslední říjnový týden, kdy Evropa už přešla na zimní čas a USA ještě ne,
+přijde souhrn v 19:00 a aktualizace ve 22:45. Denní pauza (1 h) se nehlásí.</p>
+<pre><code>Před otevřením ES: Globex otevře v pondělí 00:00 (za 4 h)
+Úrovně ES z poslední seance (expirace 21. 9.): call zeď 7730 · put zeď 7680 · flip 7752 · těžiště 7715 · close 7725
+Zásadní zprávy za zavřený trh od pátku 22:55: 21 · sklon 🔴 (🟢 1 · 🔴 9 · ⚪ 11)
+• 🔴 North Korea fires missile off east coast, Yonhap says
+• …
+další zásadní: 16 · další významné: 11 · ostatní zprávy: 1910
+</code></pre>
+<ul>
+<li><strong>Úrovně</strong> jsou z poslední minuty páteční seance pro expiraci příští seance
+(pondělní 0DTE — páteční po settle zanikla) a <strong>close</strong> je poslední cena před
+zavřením: na tyhle úrovně si dej pozor, kam gap otevře.</li>
+<li><strong>Sklon</strong> je jen počet zásadních zpráv podle klasifikovaného směru (🟢 pozitivní,
+🔴 negativní, ⚪ neutrální nebo nezařazené) — <strong>žádná pravděpodobnost</strong>; směr určuje
+pravidlový klasifikátor z titulku a u víkendových titulků se mýlí (slovo „tariff“ = 🔴).</li>
+<li><strong>Výčet</strong> ukáže nejvýš 5 zásadních zpráv (kalendář, pak podle důležitosti, v nich
+nejnovější), zbytek počtem „další zásadní“; tatáž story z více zdrojů se počítá jednou.</li>
+<li><strong>Svátky</strong>: pokrytý je jen svátek, který zkrátí nebo zruší páteční seanci (Velký
+pátek, Vánoce nebo Nový rok v pátek, 3. 7.) — pozná se podle toho, kdy přestaly
+chodit svíčky, a souhrn pak bere zprávy od posledního obchodu. <strong>Nepokryté</strong>:
+svátek uprostřed týdne (Den díkůvzdání, pondělní svátky s přerušením obchodu,
+Vánoce či Nový rok v úterý až čtvrtek) upozornění nemá a svátek s celodenním
+zavřením v pondělí (Vánoce či Nový rok v pondělí nebo s náhradním pondělím, poprvé
+v prosinci 2028) dostane upozornění k nedělnímu otevření, které nenastane — Globex
+pak otevře až v pondělí v 17:00 CT (v úterý 00:00 Praha) a před tím upozornění
+nepřijde.</li>
+<li>Restart aplikace v neděli večer souhrn nezopakuje; když aplikace ve 20:00 neběžela,
+souhrn přijde jednou při prvním běhu do otevření.</li>
+</ul>
+<h3>Upozornění před releasem (v1.22, #1296)</h3>
+<p>Před velkým ohlášeným releasem (ekonomický kalendář, dopad High) přijde <strong>60 a 15 minut
+předem</strong> upozornění na každý instrument zvlášť. Říká, <strong>jak velký pohyb</strong> po takovém releasu
+čekat a <strong>které úrovně</strong> leží v jeho dosahu — ne kam trh půjde.</p>
+<pre><code>CPI za 60 min (14:30) — ES 7805.5
+Vyjde: Core CPI m/m (odhad 0.3%), CPI m/m, Core CPI y/y, CPI y/y
+Očekávaná výchylka do 15 min: 30–36 bodů (38–46 bp)
+medián–p75 z 23 CPI · volatilita 0.94× obvyklé (bez přepočtu 39–56 bp)
+V dosahu 7769–7842: call zeď 7810 (+4.5) · těžiště 7800 (-5.5) · flip 7785 (-20.5)
+Dál: put zeď 7735 (-70.5)
+H1 – OVĚŘUJE SE: jádro inflace teplejší než odhad → historicky za 15 min níž ve 13 ze 14 (živě 0 z 0)
+Směr jinak bez prokazatelného efektu.
+</code></pre>
+<p><strong>Co upozornění říká:</strong></p>
+<ul>
+<li><strong>Které releasy</strong>: CPI, NFP (s nezaměstnaností a mzdami), FOMC, PPI a PCE; Retail Sales
+a ISM Services se štítkem „slabší řada“ (velikost u nich drží hůř). Týdenní žádosti
+o podporu (Claims) upozornění nemají. Souběžné releasy v jedné minutě jsou jedno
+upozornění a pojmenuje ho nejdůležitější z nich.</li>
+<li><strong>Očekávaná výchylka</strong> = největší pohyb ceny (nahoru nebo dolů, i když se vrátí) do 15 minut
+po releasu, <strong>v bodech</strong> pro dnešní cenu (jako úrovně) a v závorce v bp. První číslo je
+medián z minulých releasů téže rodiny (polovina releasů pohnula trhem víc), druhé p75
+(čtvrtina víc). Druhý řádek říká, odkud číslo je: z kolika releasů a jak se <strong>přepočítalo
+na dnešní volatilitu</strong> — když je trh posledních 20 seancí klidnější než obvykle při tomto
+releasu (0.94×), čeká se i menší pohyb; v závorce číslo bez přepočtu.</li>
+<li><strong>V dosahu</strong> = call/put zeď, flip a těžiště 0DTE mezi cenou − p75 a cenou + p75, seřazené
+podle vzdálenosti (v závorce vzdálenost od ceny v bodech); <strong>Dál</strong> = ostatní. Úrovně jsou
+z okamžiku upozornění a do releasu se mění — starší než 10 min nesou čas.</li>
+<li><strong>Směr jen u jádra inflace</strong> (Core CPI, Core PPI, Core PCE): hypotéza <strong>H1</strong> „teplejší než
+odhad → za 15 min níž“ historicky platila ve 13 ze 14 releasů, ale <strong>teprve se ověřuje živě</strong>
+(od 1. 10. 2026). Dokud není ověřená, upozornění <strong>neuvádí pravděpodobnost</strong>; po ověření
+přibude „s pravděpodobností X % [interval]“, po zamítnutí řádek zmizí. Stav vidíš ve
+<strong>Statistikách → Releasy</strong>.</li>
+<li><strong>Velikost ověřená živě</strong> (dovětek „Velikost nad běžným dnem ověřena živě k z n (M1)“) se
+objeví až po ověření hypotézy M1 a jen u CPI, NFP, FOMC, PPI a PCE — slabší řady (Retail
+Sales, ISM Services) M1 nehodnotí, takže ho nenesou nikdy.</li>
+</ul>
+<p><strong>Co upozornění NEříká:</strong></p>
+<ul>
+<li><strong>Neříká směr</strong> — u všech ostatních releasů výzkum nenašel nic, co by směr předem
+předpovědělo (ani podle překvapení u trhu práce, růstu, Fedu, ani podle pohybu před
+releasem). Proto „Směr: bez prokazatelného efektu.“</li>
+<li><strong>Neříká opačný scénář u inflace</strong> („chladnější → výš“) — v datech mimo vzorek nedržel.</li>
+<li><strong>Není to hranice</strong>: zhruba v každém pátém releasu byla výchylka větší než p75.</li>
+<li><strong>Neví, jaké číslo vyjde</strong> — odhad v řádku „Vyjde“ je z kalendáře tak, jak ho ukazuje
+ForexFactory; vyhodnocení H1 bere číslo z databáze a to se může lišit (u NFP třeba „58K“
+v textu a 55 000 v datech).</li>
+<li><strong>Nepozná přesunutý release</strong> — změnu času kalendář do aplikace nepropíše (#1298): při
+přesunu v rámci dne přijde upozornění podle původního času, při přesunu na jiný den přijde
+navíc falešné upozornění v původní čas (do statistik ani hypotéz se nezapočte). Release,
+který v kalendáři chybí, také nepozná.</li>
+<li><strong>Nic po releasu</strong> — upozornění „co se stalo a co dál“ (aktivní scénář, vícedenní výhled)
+zatím není.</li>
+</ul>
+<p>Když chybí data, text to řekne a upozornění stejně přijde: „ES cena chybí“ (bez barů posledních
+15 min), „Úrovně ES chybí“, „bez přepočtu na dnešní volatilitu“ nebo „málo historie (n = …)“
+(pod 8 minulými releasy rodiny). Restart aplikace upozornění nezopakuje; když aplikace v T−60
+neběžela, přijde jen T−15.</p>
 <h3>Setupy</h3>
 <p>Když detektor najde setup, přijde alert <strong>Nový setup</strong> a nad grafem se ukáže <strong>karta setupu</strong> pro daný instrument: směr (LONG/SHORT), šablona, <strong>datum a čas vzniku</strong> (kdy se splnily podmínky), úrovně <strong>Entry / Cíl / Stop</strong>, RRR a důvěra (od v1.16 <strong>kalibrovaná z track recordu</strong>: Wilsonova dolní mez úspěšnosti šablony v daném gamma režimu při ≥ 30 uzavřených setupech, jinak konstanta šablony — najetím na číslo zjistíš zdroj), od v1.16 štítek <strong>polohy v tlumící zóně</strong> (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce <strong>Setupy</strong> v sidebaru.</p>
+<p><strong>Přehled a Knihovna (v1.27, #1323).</strong> Obrazovka Setupy má nahoře dvě podzáložky. <strong>Přehled</strong> je
+dosavadní obrazovka zobrazeného instrumentu (souhrn, účet, dnešní seance, tabulka setupů).
+<strong>Knihovna</strong> ukazuje všechny tickery watchlistu najednou po buňkách šablona × ticker a nastavuje se
+v ní, co se smí obchodovat (stádium Auto / Stín / Zkouška, kap. 18 „Knihovna setupů“). Aplikace si
+pamatuje, kterou podzáložku jsi měl otevřenou.</p>
+<p><strong>Výsledek podle skutečné cesty ceny (v1.26, #1320).</strong> Setup se uzavírá jen
+podle minutových svíček v pořadí, v jakém trh šel, počínaje svíčkou po té,
+na jejíž ceně vznikl. Cíl nebo stop rozhodne svíčka, která úroveň zasáhla,
+a čas uzavření je čas té svíčky. Když svíčky chybí (výpadek dat z IBKR),
+setup zůstane <strong>aktivní</strong>, engine si chybějící minuty sám vyžádá zpětně
+z IBKR (při výpadku celého IBKR je doplní tastytrade) a pak je projde
+v pořadí. I když mezitím cena doběhla k cíli, rozhodne stop, který padl ve
+výpadku. Na každou díru čeká engine nejdéle 15 minut; minuty, které se do té
+doby nedoplní, přeskočí a zapíše do logu jako neověřený výsledek. Do v1.25
+hodnotil při výpadku jen poslední cenu a stop ve výpadku přehlédl: 3. 9.
+zapsal setup NQ 1003 jako cíl +3 R místo stopu −1 R.</p>
+<p><strong>Timeout za cenu v settle.</strong> Setup, který do settle své expirace nezasáhl cíl
+ani stop, skončí za close poslední svíčky před settle (16:00 ET, tj. 22:00
+našeho času) a čas uzavření je settle. Dřív se brala cena z okamžiku, kdy
+engine timeout zjistil (restart ve 22:50, pondělí po svátku), a výsledek se
+lišil o desítky bodů. Starší výsledky opraví jednorázový přepočet, až ho
+schválíš; přepíše i MFE/MAE a opravený setup si v databázi pamatuje původní
+hodnoty. Setupy, které vznikly na „zamrzlé“ ceně během výpadku (vstup, jaký
+trh v té minutě neměl, např. ES 1004 3. 9.), přepočet sám neopraví —
+rozhodneš o nich podle reportu.</p>
+<p><strong>Souhrn nahoře = celá historie, ne posledních 200 (v1.23, #1319).</strong> Čísla nad
+tabulkou počítá server ze <strong>všech</strong> setupů instrumentu aktuální mechaniky
+detektoru; přepínač <strong>Včetně starší mechaniky (N)</strong> přidá i starší verze.
+Po přepnutí zůstanou dosavadní čísla ztlumeně na místě, dokud server nepošle
+nový souhrn — přepínač nezmizí a stránka neposkočí.
+Tabulka pod nimi je jen <strong>stránka posledních 200 setupů</strong> — je-li historie
+delší, stojí nad ní „Tabulka ukazuje posledních 200 z 604 setupů&quot;. Do v1.22
+se „celkem&quot; omylem sčítalo jen z těch 200 řádků, takže číslo s každým novým
+setupem klouzalo (ES v5: obrazovka +690 $, celá historie −2 338 $ na
+1 kontrakt). Když server souhrn nedodá, obrazovka ukáže chybu — z tabulky se
+nic nedopočítává.</p>
+<p><strong>Přechod na další expiraci v settle (v1.28, #1331).</strong> Setup se vztahuje
+k expiraci opčního řetězu a po jejím settle už žít nemůže. Settle je
+16:00 ET (22:00 našeho času; v týdnech, kdy se USA a Evropa liší v přechodu
+na letní čas, o hodinu jinak). Na kvartální datum (3. pátek března, června,
+září a prosince) sleduje aplikace po rollu týdenní sérii nového kontraktu
+(EW3/QN3), která se vypořádá také v 16:00 ET — kvartální pátek tak zůstává
+živý celou seanci (v1.31, #1366; do té doby engine končil už v 9:30 ET). Ráno
+v 9:30 ET (SOQ) se vypořádá jen standardní kvartální řetěz expirujícího
+kontraktu — ten aplikace sleduje, jen když máš ve watchlistu pinovaný kontrakt
+(<code>ESZ6</code> v prosinci). <strong>Přesně v tu chvíli engine přepne
+sběr dat, setupy, sondy i tendenci na další expiraci</strong> — v pátek na pondělní.
+Přechod trvá 1–2 minuty: minuta settle ještě uzavře, co k vypršelé expiraci
+patří (otevřené setupy timeoutem, paper ordery, agregát mapy), a pak se
+řetěz načte znovu. Graf přepne v téže chvíli sám
+(v1.30, #1367), pokud expiraci vybrala aplikace; ručně zvolenou expiraci ani
+zobrazenou poslední seanci s daty (banner o víkendu) nemění.</p>
+<p>Nové setupy pak potřebují pár minut historie nad novým řetězem, než je
+detektory najdou — úrovně staré a nové expirace se nemíchají. Do v1.28 engine
+přepínal až o půlnoci UTC a do té doby běžel nad vypršelým řetězem; od v1.24
+v tom okně (v létě 22:00–02:00, v zimě 22:00–01:00 našeho času) setupy
+nevznikaly vůbec. To okno zmizelo.</p>
+<p><strong>Setupy vzniklé po settle se do souhrnu nepočítají.</strong> Z doby před v1.24
+jich v databázi zůstává přes 80 (mechanika v5, jeden z nich obchodovatelný
+s upozorněním). Každý takový řádek je v tabulce ztlumený a nese štítek <strong>po
+settle, mimo souhrn</strong>; tooltip štítku vysvětlí proč. Přepínač <strong>Jen
+obchodovatelné v tabulce</strong> je skryje, takže tabulka sedí se souhrnem. Ze
+souhrnu, účtu, brzd, brány šablon, kalibrace confidence i kouče jsou
+vyřazené. Pod rozdělením se vypíše <strong>Vyřazeno ze souhrnu (vznik po settle
+vlastní expirace): N</strong>, takže nic nezmizí potichu. Počet u přepínače
+<strong>Včetně starší mechaniky (N)</strong> zahrnuje všechny řádky starších verzí,
+i vyřazené.</p>
+<p><strong>Setupy nad zamrzlým spotem se do souhrnu nepočítají (#1346).</strong> Při
+výpadku datového streamu stála cena a několik setupů vzniklo nad cenou, kterou
+trh v té minutě neměl (vstup mimo 1min bary — ES 1004, ES 1049, NQ 1048, 1184,
+1203). Od opravy #1346 takové setupy nevznikají; ty starší jsou trvale
+označené. V tabulce jsou ztlumené se štítkem <strong>vstup mimo bary, mimo souhrn</strong>,
+přepínač <strong>Jen obchodovatelné v tabulce</strong> je skryje a pod rozdělením se
+vypíše <strong>Vyřazeno ze souhrnu (vstup mimo bary, zamrzlý spot): N</strong>. Ze souhrnu,
+Knihovny, účtu, brzd, brány šablon, kalibrace confidence i kouče jsou
+vyřazené stejně jako setupy po settle; v databázi zůstávají.</p>
+<table>
+<thead>
+<tr>
+<th>Dlaždice</th>
+<th>Co znamená</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Aktivní / Uzavřené</strong></td>
+<td>běžící setupy / setupy s výsledkem (cíl, stop, timeout)</td>
+</tr>
+<tr>
+<td><strong>Úspěšnost</strong></td>
+<td>podíl uzavřených s kladným výsledkem v R (i kladný timeout)</td>
+</tr>
+<tr>
+<td><strong>Ø R / Σ R</strong></td>
+<td>průměrný / celkový výsledek v násobcích rizika (1 R = vzdálenost entry–stop)</td>
+</tr>
+<tr>
+<td><strong>Hrubý výsledek (1 kontrakt)</strong></td>
+<td>Σ (R × stop v bodech × hodnota bodu; ES 50 $, NQ 20 $) — každý setup rovným dílem jeden kontrakt, obchodovatelný i stínový</td>
+</tr>
+<tr>
+<td><strong>Poplatky</strong></td>
+<td>uzavřené × poplatek za kontrakt a obchod (default 10 $ v jednotkách aplikace = 1 $ reálně na mikro)</td>
+</tr>
+<tr>
+<td><strong>Čistý výsledek</strong></td>
+<td>hrubý výsledek − poplatky</td>
+</tr>
+<tr>
+<td><strong>EV / obchod (hrubě)</strong></td>
+<td>očekávaný výsledek jednoho obchodu na 1 kontrakt před poplatky (viz níže)</td>
+</tr>
+</tbody></table>
+<p><strong>Proč může být Σ R kladné a dolary záporné:</strong> R je vztažené k riziku
+obchodu, dolary jsou absolutní. Setup se širokým stopem (40 b ES = 2 000 $ na
+kontrakt) prodělá na stopu víc, než kolik vydělá několik výher s těsným
+stopem — proto rozhoduje řádek <strong>Účet</strong>, kde sizing (#1185) velikost pozice
+podle stopu srovná.</p>
+<p><strong>Rozdělení obchodovatelné / stínové / bez risk pravidel.</strong> Tabulka pod
+dlaždicemi rozdělí tentýž souhrn (pořád 1 kontrakt na setup) podle verdiktu
+risk pravidel:</p>
+<ul>
+<li><strong>Obchodovatelné</strong> — setupy, které by se reálně zobchodovaly (stop v rozpočtu, brzdy neaktivní, šablona s prokázaným edge);</li>
+<li><strong>Stínové</strong> — setup vznikl a měří se, ale neobchoduje se; tooltip řádku nese počty podle důvodu (brána šablony, strop stopů šablony, stop nad rozpočtem, brzdy);</li>
+<li><strong>Bez risk pravidel</strong> — setupy z doby před 15. 9. 2026, verdikt u nich neexistuje.</li>
+</ul>
+<p><strong>Účet 50k — co by reálně vydělal účet</strong> (řádek se zeleným pruhem): jen
+<strong>obchodovatelné</strong> uzavřené setupy s kontrakty ze serverového sizingu —
+hrubě (kontrakty × R × stop × bod), poplatky (kontrakty × poplatek), čistě,
+% účtu a max drawdown (chronologicky podle uzavření). Dlaždice 1 kontrakt
+výše měří detektor, tenhle řádek odpovídá na otázku „kolik by vydělal účet&quot;.
+Reálně na MES/MNQ jsou dolary ÷ 10.</p>
 <p><strong>Denní statistika seance</strong> (obrazovka Setupy): nad seznamem je souhrn dnešního
 dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost
-v %, největší ziskový a největší ztrátový obchod, od v1.12 <strong>Σ dnes</strong> —
-denní bilance v dolarech (na 1 kontrakt, stejná konvence jako Σ P/L
-v historickém souhrnu: zisk zeleně, ztráta červeně), <strong>kolik procent účtu se
-vydělalo nebo prodělalo</strong> a <strong>kolik procent bylo maximálně v riziku</strong>. Řez je
-podle <strong>Globex seance</strong>, ne kalendářního dne, takže nedělní večer patří pondělí.</p>
+v %, největší ziskový a největší ztrátový obchod, od v1.12 <strong>Σ dnes hrubě</strong> —
+denní bilance v dolarech (na 1 kontrakt, stejná konvence jako hrubý výsledek
+v souhrnu: zisk zeleně, ztráta červeně), od v1.23 <strong>poplatky dnes</strong> a
+<strong>Účet dnes čistě</strong> (jen obchodovatelné setupy dne), <strong>kolik procent účtu se
+vydělalo nebo prodělalo</strong> (hrubě, 1 kontrakt) a <strong>kolik procent bylo
+maximálně v riziku</strong>. Řez je podle <strong>Globex seance</strong>, ne kalendářního dne,
+takže nedělní večer patří pondělí. První dlaždice <strong>Seance</strong> ukazuje, ke
+kterému obchodnímu dni čísla patří; po 17:00 CT se blok sám přenačte na novou
+seanci (do minuty), i když zrovna nevznikl žádný setup.</p>
 <p><strong>EV / obchod (Expected Value):</strong> v historickém souhrnu na Setupech a jako
 karta ve Stats → Výkon setupů. Vzorec: (Win Rate × Avg Win) − (Loss Rate ×
 Avg Loss) — průměrný očekávaný výsledek na jeden obchod. <strong>EV &gt; 0 znamená,
@@ -1643,7 +2112,13 @@ market data linek od minulého údaje (registr subskripcí: sweep dávka +
 trvalé streamy), ne konfigurační konstanta. Strop účtu je 100 linek;
 typická špička sweep okna je ~85 %.</li>
 <li><strong>α badge</strong> (u FA odhadu OI) — kalibrovaná hodnota alfa per symbol + počet
-kalibračních dnů; do první kalibrace default 0,4.</li>
+kalibračních dnů, v tooltipu i zdroj čistého toku; do první kalibrace jede
+engine na defaultu 0,4 a badge se nekreslí. Od mechaniky v6 (#1403) se α
+kalibruje znovu z tisků se stranou agresora a FA odhad je vypnutý, dokud nemá
+5 platných dnů (ADR-0057 bod 6): badge ukáže <strong>„FA nekalibrováno n/5“</strong>.
+Stav kalibrovaný z midpointu je jiná veličina a počítá se jako 0 dnů, bez
+stavu „0/5“ (ne default α); ad-hoc pohled FA nemá a badge se u něj nekreslí
+(#1632).</li>
 <li><strong>Catch-up</strong> — první minuty po startu enginu jsou označené příznakem
 (CumΔ má vysvětlující popisek): kumulativy se dopočítávají ze session
 archivu, ne od nuly.</li>
@@ -1679,7 +2154,11 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 </tr>
 <tr>
 <td>Lišta grafu ukazuje „demo data“</td>
-<td>Aplikace se nedostala k API / žádná data pro dnešek. Zkontroluj, že služby běží (<code>docker compose ps</code>) a engine je online.</td>
+<td>API odpovědělo, že pro symbol a den data nejsou (čerstvě přidaný ticker, expirace mimo retenci). Zkontroluj, že engine je online a sbírá.</td>
+</tr>
+<tr>
+<td>Lišta grafu ukazuje „bez dat“, nad grafem „API je nedostupné nebo se spouští“</td>
+<td>API neběží nebo se po restartu ještě spouští — graf je prázdný a aplikace to zkouší znovu každých 5 s; demo data se v tu chvíli neukazují, aby nevypadala jako skutečná (v1.31, #1355). Trvá-li to přes minutu, zkontroluj <code>docker compose ps</code>.</td>
 </tr>
 <tr>
 <td><strong>Alert „OI nedorazilo“</strong></td>
@@ -1723,11 +2202,11 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 </tr>
 <tr>
 <td><strong>Přihlásil jsem se na mobilu a data stála</strong></td>
-<td>Market data jsou u IBKR <strong>per uživatel</strong>, takže je mobil přetáhne k sobě (error 10197) — aplikace zůstane připojená, jen jí přestanou chodit ticky. Řeší to sama: do <strong>30 s</strong> převezme cenu a do <strong>3 minut</strong> celý opční řetěz <strong>tastytrade</strong> a v hlavičce se rozsvítí jantarový chip; od v1.17 se od 3. minuty doplňují i <strong>svíčky</strong> (úsek označený jako doplněný) a když mobil shodí i Gateway, pipeline se založí z posledního známého řetězu a tasty (alert „degradovaný start&quot;). Po návratu IBKR se přepne zpátky (cena po 60 s, řetěz po 5 čistých minutách). Dělat nemusíš nic. <strong>Co z tasty není:</strong> opční objem a Prémie $ ve strike profilu, panely Vol, OptVol, CumΔ a Delta flow — stojí do návratu IBKR.</td>
+<td>Market data jsou u IBKR <strong>per uživatel</strong>, takže je mobil přetáhne k sobě (error 10197) — aplikace zůstane připojená, jen jí přestanou chodit ticky. Řeší to sama: do <strong>30 s</strong> převezme cenu a do <strong>3 minut</strong> celý opční řetěz <strong>tastytrade</strong> a v hlavičce se rozsvítí jantarový chip; od v1.17 se od 3. minuty doplňují i <strong>svíčky</strong> (úsek označený jako doplněný) a když mobil shodí i Gateway, pipeline se založí z posledního známého řetězu a tasty (alert „degradovaný start&quot;). Po návratu IBKR se přepne zpátky (cena po 60 s, řetěz po 5 čistých minutách). Dělat nemusíš nic. <strong>Co z tasty není:</strong> opční objem a Prémie $ ve strike profilu, panely Vol, OptVol a Delta flow — stojí do návratu IBKR. CumΔ do mechaniky v6 stojí taky, od v6 běží dál z tisků tastytrade (ADR-0057, #1632).</td>
 </tr>
 <tr>
 <td><strong>Chip „⤳ řetěz: tastytrade&quot; v hlavičce</strong></td>
-<td>Běží záložní zdroj dat (viz řádek výše). Graf, heatmapa, zdi, GEX úrovně, OI i greeks jedou dál (greeks na strikech, kde je dxFeed neposílá, dopočítává BS model — v řadě zdrojů greeks jako <code>computed</code>). <strong>Stojí ale CumΔ a net objem</strong> — tastytrade denní objem ve stejném významu nedodává a vymyslet ho by bylo horší než ho přiznat. Rozjedou se samy po návratu na IBKR.</td>
+<td>Běží záložní zdroj dat (viz řádek výše). Graf, heatmapa, zdi, GEX úrovně, OI i greeks jedou dál (greeks na strikech, kde je dxFeed neposílá, dopočítává BS model — v řadě zdrojů greeks jako <code>computed</code>). <strong>Do mechaniky v6 stojí CumΔ a net objem</strong> — tastytrade denní objem ve stejném významu nedodává a vymyslet ho by bylo horší než ho přiznat; rozjedou se samy po návratu na IBKR. <strong>Od v6 běží CumΔ a net objem dál z tisků tastytrade</strong> (ADR-0057), chybí jen rozklad objemu na tisky a zbytek bez tisku; tooltip chipu říká, který případ platí (#1632).</td>
 </tr>
 <tr>
 <td><strong>Ukazatel Greeks/OI/OHLC má pomlčku</strong></td>
@@ -1837,7 +2316,12 @@ absolutní čísla:</strong> že po expiraci struktura zmizí, je jistota daná
 kalendářem; přesná síla pásma je odhad.</p>
 <p><strong>Jednotka ($/bod vs. $/1 %).</strong> Engine počítá a ukládá vždycky jen surové
 <strong>$/bod</strong>; přepínač <strong>Jednotka</strong> v řádku přepínačů je čistě zobrazovací a
-objeví se jen se zapnutou Dyn plochou.</p>
+objeví se jen s plochou <strong>Dyn GEX</strong>. <strong>Dyn Charm</strong> a <strong>Dyn Vanna</strong> mají pevnou
+jednotku <strong>dolarové delty</strong> (#1401): charm = kolik $ delty dealerům přibude
+nebo ubude <strong>za den</strong> jen plynutím času, vanna = kolik $ delty přibude nebo ubude
+při změně IV o <strong>1 bod</strong>. Obojí je hodnota enginu × cena hladiny P. Váha P²/100
+z $/1 % by u nich nedávala smysl, protože nejde o pohyb ceny (dřív ukazovala
+na ES ~79× víc).</p>
 <table>
 <thead>
 <tr>
@@ -1863,8 +2347,8 @@ napříč cenovými hladinami i napříč dny s různou úrovní indexu.</p>
 ani poloha flipu se přepnutím nemění</strong>.</p>
 <blockquote>
 <p><strong>Co přepínač NEovlivňuje:</strong> zdi, GEX levels, flip a setupy. Ty se počítají
-z měřeného pole a zůstávají v původních jednotkách. Přepínač působí na Dyn
-plochu (GEX / Charm / Vanna) a na GEX křivku ve strike profilu.</p>
+z měřeného pole a zůstávají v původních jednotkách. Přepínač působí na plochu
+Dyn GEX a na GEX křivku ve strike profilu; Dyn Charm a Vanna mají pevnou dolarovou deltu.</p>
 </blockquote>
 <blockquote>
 <p><strong>Nezaměň s druhým „Jednotkou&quot;.</strong> Pod strike profilem dole je vlastní
@@ -2008,22 +2492,27 @@ zároveň nejhorší obchody (v5: −0,34 R vs. +0,06 R se stopem v rozpočtu).<
 <tr>
 <td><strong>Denní brzda</strong></td>
 <td>−3 R</td>
-<td>po realizované ztrátě −3 R za seanci (obchodovatelné setupy, ES i NQ) nové setupy jen <strong>stínově</strong> do settle; alert do zvonku a pushe</td>
+<td>po realizované ztrátě −3 R za seanci (obchodovatelné setupy, ES i NQ) nové setupy jen <strong>stínově</strong> do konce seance (17:00 CT), každý den včetně pátku — ne do settle; alert do zvonku a pushe</td>
 </tr>
 <tr>
 <td><strong>Týdenní brzda</strong></td>
 <td>−6 R</td>
-<td>totéž za obchodní týden (od pondělní seance)</td>
+<td>totéž za obchodní týden: počítá se od otevření pondělní seance (neděle 17:00 CT) a stín platí do konce obchodního týdne (neděle 17:00 CT)</td>
 </tr>
 <tr>
 <td><strong>Strop stopů šablony</strong></td>
 <td>2 / den</td>
-<td>třetí pokus téže šablony po dvou stopech za seanci je stín</td>
+<td>třetí pokus téže šablony po dvou stopech za seanci je stín, až do konce seance (17:00 CT)</td>
 </tr>
 <tr>
 <td><strong>Brána šablon</strong></td>
 <td>zapnuta, n ≥ 30, okno 60 seancí</td>
-<td>obchodovatelná je jen šablona, jejíž <strong>dolní mez očekávání</strong> (jednostranný 95% interval Ø R ze setupů se stopem v rozpočtu) je kladná; ostatní se dál měří, ale neobchodují</td>
+<td>obchodovatelná je jen šablona <strong>na daném symbolu</strong>, jejíž <strong>dolní mez očekávání</strong> (jednostranný 95% interval Ø R ze setupů téhož symbolu se stopem v rozpočtu) je kladná; ES a NQ se hodnotí zvlášť; ostatní se dál měří, ale neobchodují</td>
+</tr>
+<tr>
+<td><strong>Zkouška — výchozí rozpočet</strong> (v1.27)</td>
+<td>10 setupů / −3 R</td>
+<td>předvyplní dialog Zkoušky v Setupy → Knihovna (meze 1–20 setupů a 0,5–6 R); běžící zkoušky si nesou rozpočet ze zahájení</td>
 </tr>
 </tbody></table>
 <p><strong>Stín vs. obchodovatelný.</strong> Setup <strong>vzniká vždy</strong> (měření nesmí přestat —
@@ -2031,16 +2520,40 @@ právě velké stopy chceme dál vidět), ale nese verdikt: sloupec <strong>Úč
 obrazovce Setupy ukazuje <code>1 ks · 400 $</code> (kontrakty · ztráta na stopu) u
 obchodovatelného, nebo <code>stín: stop nad rozpočtem rizika</code> / <code>denní brzda</code> /
 <code>šablona bez prokázaného edge</code> u stínu. Stínový řádek je ztlumený, <strong>nechodí
-do pushe</strong> a nevstupuje do bilance účtu; přepínač <strong>Jen obchodovatelné</strong> je
-schová. Tooltip štítku nese rozpočet, stop v bodech, verdikt brány (n, dolní
-mez) a stav brzd (dnes / týden v R).</p>
+do pushe</strong> a nevstupuje do bilance účtu; přepínač <strong>Jen obchodovatelné v
+tabulce</strong> ho z tabulky schová (souhrn nahoře ukazuje rozdělení vždy). Tooltip štítku nese rozpočet, stop v bodech, verdikt brány (n, dolní
+mez) a stav brzd (dnes / týden v R). U setupů vzniklých před v1.24 je „týden“
+součet za 84 dní, ne za obchodní týden: týdenní brzda omylem sčítala celé okno
+brány šablon (#1322). Stav v době vzniku se zpětně nepřepisuje.</p>
+<p><strong>Brána po symbolech (v1.25, #1325).</strong> Brána hodnotí každou dvojici šablona ×
+symbol zvlášť: trend_continuation na ES má svůj verdikt a na NQ jiný. ES a NQ se
+u téže šablony chovají jinak (jiný typický stop i dopad skluzu), takže edge musí
+prokázat každý symbol sám; starší setupy se dopočítají hodnotou bodu vlastního
+symbolu. Do v1.24 brána omylem míchala setupy obou symbolů a každý symbol ji
+počítal nad jiným vzorkem. Tutéž šablonu proto mohla ve stejnou chvíli pustit na
+NQ a zablokovat na ES a verdikt NQ přeskakoval i několikrát za hodinu. Setupy
+vzniklé před v1.25 nesou verdikt podle staré logiky a zpětně se nepřepisují.
+Symbolem se myslí ticker z watchlistu: pinovaný kontrakt (např. <code>ESZ6</code>, viz
+„Pinovaný kontrakt ve watchlistu“ níže) má vlastní vzorek, nepřebírá ho od
+<code>ES</code> a začíná od nuly. Než nasbírá 30 vlastních uzavřených setupů šablony,
+jsou všechny jeho setupy stínové, a protože pinovaný kontrakt obvykle žije jen
+roll týden, zůstane v praxi stínový celý.
+<strong>Co to znamená:</strong> k 30. 9. 2026 nemá žádná šablona kladnou dolní mez na žádném
+symbolu (trend_continuation je v bloku na ES i NQ, ostatní šablony nemají 30
+vzorků), takže nové setupy jsou stínové: nechodí z nich push a bilance účtu
+stojí. Od v1.27 jde bránu pro vybranou buňku šablona × ticker vědomě přebít
+<strong>Zkouškou s rozpočtem</strong> v Setupy → Knihovna (níže); sizing a brzdy platí dál.
+Zaškrtávátko <strong>Brána šablon</strong> v Settings zmizelo — vypnout bránu celou by byla
+druhá cesta k obchodování všeho bez rozpočtu (zůstalo jen jako nouzová cesta přes
+API). Kritérium brány se nemění; přehodnotí se kolem 28. 10. na datech od 30. 9.
+(připomínka #1334).</p>
 <p><img src="img/setupy-ucet-risk.jpg" alt="Setupy — sloupec Účet: stín „stop nad rozpočtem rizika“ / „šablona bez prokázaného edge“, nad tabulkou Kouč nad setupy"></p>
-<p><strong>Bilance účtu.</strong> Dlaždice <strong>Účet (obchodovatelné)</strong> v Setupech a karta
-<strong>Účet 50k</strong> ve Stats → Výkon setupů: Σ (kontrakty × R × stop × bod −
-poplatky), počet obchodů, počet stínů, poplatky a max drawdown v $. Poplatek
-je default 10 $ za kontrakt a obchod v jednotkách aplikace (= 1 $ reálně).
-Vedle toho zůstává <strong>USD simulace (#679)</strong> z kalkulačky v prohlížeči — ta
-počítá s tvým reálným účtem a mikro kontrakty.</p>
+<p><strong>Bilance účtu.</strong> Řádek <strong>Účet 50k</strong> v Setupech a karta <strong>Účet 50k</strong> ve
+Stats → Výkon setupů: Σ (kontrakty × R × stop × bod − poplatky), počet
+obchodů, počet stínů, poplatky a max drawdown v $ — od v1.23 z celé historie
+(#1319). Poplatek je default 10 $ za kontrakt a obchod v jednotkách aplikace
+(= 1 $ reálně). Vedle toho zůstává <strong>USD simulace (#679)</strong> podle kalkulačky
+(Settings → Trading) — ta počítá s tvým reálným účtem a mikro kontrakty.</p>
 <p><strong>Co to (ne)slibuje.</strong> Pravidla zaručují, že účet přežije sérii ztrát (1 %:
 max drawdown ~19 % v simulaci nad v5; 2 %: ~39 %) a že ztráta přes 1 000 $
 v aplikaci (100 $ reálně) je z definice nemožná. <strong>Nezaručují zisk</strong> — edge
@@ -2051,8 +2564,148 @@ obchodech s edge ≥ +0,2 R. Zvětšovat stop kvůli sizingu je špatně — sto
 nezvětšuje, zpřesňuje se vstup.</p>
 <p><strong>Změna parametrů.</strong> Settings → Risk management: každé uložení založí novou
 verzi parametrů setupů s povinným důvodem (audit), engine ji převezme do
-sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly.</p>
+sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly. Od v1.27 bez
+důvodu (aspoň 3 znaky) tlačítko uložit nejde — dřív se místo chybějícího důvodu
+zapsal náhradní text. Stádium jednotlivých šablon (Stín, Zkouška) se v Settings
+nemění, patří do Setupy → Knihovna.</p>
 <p><img src="img/settings-risk-management.jpg" alt="Settings → Risk management a Notifikace (Telegram)"></p>
+<h3>Knihovna setupů — stádia Auto / Stín / Zkouška (v1.27, #1323)</h3>
+<p>Brána šablon rozhoduje za tebe, a dnes říká „ne“ všem buňkám. <strong>Knihovna</strong>
+(Setupy → podzáložka Knihovna) je místo, kde rozhoduješ ty — vedle čísel, ze
+kterých se rozhoduje. Jednotkou je <strong>buňka šablona × ticker</strong>: trend_continuation
+na NQ je jiná buňka než na ES, a pinovaný kontrakt (např. <code>NQZ6</code>) má vlastní buňku,
+stádium nastavené pro <code>NQ</code> pro něj neplatí.</p>
+<p><strong>Hlavička</strong> ukazuje okno brány (60 seancí) a mechaniku, stav <strong>brzd účtu</strong>
+(„den -1.0 / -3.0 R · týden -2.5 / -6.0 R“, stopy šablony za seanci, aktivní
+brzda červeně) a <strong>zkoušky</strong> s čerpáním (skončená s důvodem „vyčerpaná“ nebo
+„jiná mechanika“). Brzdy se počítají napříč všemi symboly, stejně jako v enginu.
+Buňka s nastaveným Stínem nebo Zkouškou je v Knihovně vždy, i když ticker
+(třeba pinovaný kontrakt) mezitím z watchlistu vypadl — zkoušku tak vždy vidíš
+a můžeš vrátit.</p>
+<p><strong>Tabulka</strong> — každý řádek je buňka:</p>
+<table>
+<thead>
+<tr>
+<th>Sloupec</th>
+<th>Co znamená</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Setup</strong></td>
+<td>číslo a název šablony (T7 Pokračování trendu)</td>
+</tr>
+<tr>
+<td><strong>Ticker</strong></td>
+<td>ticker z watchlistu (vč. pinovaného kontraktu)</td>
+</tr>
+<tr>
+<td><strong>Stádium</strong></td>
+<td>Auto / Stín / Zkouška; u zkoušky čerpání „3/10 · -1.0 z -3.0 R“. Skončená zkouška se hlásí jako „Auto (zkouška vyčerpána)“ nebo „Auto (zkouška skončila)“ po změně mechaniky. Klik otevře dialog změny</td>
+</tr>
+<tr>
+<td><strong>Brána teď</strong></td>
+<td>verdikt spočítaný <strong>teď</strong> týmiž funkcemi jako engine: ✓ pass, ✕ block, „· 24/30“ = nedostatek vzorku (n z minima), plus dolní mez ØR (LB)</td>
+</tr>
+<tr>
+<td><strong>ØR hrubě</strong>, <strong>ØR čistě</strong></td>
+<td>dva sloupce: průměrný výsledek v R ze vzorku brány; čistě = po nákladech 1 mikra (komise + skluz 1 tick na stranu, ADR-0030). Krátký stop zvedá náklad v R — na ES může kladné hrubé ØR čistě klesnout pod nulu. Tooltip ukáže i <strong>čistě v $</strong>: součet za vzorek v reálných mikro dolarech při skutečném sizingu (kontrakty z kontextu setupu) — kladné R může v dolarech prodělat</td>
+</tr>
+<tr>
+<td><strong>Průkaznost</strong></td>
+<td>n / n potřebné — kolik vzorků by prokázalo edge +0,2 R (jednostranně 95 %, síla 80 %); n potřebné nikdy neklesne pod minimum brány (30). Pod minimem se samými stejnými výsledky (dva stopy po −1 R) se neodhaduje — „—“</td>
+</tr>
+<tr>
+<td><strong>Rozhodnutelné</strong></td>
+<td>za kolik seancí buňka při dnešním tempu vzorek nasbírá; „vzorek stačí“ = už ho má; <strong>„v okně nedosáhne · max ~337/462“</strong> = brána bere jen posledních 60 seancí, takže při dnešním tempu se do ní vejde nejvýš ~337 vzorků z potřebných 462 — edge +0,2 R brána neprokáže nikdy (rozhodne jen větší edge); „málo dat“ = n potřebné nejde odhadnout</td>
+</tr>
+</tbody></table>
+<p>Ve výchozím stavu jsou řádky <strong>seřazené podle průkaznosti</strong>, ne podle ØR: malý vzorek
+s vysokým ØR je náhoda, ne edge. Klik na záhlaví sloupce řadí vzestupně, další klik
+sestupně; na mobilu, kde záhlaví chybí, se řadí výběrem <strong>Řadit</strong> a tlačítkem směru ▲/▼.
+Buňky bez hodnoty („—“, „málo dat“, brána „vypnuta“) jsou v obou směrech na konci.
+<strong>Brána teď</strong> řadí podle verdiktu (block → nedostatek vzorku → pass) a uvnitř verdiktu
+podle LB; buňka bez LB je poslední ve svém verdiktu. V <strong>Rozhodnutelné</strong> je
+„v okně nedosáhne“ nejdál od rozhodnutí — vzestupně za všemi odhady, sestupně první.
+Filtry nad tabulkou zúží buňky podle tickeru, stádia (toho, které se teď uplatní —
+skončená zkouška je Auto), brány, názvu setupu nebo na <strong>jen ØR čistě &gt; 0</strong>
+(„zobrazeno N z M“; <strong>Zrušit filtry</strong> vrátí všechny buňky a řazení nechá). Řazení
+i filtry si pamatuje tento prohlížeč — na mobilu je nastavení zvlášť.
+Tooltipy u čísel ukazují vzorec a vstupy. Pod tabulkou
+jsou vyjmenované vyřazené šablony (<code>disabled_templates</code>), které se neměří vůbec.
+Na úzké obrazovce (mobil) se řádky skládají do karet s popisky místo sloupců.</p>
+<p><strong>Stádia buňky:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Stádium</th>
+<th>Co se děje</th>
+<th>Push</th>
+<th>Účet a brzdy</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Auto</strong> (výchozí)</td>
+<td>jako dřív: sizing → brzdy → brána</td>
+<td>jen obchodovatelné</td>
+<td>jen obchodovatelné</td>
+</tr>
+<tr>
+<td><strong>Stín</strong></td>
+<td>setup vzniká, měří se, vstupuje do brány a je vidět v grafu i tabulce, ale <strong>nikdy</strong> není obchodovatelný (štítek „stín: ve stínu z rozhodnutí uživatele“)</td>
+<td>ne</td>
+<td>ne</td>
+</tr>
+<tr>
+<td><strong>Zkouška</strong></td>
+<td>přebije verdikt brány (block i nedostatek vzorku), dokud nevyčerpá rozpočet — N setupů nebo ztrátu X R</td>
+<td>ano, se štítkem ZKOUŠKA</td>
+<td>ano</td>
+</tr>
+</tbody></table>
+<p><strong>Sizing a brzdy nepřebije žádné stádium.</strong> Setup se stopem nad rozpočtem
+nebo po denní brzdě zůstane stínem i ve Zkoušce. Brzdy mají přednost i před
+Stínem (v tabulce Setupů pak vidíš důvod „denní brzda“).</p>
+<p><strong>Zkouška a její konec.</strong> Rozpočet se zadává při zahájení (výchozí 10 setupů
+nebo −3 R, meze 1–20 setupů a 0,5–6 R). Čerpají ho jen setupy, které zkouška
+opravdu pustila přes bránu; otevřený setup se započítá do počtu hned, do R až po
+uzavření. Na šablonu a ticker je otevřený nejvýš jeden setup, takže rozpočet se
+přečerpá nejvýš o něj. Po vyčerpání se buňka <strong>sama vrátí na Auto</strong> (rozhoduje
+brána) a přijde upozornění <strong>Konec zkoušky setupu</strong>; nic se přitom nepřepisuje,
+riziko smí systém jen snížit, zvýšit ho smíš jen ty. Zkoušku jde kdykoli
+<strong>obnovit</strong> s novým důvodem — začne čerpat od nuly a v dialogu vidíš výsledek té
+předchozí. Když engine nemůže přečíst výsledky (výpadek databáze), zkouška
+bránu nepřebije. Zkouška platí od <strong>příští minuty</strong> po uložení a jen na verzi
+mechaniky detektoru, na které začala: po nasazení nové mechaniky skončí (bez
+upozornění, v Knihovně „Auto (zkouška skončila)“) a pro novou mechaniku ji
+obnovíš vědomě sám — rozpočet se nikdy neobnoví bez tebe.</p>
+<p><strong>Dialog změny stádia</strong> (klik na stádium):</p>
+<ol>
+<li>Vyber stádium. U Auto vidíš verdikt brány teď.</li>
+<li>U Zkoušky nastav rozpočet. Štítek <strong>edge neprokázán</strong> znamená, že dolní mez
+ØR je ≤ 0 (nebo ji vzorek ještě nedává) — zkouška je obchod s reálnými
+penězi bez prokázané výhody. Dialog připomene, že <strong>brzdy jsou společné
+napříč symboly</strong>: ztráty zkoušky můžou denní nebo týdenní brzdou zastavit
+i ostatní obchodovatelné setupy.</li>
+<li>Vyber <strong>důvod</strong> — čip (test naživo, edge neprokázán, drawdown, jiný režim
+trhu) a/nebo vlastní text. Bez důvodu uložit nejde.</li>
+<li>Řádek <strong>Změní se</strong> shrne dopad (push, účet, brzdy). <strong>Uložit → verze N</strong>
+založí novou verzi parametrů setupů; engine ji převezme do sekund a nové
+setupy se jí řídí (Zkouška od příští minuty). Už otevřené setupy si nesou
+stádium platné při vzniku.</li>
+</ol>
+<p><strong>Kde zkoušku uvidíš dál:</strong> obchodovatelný setup ze zkoušky má ve sloupci Účet
+štítek „· zkouška 3/10“ a tooltip s čerpáním; souhrn v Přehledu má řádek
+<strong>· z toho Zkouška</strong> (podmnožina obchodovatelných — nesčítat znovu) a mezi důvody
+stínu „ve stínu z rozhodnutí uživatele“. Push nového setupu na Telegram nese
+šablonu (např. „T7 trend_continuation“), stádium a řádek důkazu (ØR hrubě
+a čistě, n / n potřebné, brána). Když dolní mez ØR není kladná — u setupu ze
+zkoušky vždy — začíná řádek štítkem <strong>edge neprokázán:</strong>, jinak <strong>Důkaz:</strong>.</p>
+<p><strong>Co Knihovna (zatím) neumí:</strong> detail setupu s grafem výkonu, úpravy prahů
+šablon a nové setupy přijdou v dalších fázích #1323. Diskreční setup (např. NQ</p>
+<ul>
+<li>Fibonacci) si zatím založ jako kartu v Deník → Playbook a obchody jí značkuj
+i s plánovaným stopem.</li>
+</ul>
 <h3>Flip: naměřený vs. dynamický = flip ZÓNA</h3>
 <p>V aplikaci jsou dva flipy — <strong>obě čáry měří totéž dvěma metodami</strong>:</p>
 <table>
@@ -2090,7 +2743,7 @@ sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly.</p>
 </tr>
 <tr>
 <td><strong>FA odhad OI</strong></td>
-<td>OI dopočtené z klasifikovaného toku (netflow×α) místo změřeného archivu — dostupné dřív, ale je to odhad; přepínač OI: Měřené/FA odhad, kalibrovaná α ve stavové liště.</td>
+<td>OI dopočtené z klasifikovaného toku (netflow×α) místo změřeného archivu — dostupné dřív, ale je to odhad; přepínač OI: Měřené/FA odhad, kalibrovaná α ve stavové liště (od v6 „nekalibrováno n/5“, dokud nemá 5 dnů z tisků). Minuta bez FA řad je mezera, ne měřené OI.</td>
 <td></td>
 <td></td>
 </tr>
@@ -2205,7 +2858,13 @@ dotáhnou do minulosti (dxFeed Candle, s objemem), první heatmapa naskočí do
 ~10 s, dál se skládá po minutách. Zdi, flip a Max Pain <strong>začínají v okamžiku
 zapnutí</strong> — historie opčního řetězu se zpětně nedá dopočítat. Pohled žije,
 dokud ho máš otevřený (3 min po zavření se uklidí); setupy pro tyto tickery
-nevznikají (jen ES/NQ), kouč ale vyhodnotí i ruční obchody na akciích z deníku.</p>
+nevznikají (jen ES/NQ), kouč ale vyhodnotí i ruční obchody na akciích z deníku.
+Prémie v $ (panel PUT / CALL a profil v jednotce <strong>Prémie $</strong>) počítají
+s <strong>multiplikátorem 100</strong> (jeden opční kontrakt = 100 akcií,
+u indexu ×100). Dřív aplikace u akcií brala 50 jako u ES a ukazovala poloviční
+částky (#1400). Produkt, jehož multiplikátor aplikace nezná (např. NG), ukáže
+P/C jen jako poměr bez částek v $ a profil v kontraktech se štítkem
+<strong>Multiplikátor neznámý → kontrakty</strong>.</p>
 <p><strong>Roll týden a denní 0DTE.</strong> Po roll date (8 dnů před kvartální expirací) sleduje
 <code>ES</code> už nový kontrakt (Z6) a IBKR řetěz začíná až kvartální expirací. Denní 0DTE
 do pátku běží ještě na dobíhajícím kontraktu (U6) — v aplikaci existují jen z
@@ -2275,7 +2934,7 @@ trh chová jinak než jindy a aplikace to od v1.20 ví:</p>
 <tr>
 <td><strong>Pátek 9:30 ET (15:30 CEST) — SOQ</strong></td>
 <td>Kvartální futures a kvartální opce se vypořádají z <strong>otevíracích cen všech 500 akcií</strong> (Special Opening Quotation) — velká část „witchingu&quot; proběhne ráno, ne odpoledne. Open bývá rozhozený proti noční ceně futures.</td>
-<td>Odpočet v hlavičce míří na 9:30 ET, ne 16:00 ET. Po SOQ engine přepne na další expiraci (už na novém kontraktu). Alert „kvartální expirace proběhla&quot;.</td>
+<td>Kvartální futures a standardní kvartální opce končí v SOQ. Aplikace na kořenovém tickeru (<code>ES</code>, <code>NQ</code>) sleduje týdenní sérii nového kontraktu (EW3/QN3) — odpočet míří na <strong>16:00 ET</strong> a setupy i sondy běží celou seanci (v1.31, #1366). Na 9:30 ET míří jen u pinovaného expirujícího kontraktu (<code>ESZ6</code>). Alert „kvartální expirace proběhla&quot;.</td>
 </tr>
 <tr>
 <td><strong>Pátek odpoledne / close</strong></td>
@@ -2301,13 +2960,13 @@ nejbližší expirace (<code>GEXLENS_FRONT_ROLL_DAYS</code>, default 8).</p>
 <p><img src="img/briefing-expiracni-tyden.jpg" alt="Briefing — karta Expirační týden"></p>
 <h3>Playbook: zelený režim (spot NAD flip zónou)</h3>
 <ul>
-<li><strong>LONG:</strong> cena spadne na hranu silné zelené zóny / put wall. Potvrzení: svíčky se zkracují, dolní knoty, CumΔ prodejní tlak zpomaluje nebo diverguje. Vstup od hrany, cíl střed pásma / nejbližší silný strike, <strong>stop kousek POD zelenou zónu</strong> (když brzda selže, nemáš tam co dělat).</li>
+<li><strong>LONG:</strong> cena spadne na hranu silné zelené zóny / put wall. Potvrzení: svíčky se zkracují, dolní knoty, prodejní tlak v CumΔ zpomaluje nebo diverguje (do mechaniky v6 čti linku CVD podkladu, kap. 8). Vstup od hrany, cíl střed pásma / nejbližší silný strike, <strong>stop kousek POD zelenou zónu</strong> (když brzda selže, nemáš tam co dělat).</li>
 <li><strong>SHORT:</strong> zrcadlově od call wall / horní hrany zelené, zpět do středu range. Proražení zdi o pár ticků bez follow-through = extra palivo pro fade.</li>
 <li><strong>Ruce pryč:</strong> od honění breakoutů — v zeleném dni většinou selžou.</li>
 </ul>
 <h3>Playbook: červený režim (spot POD flip zónou / v červené)</h3>
 <ul>
-<li><strong>SHORT:</strong> průraz poslední zelené / flipu dolů s potvrzením CumΔ (padá s cenou). Vstup <strong>s pohybem</strong>, cíl další zelený pás / put wall pod tebou, stop nad proraženou úroveň. Rychlé pohyby → kratší držení, rychlejší posun stopu.</li>
+<li><strong>SHORT:</strong> průraz poslední zelené / flipu dolů s potvrzením CumΔ (padá s cenou; do mechaniky v6 linka CVD podkladu, kap. 8). Vstup <strong>s pohybem</strong>, cíl další zelený pás / put wall pod tebou, stop nad proraženou úroveň. Rychlé pohyby → kratší držení, rychlejší posun stopu.</li>
 <li><strong>LONG:</strong> jediný spolehlivý = <strong>reclaim flipu</strong> — návrat nad žlutou, retest shora drží. Cíl první zelená zóna nad flipem.</li>
 <li><strong>Ruce pryč:</strong> od „už to spadlo hodně&quot; longů — zesilující dealeři je přejedou.</li>
 </ul>
@@ -2360,6 +3019,14 @@ podkladu</strong>, ne absolutní čísla.</p>
 <td>Přechod na další kvartální kontrakt (likvidita se stěhuje ~2. čtvrtek měsíce expirace). Cenová historie přes roll obsahuje skok o roll spread — není to pohyb trhu (ADR-0028).</td>
 </tr>
 <tr>
+<td><strong>Knihovna setupů / stádium</strong></td>
+<td>Setupy → Knihovna (v1.27): pro každou buňku šablona × ticker volíš Auto (rozhoduje brána), Stín (měří se, neobchoduje) nebo Zkoušku (přebije bránu do vyčerpání rozpočtu). Sizing a brzdy platí vždy.</td>
+</tr>
+<tr>
+<td><strong>Průkaznost (n / n potřebné)</strong></td>
+<td>Kolik vzorků buňka má proti tomu, kolik by prokázalo edge +0,2 R. Knihovna podle ní řadí, ne podle ØR.</td>
+</tr>
+<tr>
 <td><strong>Flip (zero-gamma)</strong></td>
 <td>Cena, kde kumulativní NetGEX prochází nulou — hranice mezi režimem komprese a expanze volatility.</td>
 </tr>
@@ -2374,6 +3041,10 @@ podkladu</strong>, ne absolutní čísla.</p>
 <tr>
 <td><strong>Settle</strong></td>
 <td>Vypořádání/konec životnosti expirace — denní ES/NQ opce 20:00 UTC (22:00 SELČ). Pak jejich gamma z trhu zmizí.</td>
+</tr>
+<tr>
+<td><strong>PDC</strong> (previous day close)</td>
+<td>Včerejší close = <strong>RTH close předchozí obchodní seance</strong>: close poslední minuty před settle 16:00 ET (zkrácená seance 13:00 ET), v pondělí pátek — ne poslední minuta Globexu. Z něj hlasuje overnight ve verdiktu dne a je to úroveň PDC v cílech automatického scénáře (#1241, #1595); karty Briefingu a graf zatím berou poslední Globex minutu (#1596).</td>
 </tr>
 <tr>
 <td><strong>Gamma crunch</strong></td>
@@ -2405,7 +3076,7 @@ podkladu</strong>, ne absolutní čísla.</p>
 </tr>
 <tr>
 <td><strong>ΔOI vs. včera</strong></td>
-<td>Změna OI proti předchozímu dni — kde přes noc vznikly/zanikly pozice.</td>
+<td>Změna OI proti předchozímu <strong>obchodnímu</strong> dni (v pondělí proti pátku) — kde přes noc vznikly/zanikly pozice.</td>
 </tr>
 <tr>
 <td><strong>Evo OI</strong></td>
@@ -2417,7 +3088,7 @@ podkladu</strong>, ne absolutní čísla.</p>
 </tr>
 <tr>
 <td><strong>$/bod vs. $/1 %</strong></td>
-<td>Jednotka Dyn ploch a GEX křivky. $/bod = surové pole (gamma expozice na 1 bod pohybu). $/1 % = totéž vážené P²/100 — kolik dolarů dealeři přeobchodují při 1% pohybu; srovnatelné napříč cenovými hladinami, proto výchozí. Zdi, levels ani flip přepínač nemění.</td>
+<td>Jednotka Dyn GEX a GEX křivky (Charm a Vanna mají dolarovou deltu, #1401). $/bod = surové pole (gamma expozice na 1 bod pohybu). $/1 % = totéž vážené P²/100 — kolik dolarů dealeři přeobchodují při 1% pohybu; srovnatelné napříč cenovými hladinami, proto výchozí. Zdi, levels ani flip přepínač nemění.</td>
 </tr>
 <tr>
 <td><strong>Δ Flow C/P</strong></td>
@@ -2469,11 +3140,11 @@ podkladu</strong>, ne absolutní čísla.</p>
 </tr>
 <tr>
 <td><strong>Gate / Wilson LB</strong></td>
-<td>Podmínka spuštění signálů: bucket musí mít n ≥ 30 reakcí a spodní mez 95% intervalu úspěšnosti (Wilson lower bound) &gt; 0,50.</td>
+<td>Podmínka spuštění signálů: bucket musí mít n ≥ 30 reakcí a spodní mez 95% intervalu úspěšnosti (Wilson lower bound) &gt; 0,50 a</td>
 </tr>
 <tr>
 <td><strong>Tendence</strong></td>
-<td>Souhrnný chip Strong Short … Strong Long z 12 složek positioningu a toku (flip, zdi, CumΔ, charm/vanna tok…); orientační, váhy zatím nekalibrované.</td>
+<td>Souhrnný chip Strong Short … Strong Long z 12 složek positioningu a toku (flip, zdi, CumΔ, charm/vanna tok…); orientační, váhy zatím nekalibrované. Od mechaniky v6 (#1403, verze 5): sklon a rozchod CumΔ jen z tisků od burzy a jen v rámci seance (prvních 9 minut po otevření, 17:00–17:08 CT, a okno s mezerou nehlasují), poloha mezi zdmi má váhu 0 (v rozpadu zašedlá), Max Pain hlasuje jen 0–90 min do settle a hystereze pásma začíná s otevřením seance (#1460, #1581, #1584).</td>
 </tr>
 <tr>
 <td><strong>Drift</strong></td>

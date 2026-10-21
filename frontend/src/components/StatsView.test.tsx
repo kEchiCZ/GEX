@@ -156,6 +156,19 @@ const SUMMARY = {
   },
 }
 
+const SCENARIO_ROW = {
+  n: 2,
+  hit1: 1,
+  hit1_rate: 0.5,
+  n_second: 1,
+  hit2: 0,
+  hit2_rate: 0,
+  n_order: 1,
+  order_ok: 1,
+  order_rate: 1,
+  median_dev_em: 0.4,
+}
+
 beforeEach(() => {
   FakeWebSocket.reset()
   vi.stubGlobal(
@@ -176,21 +189,33 @@ beforeEach(() => {
                   ? {
                       evaluated: 3,
                       min_samples: 30,
+                      rules_version: 3,
                       by_verdict: { long: { n: 3, hits: 2, unscored: 0, hit_rate: 0.667, wilson_lb: 0.208, gate_open: false } }, // prettier-ignore
                       by_vote: { trend_higher: { n: 3, hits: 3, hit_rate: 1, wilson_lb: 0.439, gate_open: false } }, // prettier-ignore
                     }
-                  : url.includes('/settings')
+                  : url.includes('/scenarios/stats')
                     ? {
-                        settings: {
-                          retro_pass: {
-                            ran_at: '2026-07-29T05:00:00+00:00',
-                            classified: 12,
-                            reactions: 96,
-                            index_points: 480,
-                          },
+                        symbol: 'ES',
+                        rules_version: 3,
+                        preliminary: true,
+                        ...SCENARIO_ROW,
+                        by_source: {
+                          auto: { ...SCENARIO_ROW, preliminary: true },
+                          manual: { ...SCENARIO_ROW, preliminary: true },
                         },
                       }
-                    : {}
+                    : url.includes('/settings')
+                      ? {
+                          settings: {
+                            retro_pass: {
+                              ran_at: '2026-07-29T05:00:00+00:00',
+                              classified: 12,
+                              reactions: 96,
+                              index_points: 480,
+                            },
+                          },
+                        }
+                      : {}
       return Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
     }),
   )
@@ -291,4 +316,16 @@ test('sekce Verdikt dne (#1091): tabulky per verdikt a složku, brána sběr', a
   expect(text).toContain('67 %')
   expect(text).toContain('sběr (3/30)')
   expect(text).toContain('trend_higher')
+})
+
+test('verdikty a automatické scénáře přiznají verzi pravidel z API (#1588, #1632)', async () => {
+  makeView()
+  await waitFor(() => expect(screen.getByTestId('verdict-rules-version')).toBeTruthy())
+  expect(screen.getByTestId('verdict-rules-version').textContent).toContain(
+    'Jen aktuální verze pravidel (v3)',
+  )
+  await waitFor(() => expect(screen.getByTestId('scenario-rules-version')).toBeTruthy())
+  expect(screen.getByTestId('scenario-rules-version').textContent).toContain(
+    'aktuální verze pravidel verdiktu (v3), ruční všechny',
+  )
 })

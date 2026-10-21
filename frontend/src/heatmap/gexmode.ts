@@ -39,18 +39,23 @@ function sampleAt(
 /** Naměřená část: forward-fill profilů per minuta, vzorky na cenách strikes.
 
 Váha jednotky (#569) se násobí až PO interpolaci — na striku je cena P přesně
-známá; interpolovat zvážené hodnoty by dalo jiné (špatné) číslo. */
+známá; interpolovat zvážené hodnoty by dalo jiné (špatné) číslo.
+`gapMinutes` (FA profily, ADR-0057 bod 4, #1632): minuta se snímkem, ale bez
+FA řad, je mezera — poslední profil se přes ni nedrží. Minuta bez snímku
+(díra ve sběru) drží jako u měřených profilů. */
 function measuredLayer(
   profiles: (GexProfileRow | null)[],
   strikes: number[],
   minutes: number,
   units: PlaneUnits,
+  gapMinutes?: boolean[],
 ): Float32Array {
   const layer = new Float32Array(minutes * strikes.length)
   let last: GexProfileRow | null = null
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
     const row = profiles[minuteIdx] ?? null
     if (row) last = row
+    else if (gapMinutes?.[minuteIdx]) last = null
     if (!last) continue
     for (let strikeIdx = 0; strikeIdx < strikes.length; strikeIdx += 1) {
       layer[strikeIdx * minutes + minuteIdx] =
@@ -75,6 +80,33 @@ function transformInPlace(layer: Float32Array, scale: HeatmapScale): Float32Arra
   return layer
 }
 
+/** Profil platný v minutě `index` 1m osy: poslední řádek do ní včetně — stejné
+držení jako `measuredLayer`. Minuta z `gapMinutes` (FA mezera, #1632) hledání
+zastaví: FA profil se přes mezeru nedrží. */
+export function profileAt(
+  profiles: (GexProfileRow | null)[],
+  index: number,
+  gapMinutes?: boolean[],
+): GexProfileRow | null {
+  for (let i = Math.min(index, profiles.length - 1); i >= 0; i -= 1) {
+    const row = profiles[i]
+    if (row) return row
+    if (gapMinutes?.[i]) return null
+  }
+  return null
+}
+
+/** FA modelované pole pro projekci, jen když je z téže minuty jako měřené
+(nebo novější). Starší FA pole = FA je teď v mezeře a projekce by držela odhad
+z doby před ní (ADR-0057 bod 4, #1632); bez měřeného pole platí FA. */
+export function currentFaField(
+  measured: GexFieldRow | null,
+  fa: GexFieldRow | null,
+): GexFieldRow | null {
+  if (fa === null) return null
+  return measured === null || fa.tsIso >= measured.tsIso ? fa : null
+}
+
 /** Jmenovatel normalizace dyn módu — p99 naměřené části (sdílí ho i projekce).
 
 `units` (#569) default `per_point` = uložená jednotka enginu (bez váhy). */
@@ -83,8 +115,12 @@ export function gexDenominator(
   strikes: number[],
   scale: HeatmapScale,
   units: PlaneUnits = 'per_point',
+  gapMinutes?: boolean[],
 ): number {
-  const layer = transformInPlace(measuredLayer(profiles, strikes, profiles.length, units), scale)
+  const layer = transformInPlace(
+    measuredLayer(profiles, strikes, profiles.length, units, gapMinutes),
+    scale,
+  )
   return Math.max(p99Denominator(layer), 1e-9)
 }
 
@@ -100,8 +136,12 @@ export function buildGexGrid(
   minutes: number,
   scale: HeatmapScale,
   units: PlaneUnits = 'per_point',
+  gapMinutes?: boolean[],
 ): HeatmapGrid {
-  const layer = transformInPlace(measuredLayer(profiles, strikes, minutes, units), scale)
+  const layer = transformInPlace(
+    measuredLayer(profiles, strikes, minutes, units, gapMinutes),
+    scale,
+  )
   const denominator = Math.max(p99Denominator(layer), 1e-9)
   for (let index = 0; index < layer.length; index += 1) {
     const value = layer[index] / denominator
@@ -126,6 +166,8 @@ export function projectGexField(
     scale: HeatmapScale
     /** Jednotka zobrazení (#569); default per_point = uložená jednotka enginu. */
     units?: PlaneUnits
+    /** FA mezery 1m osy (#1632) — jmenovatel jako buildGexGrid. */
+    gapMinutes?: boolean[]
   },
 ): HeatmapGrid {
   const dataMinutes = dataMinutesOf(grid)
@@ -145,7 +187,13 @@ export function projectGexField(
   }
 
   const units = opts.units ?? 'per_point'
-  const denominator = gexDenominator(opts.profiles, grid.strikes, opts.scale, units)
+  const denominator = gexDenominator(
+    opts.profiles,
+    grid.strikes,
+    opts.scale,
+    units,
+    opts.gapMinutes,
+  )
   const strikeCount = grid.strikes.length
   const total = dataMinutes + extra
   const signed = grid.layers.signed ?? new Float32Array(grid.minutes * strikeCount)

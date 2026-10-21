@@ -49,7 +49,10 @@ export interface PipelineStatus {
       structured_volume: number
       fallback_volume: number
       dropped_no_delta: number
-      printed_share: number
+      /** Podíl tisků se stranou z klasifikovaného objemu; od v6 null = neměří se (ADR-0057). */
+      printed_share: number | null
+      /** Totéž z celého přírůstku objemu včetně struktury (#1460); null = neměří se. */
+      printed_share_total?: number | null
     }
   >
   subscription_error_recent?: { ts: string; contract: string; symbol: string }[]

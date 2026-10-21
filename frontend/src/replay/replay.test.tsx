@@ -6,6 +6,8 @@ import { BottomPanels } from '../components/BottomPanels'
 import type { PanelSeries } from '../components/BottomPanels'
 import { PlaybackBar } from '../components/PlaybackBar'
 import { demoGrid } from '../heatmap/demo'
+import { buildGexGrid, currentFaField, profileAt } from '../heatmap/gexmode'
+import { buildModeGrid } from '../heatmap/modes'
 import { cvdLineSegments } from '../panels/geometry'
 import { CrosshairProvider } from '../state/Crosshair'
 import {
@@ -281,16 +283,23 @@ test('FA zdroj (#232): oiest přepisuje odhad, měřený režim je bit-identick�
   expect([...withFa.callOi]).toEqual([...withoutFa.callOi])
   expect([...withFa.putOi]).toEqual([...withoutFa.putOi])
   // Odhad: přepsaná jen buňka z oiest (index = strikeIdx·minutes + minuteIdx)
-  expect(withFa.hasOiEst).toBe(true)
-  expect(withoutFa.hasOiEst).toBe(false)
+  // FA minuty = minuty s FA řadami (oiest, gexprofilefa, levelsfa)
+  expect([...withFa.faMinutes].sort()).toEqual([
+    '2026-07-16T15:00:00.000Z',
+    '2026-07-16T15:01:00.000Z',
+  ])
+  expect(withoutFa.faMinutes.size).toBe(0)
   expect(withFa.callOiEst[1]).toBe(140)
   expect(withFa.callOiEst[0]).toBe(withFa.callOi[0])
   expect([...withFa.putOiEst]).toEqual([...withFa.putOi])
 
   const day = assembleReplayDay(withFa)
   const dayWithout = assembleReplayDay(withoutFa)
-  expect(dayWithout.rawFa).toBeNull()
+  // Den bez FA řad: FA matice existuje, ale všechny minuty se snímkem jsou
+  // mezera — ne tichý přechod na měřené OI (ADR-0057 bod 4, #1632)
+  expect(dayWithout.rawFa?.oiGapMinutes).toEqual([true, true])
   expect(day.rawFa).not.toBeNull()
+  expect(day.rawFa!.oiGapMinutes).toEqual([false, false])
   expect(day.rawFa!.callOi[1]).toBe(140)
   expect(day.raw.callOi[1]).toBe(100) // měřená vrstva odhad nevidí
   // Měřený grid (výchozí OI mód) se FA řadou nemění — bit-identita
@@ -313,6 +322,94 @@ test('FA zdroj (#232): oiest přepisuje odhad, měřený režim je bit-identick�
   expect(appended.callOiEst[2]).toBe(150)
   expect(appended.putOiEst[2]).toBe(200) // bez odhadu = měření
   expect(appended.callOiEst[1]).toBe(140) // starší odhad přenos přežil
+  expect(appended.faMinutes.has('2026-07-16T15:02:00.000Z')).toBe(true)
+})
+
+test('FA při mezeře: minuta se snímkem bez FA řad je mezera, ne měřené OI (#1632)', () => {
+  // Minuty 0 a 2 mají FA řady, minuta 1 ne (mezera tisků pod v6: engine FA
+  // vrstvu nepíše); minuta 3 je jen bar (díra ve sběru, #459)
+  const cells: Cell[] = [0, 1, 2].flatMap((minuteIdx) => [
+    {
+      ts: minuteIso(minuteIdx),
+      strike: 7600,
+      right: 'C' as const,
+      volume: 10,
+      oi: 100,
+      delta: 0.5,
+    },
+    {
+      ts: minuteIso(minuteIdx),
+      strike: 7600,
+      right: 'P' as const,
+      volume: 5,
+      oi: 200,
+      delta: -0.4,
+    },
+  ])
+  const bars = Array.from({ length: 4 }, (_, minuteIdx) => ({
+    ...BARS[0],
+    ts_min: minuteIso(minuteIdx),
+  }))
+  const profile = (minuteIdx: number) => ({
+    ts_min: minuteIso(minuteIdx),
+    grid_start: 7590,
+    grid_step: 5,
+    values: [minuteIdx + 1, minuteIdx + 2],
+  })
+  const inputs = decodeBundle({
+    ...bundleFor(cells, bars, [], []),
+    levelsfa: [0, 2].map((minuteIdx) => ({ ts_min: minuteIso(minuteIdx), flip: 7580 })),
+    gexprofilefa: [profile(0), profile(2)],
+    gexprofile: [0, 1, 2].map(profile),
+  })
+  const day = assembleReplayDay(inputs)
+  expect(day.rawFa!.oiGapMinutes).toEqual([false, true, false, false])
+  // OI módy nad FA maticí: minuta 1 prázdná, objemové módy beze změny
+  const faGrid = buildModeGrid(day.rawFa!, 'oi', 'linear')
+  const measuredGrid = buildModeGrid(day.raw, 'oi', 'linear')
+  expect(faGrid.layers.call![1]).toBe(0)
+  expect(faGrid.layers.call![0]).toBeGreaterThan(0)
+  expect(measuredGrid.layers.call![1]).toBeGreaterThan(0)
+  const faVol = buildModeGrid(day.rawFa!, 'vol_signed', 'linear')
+  expect([...faVol.layers.signed!]).toEqual([...buildModeGrid(day.raw, 'vol_signed', 'linear').layers.signed!]) // prettier-ignore
+  // GEX křivka profilu: přes FA mezeru se FA profil nedrží, přes díru ve sběru ano
+  const gaps = day.rawFa!.oiGapMinutes
+  expect(profileAt(day.gexProfileFa!, 1, gaps)).toBeNull()
+  expect(profileAt(day.gexProfileFa!, 2, gaps)?.values).toEqual([3, 4])
+  expect(profileAt(day.gexProfileFa!, 3, gaps)?.values).toEqual([3, 4])
+  // Měřený profil drží jako dřív
+  expect(profileAt(day.gexProfile, 3)?.values).toEqual([3, 4])
+  // Dyn GEX podklad z FA profilů: sloupec mezery prázdný, ne poslední profil
+  const under = buildGexGrid(day.gexProfileFa!, day.raw.strikes, 4, 'linear', 'per_point', gaps)
+  expect(under.layers.signed![1]).toBe(0)
+  expect(under.layers.signed![0]).not.toBe(0)
+  expect(under.layers.signed![3]).toBe(under.layers.signed![2])
+  // Modelované FA pole starší než měřené = FA teď v mezeře → projekce bez něj
+  const field = (tsIso: string) => ({
+    tsIso,
+    gridStart: 7590,
+    gridStep: 5,
+    colStartIso: tsIso,
+    colStepMin: 1,
+    colCount: 1,
+    values: [1, 2],
+  })
+  expect(currentFaField(field(minuteIso(2)), field(minuteIso(2)))?.tsIso).toBe(minuteIso(2))
+  expect(currentFaField(field(minuteIso(2)), field(minuteIso(0)))).toBeNull()
+  expect(currentFaField(null, field(minuteIso(0)))?.tsIso).toBe(minuteIso(0))
+  expect(currentFaField(field(minuteIso(2)), null)).toBeNull()
+  // Živě: snímek minuty 4 bez FA je mezera, dokud FA řady nedorazí
+  const live = appendMinute(inputs, {
+    tsIso: minuteIso(4),
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: 12, delta: 0.5 }],
+  })
+  expect(assembleReplayDay(live).rawFa!.oiGapMinutes?.[4]).toBe(true)
+  const withFa = appendMinute(live, {
+    tsIso: minuteIso(4),
+    rows: [],
+    levels: { fa_flip: 7581, fa_call_wall: null, fa_put_wall: null },
+  })
+  expect(assembleReplayDay(withFa).rawFa!.oiGapMinutes?.[4]).toBe(false)
 })
 
 test('walldom řada: slabé úseky zdi + dominance v cenovce (ADR-0010, #223)', () => {
@@ -813,17 +910,19 @@ test('sloupec bez snapshotu se nevydává za měření (#459)', () => {
   expect(flip.series[gapIdx]).toBeNull()
 })
 
-test('přírůstkové panely počítají přes díru, ne vůči nulovému sloupci (#459)', () => {
+test('přírůstkové panely nepočítají přes díru ve sběru (#459, #1632)', () => {
   const day = buildReplayDay(
     bundleFor(CELLS_WITH_GAP, BARS_WITH_GAP, LEVELS_WITH_GAP, FLOW_WITH_GAP),
   )
 
   // Bez přeskočení díry by OptVol v MID vyskočil na celé kumulativní volume
-  // (30+20 = 50 místo přírůstku 22 proti M0) — falešný špic po každém výpadku
+  // (30+20 = 50) — falešný špic po každém výpadku. Přírůstek přes díru (22
+  // proti M0) nese objem celé díry, ne minuty obchodů: minuta po mezeře
+  // v objemu se kreslí jako 0 a referenci jen posune (#1632, rozhodnutí B)
   expect(day.panels.optVolCall[1]).toBe(0) // díra sama nic nenaměřila
-  expect(day.panels.optVolCall[2]).toBeCloseTo(30 - 10 + (20 - 8), 5)
+  expect(day.panels.optVolCall[2]).toBe(0)
   expect(day.panels.deltaFlowCall[1]).toBe(0)
-  expect(day.panels.deltaFlowCall[2]).toBeCloseTo((30 - 10) * 0.5 + (20 - 8) * 0.45, 5)
+  expect(day.panels.deltaFlowCall[2]).toBe(0)
   // CumΔ je kumulativní: v díře drží poslední známou hodnotu, nepropadá na nulu
   expect(day.panels.cumDelta).toEqual([50, 50, 30])
 })
@@ -1330,7 +1429,9 @@ test('minuta bez objemu (řetěz z tasty fallbacku) nese volumeMissing, ne nulu 
 /** Řady z #1602 — stejné jako `VOLUME_SERIES` v `api/tests/test_api.py`
  * (parita s API `volume_increments`): propad a návrat k maximu, kmitání IBKR
  * o 1 kontrakt, NULL uprostřed seance, první výskyt až v průběhu seance.
- * `null` = řádek s volume NULL (tasty fallback). */
+ * `null` = řádek s volume NULL (tasty fallback). Výjimka z parity: minuta po
+ * mezeře v objemu je v panelu 0 (#1632, B), Daily v API ji dál počítá
+ * ([100, NULL, 130] tam dá 0, 0, 30). */
 const VOLUME_SERIES: [(number | null)[], number[]][] = [
   [
     [1000, 800, 760, 1000, 1010],
@@ -1341,8 +1442,8 @@ const VOLUME_SERIES: [(number | null)[], number[]][] = [
     [0, 1, 0, 0, 1],
   ],
   [
-    [100, null, 130],
-    [0, 0, 30],
+    [100, null, 130, 150],
+    [0, 0, 0, 20],
   ],
   [
     [null, null, 500, 510],
@@ -1394,12 +1495,62 @@ test.each(VOLUME_SERIES)(
   },
 )
 
-test('chybějící řádek ani NULL uprostřed seance nepřidají celý kumulativ (#1602)', () => {
-  // Call: řádek v minutě 1 chybí; put: NULL v minutě 2. Dřív minuta po mezeře
-  // nesla celý denní kumulativ (130, resp. 310) místo přírůstku nad maximem.
-  const day = buildReplayDay(volumeBundle([100, undefined, 130, 131], [300, 305, null, 310]))
-  expect(day.panels.optVolCall).toEqual([0, 0, 30, 1])
-  expect(day.panels.optVolPut).toEqual([0, 5, 0, 5])
+test('chybějící řádek ani NULL uprostřed seance nepřidají celý kumulativ (#1602, #1632)', () => {
+  // Call: řádek v minutě 1 chybí; put: NULL v minutě 2. Před #1602 minuta po
+  // mezeře nesla celý denní kumulativ (130, resp. 310), před #1632 přírůstek
+  // celé mezery (30, resp. 5); teď je 0 a další minuta počítá proti 130 / 310
+  const day = buildReplayDay(volumeBundle([100, undefined, 130, 131], [300, 305, null, 310, 312]))
+  expect(day.panels.optVolCall).toEqual([0, 0, 0, 1, 0])
+  expect(day.panels.optVolPut).toEqual([0, 5, 0, 0, 2])
+})
+
+test('minuta po mezeře v objemu je v panelu 0, per strike (#1632)', () => {
+  // ES 2. 10.: po 3 h tasty fallbacku nesla minuta 19:18 UTC C 44 243 / P 49 343
+  // — objem celé mezery v jedné minutě. Pravidlo je per strike: strike 7600 má
+  // mezeru, 7650 ne — jeho přírůstek ve stejné minutě se počítá dál.
+  const cells: Cell[] = []
+  const series: Record<number, (number | null)[]> = {
+    7600: [100, null, 130, 150],
+    7650: [200, 210, 230, 231],
+  }
+  for (const [strike, values] of Object.entries(series)) {
+    values.forEach((volume, minuteIdx) => {
+      cells.push({
+        ts: minuteIso(minuteIdx),
+        strike: Number(strike),
+        right: 'C',
+        volume: volume ?? Number.NaN,
+        oi: 100,
+        delta: 0.5,
+      })
+    })
+  }
+  const bars = Array.from({ length: 4 }, (_, minuteIdx) => ({
+    ...BARS[0],
+    ts_min: minuteIso(minuteIdx),
+  }))
+  const day = buildReplayDay(bundleFor(cells, bars, [], []))
+  expect(day.panels.optVolCall).toEqual([0, 10, 20, 21])
+  expect(day.panels.deltaFlowCall).toEqual([0, 5, 10, 10.5])
+})
+
+test('minuta bez snapshotu (díra ve sběru #459) je mezera i pro objem (#1632)', () => {
+  // Minuta 1 má jen bar (opční sweep neběžel): maska objemu 0 → minuta 2 je
+  // první po mezeře a kreslí 0, minuta 3 počítá proti 130
+  const cells: Cell[] = [100, 130, 150].map((volume, i) => ({
+    ts: minuteIso([0, 2, 3][i]),
+    strike: 7600,
+    right: 'C' as const,
+    volume,
+    oi: 100,
+    delta: 0.5,
+  }))
+  const bars = Array.from({ length: 4 }, (_, minuteIdx) => ({
+    ...BARS[0],
+    ts_min: minuteIso(minuteIdx),
+  }))
+  const day = buildReplayDay(bundleFor(cells, bars, [], []))
+  expect(day.panels.optVolCall).toEqual([0, 0, 0, 20])
 })
 
 test('catch-up minuta referenci jen posune (#518, #1602)', () => {
@@ -1430,16 +1581,28 @@ test('živý append a přepis starší minuty dají totéž jako plný build (#5
   const live = assembleReplayDay(inputs)
   expect(live.panels.optVolCall).toEqual(full.panels.optVolCall)
   expect(live.panels.optVolPut).toEqual(full.panels.optVolPut)
-  // Živá minuta s volume null (fallback) referenci nemění
+  // Živá minuta s volume null (fallback) referenci nemění; první minuta po ní
+  // je mezera v objemu (#1632) — 0, reference 1012, další minuta +3
   const withNull = appendMinute(inputs, {
     tsIso: minuteIso(5),
     rows: [{ strike: 7600, right: 'C', oi: 100, volume: null, delta: 0.5 }],
   })
+  assembleReplayDay(withNull) // memo: sloupec 6 se pak počítá sám nad cache
   const recovered = appendMinute(withNull, {
     tsIso: minuteIso(6),
     rows: [{ strike: 7600, right: 'C', oi: 100, volume: 1012, delta: 0.5 }],
   })
-  expect(assembleReplayDay(recovered).panels.optVolCall.slice(5)).toEqual([0, 2])
+  assembleReplayDay(recovered)
+  expect(recovered.derived?.upTo).toBe(7)
+  const next = appendMinute(recovered, {
+    tsIso: minuteIso(7),
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: 1015, delta: 0.5 }],
+  })
+  // Cache po appendu drží prefix 0..6, dopočítá se jen nový sloupec
+  expect(next.derived?.upTo).toBe(7)
+  const liveDay = assembleReplayDay(next)
+  expect(liveDay.panels.optVolCall.slice(5)).toEqual([0, 0, 3])
+  expect(liveDay.panels).toEqual(assembleReplayDay({ ...next, derived: undefined }).panels)
   // Přepis starší minuty stáhne cache a reference se přepočte z prefixu:
   // minuta 1 nově 1005 → +5 v ní a minuta 4 počítá proti 1005, ne 1000
   const overwritten = appendMinute(inputs, {

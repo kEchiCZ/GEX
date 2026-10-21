@@ -127,6 +127,11 @@ function ProviderButton({
   )
 }
 
+/** Podíl tisků v procentech; null/chybí = neměří se („—“, ne 0 %, ADR-0057). */
+function sharePercent(share: number | null | undefined): string {
+  return share == null || !Number.isFinite(share) ? '—' : `${Math.round(share * 100)} %`
+}
+
 function SettingRow({ children, help }: { children: React.ReactNode; help: React.ReactNode }) {
   return (
     <div className="setting-row">
@@ -403,8 +408,9 @@ Sběr dat se na ~1–2 minuty přeruší.`)
                     : ''}
                 </td>
               </tr>
-              {/* Zdroj znaménka CumΔ (ADR-0032): místo smyšlené „šířky hot zóny"
-                  podíl objemu se stranou od burzy — pravdivý ukazatel pokrytí. */}
+              {/* Zdroj znaménka CumΔ (ADR-0032, ADR-0057): místo smyšlené „šířky
+                  hot zóny" podíl objemu se stranou od burzy — pravdivý ukazatel
+                  pokrytí. Zdroj určuje mechanika enginu, přepínač v UI není. */}
               {status.cumdelta_source && (
                 <tr>
                   <td>Cum Δ</td>
@@ -414,13 +420,14 @@ Sběr dat se na ~1–2 minuty přeruší.`)
                       ? Object.entries(status.cumdelta_coverage)
                           .map(
                             ([sym, c]) =>
-                              ` · ${sym}: tisky ${Math.round(c.printed_share * 100)} % objemu`,
+                              ` · ${sym}: tisky ${sharePercent(c.printed_share)} objemu` +
+                              ` (z celého přírůstku ${sharePercent(c.printed_share_total)})`,
                           )
                           .join('')
                       : ''}
                     {status.cumdelta_source === 'midpoint'
                       ? ' — znaménko z midpoint testu, tisky zatím jen měří pokrytí'
-                      : ' — znaménko od burzy, midpoint jen jako fallback'}
+                      : ' — znaménko jen z tisků se stranou od burzy, minuta bez tisků je mezera (ADR-0057)'}
                   </td>
                 </tr>
               )}
@@ -754,7 +761,7 @@ Sběr dat se na ~1–2 minuty přeruší.`)
 
       {/* Push na Telegram (#1175, #1284): hlavní vypínač + přepínače per druh =
           serverová nastavení, ukládají se hned přes saveAll (chyba se ukáže) */}
-      <PushSettings values={values} saveAll={saveAll} />
+      <PushSettings values={values} saveAll={saveAll} cumdeltaSource={status.cumdelta_source} />
 
       {/* Scénáře dne (#1173): disk snímků + ruční úklid */}
       <ScenarioSettings />

@@ -74,8 +74,10 @@ export interface ReplayDay {
   grid: HeatmapGrid // celý den (výchozí OI mód, normalizace p99)
   /** Surová snapshot matice — přepínání módů/škál lokálně (SPEC 4.3). */
   raw: RawDay
-  /** Surová matice s OI nahrazeným FA odhadem (#232, řada oiest); null =
-  žádný odhad nedorazil. OI složky nesou OI_est, volume/vega zůstávají měřené. */
+  /** Surová matice s OI nahrazeným FA odhadem (#232, řada oiest). OI složky
+  nesou OI_est, volume/vega zůstávají měřené. Minuty bez FA řad nese
+  `oiGapMinutes` jako mezeru — i celý den bez FA (ADR-0057 bod 4, #1632);
+  null jen u dne bez matice (Daily, prázdný den). */
   rawFa: RawDay | null
   overlays: OverlayData // celý den
   panels: PanelSeries // celý den
@@ -245,10 +247,15 @@ export interface ReplayInputs {
   putOi: Float32Array
   /** FA odhad OI (#232): kopie měřených matic s buňkami přepsanými řadou
    * oiest. Drží se VŽDY (i bez odhadu — pak jsou identické), aby append
-   * nemusel větvit tvar; `hasOiEst` říká, jestli nějaký odhad vůbec dorazil. */
+   * nemusel větvit tvar; které minuty odhad opravdu mají, říká `faMinutes`. */
   callOiEst: Float32Array
   putOiEst: Float32Array
-  hasOiEst: boolean
+  /** ISO minuty s FA řadami (oiest, levelsfa, gexprofilefa). Engine je píše
+   * každou minutu, kdy FA běží — i bez rozdílu proti měření (levelsfa,
+   * gexprofilefa), takže chybějící minuta je mezera FA (mezera tisků, FA
+   * vypnutá do kalibrace, řetěz po settle), ne „odhad = měření“ (ADR-0057
+   * bod 4, #1632). */
+  faMinutes: Set<string>
   callVolume: Float32Array
   putVolume: Float32Array
   /** 1 = buňka nese měřený objem, 0 = řádek chybí nebo má volume NULL (#1602).
@@ -837,12 +844,20 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     capacity,
     minuteKeys.length,
   )
+  // Minuty s FA řadami (#1632): levelsfa a gexprofilefa mají jeden řádek na
+  // minutu, oiest statisíce — jeho minuty se berou ve smyčce přepisu odhadu
+  const faMinutes = new Set<string>(
+    [...(bundle.levelsfa ?? []), ...(bundle.gexprofilefa ?? [])].map((row) =>
+      canonicalTs(row.ts_min),
+    ),
+  )
   const oiestRows = bundle.oiest ?? []
   for (const row of oiestRows) {
     const minuteIdx = minuteIndex.get(canonicalTs(row.ts_min))
     const strikeIdx = strikeIndex.get(Number(row.strike))
     const est = Number(row.oi_est)
     if (minuteIdx === undefined || strikeIdx === undefined || !Number.isFinite(est)) continue
+    faMinutes.add(minuteKeys[minuteIdx])
     const index = strikeIdx * capacity + minuteIdx
     if (String(row.right) === 'C') callOiEst[index] = est
     else putOiEst[index] = est
@@ -861,7 +876,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     putOi,
     callOiEst,
     putOiEst,
-    hasOiEst: oiestRows.length > 0,
+    faMinutes,
     callPrinted,
     putPrinted,
     callStructured,
@@ -1189,6 +1204,16 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const catchUpMinutes = minute.catchUp
     ? new Set(inputs.catchUpMinutes).add(tsIso)
     : inputs.catchUpMinutes
+  // FA řady minuty (#1632): kanály oiest, levelsfa (klíče fa_ v levels)
+  // a gexprofilefa chodí po snímku — dokud nedorazí, je minuta FA mezera
+  const minuteHasFa =
+    (minute.oiEst?.length ?? 0) > 0 ||
+    minute.gexProfileFa !== undefined ||
+    (minute.levels !== undefined && 'fa_flip' in minute.levels)
+  const faMinutes =
+    minuteHasFa && !inputs.faMinutes.has(tsIso)
+      ? new Set(inputs.faMinutes).add(tsIso)
+      : inputs.faMinutes
 
   // Chybějící OI chodí zatím jen v /replay balíku, ne po WS — živě příchozí
   // minuta množinu nemění, ale musí ji propustit dál (jinak by ji append
@@ -1207,7 +1232,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     putOi,
     callOiEst,
     putOiEst,
-    hasOiEst: inputs.hasOiEst || (minute.oiEst?.length ?? 0) > 0,
+    faMinutes,
     callPrinted,
     putPrinted,
     callStructured,
@@ -1318,10 +1343,22 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   }
   const grid = buildModeGrid(raw, 'oi', 'linear')
   // FA zdroj (#232): tatáž matice s OI_est místo měřeného OI — módy heatmapy
-  // se nad ní přepínají stejně. Bez odhadu je null a UI padá na měřené.
-  const rawFa: RawDay | null = inputs.hasOiEst
-    ? { ...raw, callOi: inputs.callOiEst, putOi: inputs.putOiEst }
-    : null
+  // se nad ní přepínají stejně. Minuta bez FA řad je mezera, ne tichý přechod
+  // na měřené OI (ADR-0057 bod 4, #1632) — i celý den bez FA (FA vypnutá do
+  // kalibrace z tisků, den před FA vrstvou)
+  const rawFa: RawDay = {
+    ...raw,
+    callOi: inputs.callOiEst,
+    putOi: inputs.putOiEst,
+    // Minuta bez snímku (díra ve sběru, #459) má nuly v obou maticích — mezera
+    // FA je jen minuta se snímkem bez FA řad. Den bez FA řad má mezeru celý,
+    // i v minutách bez snímku: `every` pak znamená „den bez FA“ (badge v App)
+    oiGapMinutes: minuteKeys.map(
+      (ts, minuteIdx) =>
+        inputs.faMinutes.size === 0 ||
+        (inputs.snapshotMinutes[minuteIdx] !== false && !inputs.faMinutes.has(ts)),
+    ),
+  }
 
   // Minuta bez snapshotu nese v maticích nuly, ne měření (#459) — Max Pain z
   // nulového OI by ukázal libovolný strike, takže se v díře nekreslí vůbec
@@ -1647,7 +1684,9 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
 
 /** Průběžné maximum kumulativního volume per strike přes sloupce `0..upTo-1`
  * (#1602); NaN = strike zatím objem nenesl. Buňka bez objemu (maska 0: řádek
- * chybí, NULL z tasty fallbacku, minuta bez snapshotu) referenci nemění. */
+ * chybí, NULL z tasty fallbacku, minuta bez snapshotu) referenci nemění.
+ * Catch-up minuta (#518) i minuta po mezeře v objemu (#1632) ji posouvají
+ * stejně jako ostatní buňky s objemem — přírůstek jen nekreslí. */
 function volumeReference(
   volume: Float32Array,
   known: Float32Array,
@@ -1695,6 +1734,13 @@ Sémantika sloupců je shodná s původními celodenními průchody:
   strike (#1602) jen z buněk s objemem, takže díra ve sběru (#459), NULL ani
   chybějící strike nepřidají celý kumulativ; catch-up minuta (#518) referenci
   jen posune; Δ Flow vážené |delta| (SPEC 4.6)
+* Minuta po mezeře v objemu (#1632, rozhodnutí B 21. 10.) — per strike a
+  strana: buňka, jejíž strike v předchozí minutě osy objem nenesl (maska 0:
+  NULL z tasty fallbacku, díra ve sběru #459, strike mimo pásmo), nese
+  přírůstek celé mezery, ne minuty obchodů. Kreslí se jako 0 a referenci jen
+  posune, stejně jako catch-up; řada [100, NULL, 130, 150] dá 0, 0, 0, 20.
+  Daily (API `daily_totals`) objem mezery dál počítá, součet dne se nemění.
+  Sloupec závisí jen na sobě a na předchozím, takže memo `upTo` platí dál.
 * Evo OI (#573) — Σ OI přes striky; minuta bez snapshotu drží schod
 
 Cache se mutuje in-place — je to čistá memoizace (výsledek téhož vstupu),
@@ -1764,16 +1810,21 @@ function ensureDerived(
     let deltaFlowPut = 0
     for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
       const index = strikeIdx * stride + minuteIdx
+      // Minuta po mezeře v objemu (#1632): předchozí sloupec téhož striku bez
+      // objemu. Minuta 0 dne předchůdce nemá — reference je tam NaN a první
+      // výskyt dá 0 i tak (index − 1 by četl cizí řádek matice)
       if (inputs.callVolumeKnown[index] !== 0) {
         const callIncrement = volumeIncrement(callReference, strikeIdx, inputs.callVolume[index])
-        if (counted && callIncrement > 0) {
+        const callAfterGap = minuteIdx > 0 && inputs.callVolumeKnown[index - 1] === 0
+        if (counted && !callAfterGap && callIncrement > 0) {
           optVolCall += callIncrement
           deltaFlowCall += callIncrement * Math.abs(inputs.callDelta[index])
         }
       }
       if (inputs.putVolumeKnown[index] !== 0) {
         const putIncrement = volumeIncrement(putReference, strikeIdx, inputs.putVolume[index])
-        if (counted && putIncrement > 0) {
+        const putAfterGap = minuteIdx > 0 && inputs.putVolumeKnown[index - 1] === 0
+        if (counted && !putAfterGap && putIncrement > 0) {
           optVolPut += putIncrement
           deltaFlowPut += putIncrement * Math.abs(inputs.putDelta[index])
         }
