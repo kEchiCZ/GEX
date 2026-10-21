@@ -6,6 +6,8 @@ import { BottomPanels } from '../components/BottomPanels'
 import type { PanelSeries } from '../components/BottomPanels'
 import { PlaybackBar } from '../components/PlaybackBar'
 import { demoGrid } from '../heatmap/demo'
+import { buildGexGrid, profileAt } from '../heatmap/gexmode'
+import { buildModeGrid } from '../heatmap/modes'
 import { cvdLineSegments } from '../panels/geometry'
 import { CrosshairProvider } from '../state/Crosshair'
 import {
@@ -281,16 +283,23 @@ test('FA zdroj (#232): oiest přepisuje odhad, měřený režim je bit-identick�
   expect([...withFa.callOi]).toEqual([...withoutFa.callOi])
   expect([...withFa.putOi]).toEqual([...withoutFa.putOi])
   // Odhad: přepsaná jen buňka z oiest (index = strikeIdx·minutes + minuteIdx)
-  expect(withFa.hasOiEst).toBe(true)
-  expect(withoutFa.hasOiEst).toBe(false)
+  // FA minuty = minuty s FA řadami (oiest, gexprofilefa, levelsfa)
+  expect([...withFa.faMinutes].sort()).toEqual([
+    '2026-07-16T15:00:00.000Z',
+    '2026-07-16T15:01:00.000Z',
+  ])
+  expect(withoutFa.faMinutes.size).toBe(0)
   expect(withFa.callOiEst[1]).toBe(140)
   expect(withFa.callOiEst[0]).toBe(withFa.callOi[0])
   expect([...withFa.putOiEst]).toEqual([...withFa.putOi])
 
   const day = assembleReplayDay(withFa)
   const dayWithout = assembleReplayDay(withoutFa)
-  expect(dayWithout.rawFa).toBeNull()
+  // Den bez FA řad: FA matice existuje, ale všechny minuty se snímkem jsou
+  // mezera — ne tichý přechod na měřené OI (ADR-0057 bod 4, #1632)
+  expect(dayWithout.rawFa?.oiGapMinutes).toEqual([true, true])
   expect(day.rawFa).not.toBeNull()
+  expect(day.rawFa!.oiGapMinutes).toEqual([false, false])
   expect(day.rawFa!.callOi[1]).toBe(140)
   expect(day.raw.callOi[1]).toBe(100) // měřená vrstva odhad nevidí
   // Měřený grid (výchozí OI mód) se FA řadou nemění — bit-identita
@@ -313,6 +322,80 @@ test('FA zdroj (#232): oiest přepisuje odhad, měřený režim je bit-identick�
   expect(appended.callOiEst[2]).toBe(150)
   expect(appended.putOiEst[2]).toBe(200) // bez odhadu = měření
   expect(appended.callOiEst[1]).toBe(140) // starší odhad přenos přežil
+  expect(appended.faMinutes.has('2026-07-16T15:02:00.000Z')).toBe(true)
+})
+
+test('FA při mezeře: minuta se snímkem bez FA řad je mezera, ne měřené OI (#1632)', () => {
+  // Minuty 0 a 2 mají FA řady, minuta 1 ne (mezera tisků pod v6: engine FA
+  // vrstvu nepíše); minuta 3 je jen bar (díra ve sběru, #459)
+  const cells: Cell[] = [0, 1, 2].flatMap((minuteIdx) => [
+    {
+      ts: minuteIso(minuteIdx),
+      strike: 7600,
+      right: 'C' as const,
+      volume: 10,
+      oi: 100,
+      delta: 0.5,
+    },
+    {
+      ts: minuteIso(minuteIdx),
+      strike: 7600,
+      right: 'P' as const,
+      volume: 5,
+      oi: 200,
+      delta: -0.4,
+    },
+  ])
+  const bars = Array.from({ length: 4 }, (_, minuteIdx) => ({
+    ...BARS[0],
+    ts_min: minuteIso(minuteIdx),
+  }))
+  const profile = (minuteIdx: number) => ({
+    ts_min: minuteIso(minuteIdx),
+    grid_start: 7590,
+    grid_step: 5,
+    values: [minuteIdx + 1, minuteIdx + 2],
+  })
+  const inputs = decodeBundle({
+    ...bundleFor(cells, bars, [], []),
+    levelsfa: [0, 2].map((minuteIdx) => ({ ts_min: minuteIso(minuteIdx), flip: 7580 })),
+    gexprofilefa: [profile(0), profile(2)],
+    gexprofile: [0, 1, 2].map(profile),
+  })
+  const day = assembleReplayDay(inputs)
+  expect(day.rawFa!.oiGapMinutes).toEqual([false, true, false, false])
+  // OI módy nad FA maticí: minuta 1 prázdná, objemové módy beze změny
+  const faGrid = buildModeGrid(day.rawFa!, 'oi', 'linear')
+  const measuredGrid = buildModeGrid(day.raw, 'oi', 'linear')
+  expect(faGrid.layers.call![1]).toBe(0)
+  expect(faGrid.layers.call![0]).toBeGreaterThan(0)
+  expect(measuredGrid.layers.call![1]).toBeGreaterThan(0)
+  const faVol = buildModeGrid(day.rawFa!, 'vol_signed', 'linear')
+  expect([...faVol.layers.signed!]).toEqual([...buildModeGrid(day.raw, 'vol_signed', 'linear').layers.signed!]) // prettier-ignore
+  // GEX křivka profilu: přes FA mezeru se FA profil nedrží, přes díru ve sběru ano
+  const gaps = day.rawFa!.oiGapMinutes
+  expect(profileAt(day.gexProfileFa!, 1, gaps)).toBeNull()
+  expect(profileAt(day.gexProfileFa!, 2, gaps)?.values).toEqual([3, 4])
+  expect(profileAt(day.gexProfileFa!, 3, gaps)?.values).toEqual([3, 4])
+  // Měřený profil drží jako dřív
+  expect(profileAt(day.gexProfile, 3)?.values).toEqual([3, 4])
+  // Dyn GEX podklad z FA profilů: sloupec mezery prázdný, ne poslední profil
+  const under = buildGexGrid(day.gexProfileFa!, day.raw.strikes, 4, 'linear', 'per_point', gaps)
+  expect(under.layers.signed![1]).toBe(0)
+  expect(under.layers.signed![0]).not.toBe(0)
+  expect(under.layers.signed![3]).toBe(under.layers.signed![2])
+  // Živě: snímek minuty 4 bez FA je mezera, dokud FA řady nedorazí
+  const live = appendMinute(inputs, {
+    tsIso: minuteIso(4),
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: 12, delta: 0.5 }],
+  })
+  expect(assembleReplayDay(live).rawFa!.oiGapMinutes?.[4]).toBe(true)
+  const withFa = appendMinute(live, {
+    tsIso: minuteIso(4),
+    rows: [],
+    levels: { fa_flip: 7581, fa_call_wall: null, fa_put_wall: null },
+  })
+  expect(assembleReplayDay(withFa).rawFa!.oiGapMinutes?.[4]).toBe(false)
 })
 
 test('walldom řada: slabé úseky zdi + dominance v cenovce (ADR-0010, #223)', () => {

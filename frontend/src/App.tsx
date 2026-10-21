@@ -61,7 +61,7 @@ import { SetupsView } from './components/SetupsView'
 import { StatsView } from './components/StatsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { useSetups } from './hooks/useSetups'
-import { buildGexGrid, projectGexField } from './heatmap/gexmode'
+import { buildGexGrid, profileAt, projectGexField } from './heatmap/gexmode'
 import { planeUnits } from './heatmap/units'
 import { extendDailyGrid, forwardBoundaries, forwardLabels, futureBlocks, projectDailyForward } from './heatmap/dailyforward' // prettier-ignore
 import { useGexForward } from './hooks/useGexForward'
@@ -350,10 +350,14 @@ function MainContent() {
     isHistoricalExpiry ? undefined : socket,
     expiriesState,
   )
-  // FA zdroj OI (#232): opt-in přepínač per symbol. Aktivní je jen když FA
-  // data opravdu existují — bez řady oiest se poctivě padá na měřené
-  // (a badge se nekreslí, aby graf netvrdil odhad, který nemá).
+  // FA zdroj OI (#232): opt-in přepínač per symbol. Minuta bez FA řad je
+  // mezera, ne tichý přechod na měřené (ADR-0057 bod 4, #1632) — i den bez
+  // FA (vypnutá do kalibrace z tisků). Bez FA matice (Daily) jede měřené.
   const faActive = oiSource === 'fa' && rawDay.rawFa !== null
+  // FA mezery 1m osy (minuta se snímkem bez FA řad) — podklad, pole a GEX
+  // křivka profilu přes ně poslední FA profil nedrží
+  const faGapMinutes = faActive ? rawDay.rawFa?.oiGapMinutes : undefined
+  const faDayEmpty = !!faGapMinutes && faGapMinutes.length > 0 && faGapMinutes.every(Boolean)
   // Heatmap mód/škála: čistý přepočet ze surové matice (SPEC 4.3, bez fetch).
   // Dyn GEX už není mód — je to podkladová vrstva (#242), viz gexUnderDay níž.
   // Při FA zdroji se módy počítají nad maticí s OI_est (měřená zůstává netknutá).
@@ -403,17 +407,24 @@ function MainContent() {
   const planeProfiles = useMemo(() => {
     if (underlayPlane === 'gex') {
       // FA zdroj (#232): Dyn GEX podklad z FA profilů (tentýž odhad jako
-      // heatmapa a FA levels); charm/vanna FA variantu nemají
-      return faActive && rawDay.gexProfileFa ? rawDay.gexProfileFa : rawDay.gexProfile
+      // heatmapa a FA levels); charm/vanna FA variantu nemají. Den bez FA
+      // profilů nemá podklad — ne měřený místo odhadu (#1632)
+      return faActive ? rawDay.gexProfileFa : rawDay.gexProfile
     }
     if (underlayPlane === 'off') return null
     if (greekPlane.profiles.length === 0) return null
     return alignPlaneProfiles(greekPlane.profiles, rawDay.minutesIso)
   }, [underlayPlane, rawDay.gexProfile, rawDay.gexProfileFa, rawDay.minutesIso, greekPlane.profiles, faActive]) // prettier-ignore
+  // FA pole jen ze stejné minuty jako měřené: starší FA pole = FA teď v mezeře
+  // a projekce by držela odhad z doby před ní (ADR-0057 bod 4, #1632)
+  const faFieldCurrent =
+    day.gexFieldFa !== null && (day.gexField === null || day.gexFieldFa.tsIso >= day.gexField.tsIso)
   const planeField =
     underlayPlane === 'gex'
-      ? faActive && day.gexFieldFa
-        ? day.gexFieldFa
+      ? faActive
+        ? faFieldCurrent
+          ? day.gexFieldFa
+          : null
         : day.gexField
       : greekPlane.field
   const planePalette =
@@ -432,9 +443,10 @@ function MainContent() {
     // Daily umí zatím jen Dyn GEX (#572) — charm/vanna forward až po ověření čtení
     if (timeframe !== 'intraday' && underlayPlane !== 'gex') return null
     if (!planeProfiles || planeProfiles.every((row) => row === null)) return null
-    const built = buildGexGrid(planeProfiles, rawDay.grid.strikes, rawDay.grid.minutes, heatScale, underlayUnits) // prettier-ignore
+    const gaps = underlayPlane === 'gex' ? faGapMinutes : undefined
+    const built = buildGexGrid(planeProfiles, rawDay.grid.strikes, rawDay.grid.minutes, heatScale, underlayUnits, gaps) // prettier-ignore
     return aggregateDay({ ...rawDay, grid: built }, bucketMinutes)
-  }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, underlayUnits, bucketMinutes])
+  }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, underlayUnits, bucketMinutes, faGapMinutes]) // prettier-ignore
 
   const playback = usePlayback(day.grid.minutes)
   // Pozice playbacku je v KOŠÍCH aktuálního TF — na index 1m osy se mapuje
@@ -834,8 +846,9 @@ function MainContent() {
       bucketMinutes,
       scale: heatScale,
       units: underlayUnits,
+      gapMinutes: underlayPlane === 'gex' ? faGapMinutes : undefined,
     })
-  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, symbol, day.lastMinuteIso, bucketMinutes, heatScale, gexUnits, underlayUnits, dailyForward]) // prettier-ignore
+  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, symbol, day.lastMinuteIso, bucketMinutes, heatScale, gexUnits, underlayUnits, dailyForward, underlayPlane, faGapMinutes]) // prettier-ignore
   const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
   const chartLabels = useMemo(() => {
     if (projectionExtra <= 0) return day.minuteLabels
@@ -1230,17 +1243,18 @@ function MainContent() {
     [day.profileByMinute, day.demoProfileRows],
   )
   // Dyn GEX profil minuty pod playbackem (ADR-0009) — poslední s daty do pozice.
-  // Při FA zdroji čte GEX křivka pravého profilu FA řadu (#232).
+  // Při FA zdroji čte GEX křivka pravého profilu FA řadu (#232) z 1m osy:
+  // přes FA mezeru se poslední FA profil nedrží a měřený ho nezastoupí (#1632)
   const gexProfileRow = useMemo(() => {
-    const source = faActive && day.gexProfileFa ? day.gexProfileFa : day.gexProfile
-    if (!source || source.length === 0) return null
-    const index = Math.min(playback.position, source.length - 1)
-    for (let i = index; i >= 0; i -= 1) {
-      const row = source[i]
-      if (row) return row
+    if (faActive) {
+      return rawDay.gexProfileFa
+        ? profileAt(rawDay.gexProfileFa, playbackMinuteIdx, faGapMinutes)
+        : null
     }
-    return null
-  }, [day.gexProfile, day.gexProfileFa, faActive, playback.position])
+    const source = day.gexProfile
+    if (!source || source.length === 0) return null
+    return profileAt(source, playback.position)
+  }, [day.gexProfile, rawDay.gexProfileFa, faActive, faGapMinutes, playback.position, playbackMinuteIdx]) // prettier-ignore
   // Stabilní props pro těžké (memoizované) děti — živý spot mění jen graf, ne panely/profil
   const panelsVisible = useMemo(
     () => ({
@@ -2005,14 +2019,24 @@ function MainContent() {
             {dataStamp.stale ? '⊘' : '◷'} Data {dataStamp.label}
           </span>
         )}
-        {/* FA zdroj (#232): graf ukazuje ODHAD, ne měření — badge to musí křičet */}
+        {/* FA zdroj (#232): graf ukazuje ODHAD, ne měření — badge to musí křičet.
+            Den bez FA řad se přizná, OI vrstvy jsou prázdné (#1632) */}
         {faActive && (
           <span
             className="fa-badge"
             data-testid="fa-badge"
-            title="OI vrstvy, Dyn GEX podklad i GEX křivka profilu jedou z FA odhadu OI_est = ranní OI + α·klasifikovaný tok (ADR-0011) — je to model, ne měření. OI Δ složka pravého profilu zůstává měřená."
+            title={[
+              'OI vrstvy, Dyn GEX podklad i GEX křivka profilu jedou z FA odhadu OI_est = ranní OI + α·čistý tok (ADR-0011) — je to model, ne měření.',
+              '• minuta bez FA řad (mezera tisků, FA vypnutá do kalibrace) je mezera, ne měřené OI (ADR-0057)',
+              '• OI Δ složka pravého profilu zůstává měřená',
+              ...(faDayEmpty
+                ? [
+                    '• tento den FA řady nemá — stav kalibrace ukazuje badge „FA“ ve stavové liště; měřené OI: přepínač OI → Měřené',
+                  ]
+                : []),
+            ].join('\n')}
           >
-            FA odhad
+            {faDayEmpty ? 'FA odhad · den bez FA' : 'FA odhad'}
           </span>
         )}
         <button

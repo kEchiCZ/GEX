@@ -74,8 +74,10 @@ export interface ReplayDay {
   grid: HeatmapGrid // celý den (výchozí OI mód, normalizace p99)
   /** Surová snapshot matice — přepínání módů/škál lokálně (SPEC 4.3). */
   raw: RawDay
-  /** Surová matice s OI nahrazeným FA odhadem (#232, řada oiest); null =
-  žádný odhad nedorazil. OI složky nesou OI_est, volume/vega zůstávají měřené. */
+  /** Surová matice s OI nahrazeným FA odhadem (#232, řada oiest). OI složky
+  nesou OI_est, volume/vega zůstávají měřené. Minuty bez FA řad nese
+  `oiGapMinutes` jako mezeru — i celý den bez FA (ADR-0057 bod 4, #1632);
+  null jen u dne bez matice (Daily, prázdný den). */
   rawFa: RawDay | null
   overlays: OverlayData // celý den
   panels: PanelSeries // celý den
@@ -245,10 +247,15 @@ export interface ReplayInputs {
   putOi: Float32Array
   /** FA odhad OI (#232): kopie měřených matic s buňkami přepsanými řadou
    * oiest. Drží se VŽDY (i bez odhadu — pak jsou identické), aby append
-   * nemusel větvit tvar; `hasOiEst` říká, jestli nějaký odhad vůbec dorazil. */
+   * nemusel větvit tvar; které minuty odhad opravdu mají, říká `faMinutes`. */
   callOiEst: Float32Array
   putOiEst: Float32Array
-  hasOiEst: boolean
+  /** ISO minuty s FA řadami (oiest, levelsfa, gexprofilefa). Engine je píše
+   * každou minutu, kdy FA běží — i bez rozdílu proti měření (levelsfa,
+   * gexprofilefa), takže chybějící minuta je mezera FA (mezera tisků, FA
+   * vypnutá do kalibrace, řetěz po settle), ne „odhad = měření“ (ADR-0057
+   * bod 4, #1632). */
+  faMinutes: Set<string>
   callVolume: Float32Array
   putVolume: Float32Array
   /** 1 = buňka nese měřený objem, 0 = řádek chybí nebo má volume NULL (#1602).
@@ -861,7 +868,11 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     putOi,
     callOiEst,
     putOiEst,
-    hasOiEst: oiestRows.length > 0,
+    faMinutes: new Set<string>(
+      [...oiestRows, ...(bundle.levelsfa ?? []), ...(bundle.gexprofilefa ?? [])].map((row) =>
+        canonicalTs(row.ts_min),
+      ),
+    ),
     callPrinted,
     putPrinted,
     callStructured,
@@ -1189,6 +1200,16 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const catchUpMinutes = minute.catchUp
     ? new Set(inputs.catchUpMinutes).add(tsIso)
     : inputs.catchUpMinutes
+  // FA řady minuty (#1632): kanály oiest, levelsfa (klíče fa_ v levels)
+  // a gexprofilefa chodí po snímku — dokud nedorazí, je minuta FA mezera
+  const minuteHasFa =
+    (minute.oiEst?.length ?? 0) > 0 ||
+    minute.gexProfileFa !== undefined ||
+    (minute.levels !== undefined && 'fa_flip' in minute.levels)
+  const faMinutes =
+    minuteHasFa && !inputs.faMinutes.has(tsIso)
+      ? new Set(inputs.faMinutes).add(tsIso)
+      : inputs.faMinutes
 
   // Chybějící OI chodí zatím jen v /replay balíku, ne po WS — živě příchozí
   // minuta množinu nemění, ale musí ji propustit dál (jinak by ji append
@@ -1207,7 +1228,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     putOi,
     callOiEst,
     putOiEst,
-    hasOiEst: inputs.hasOiEst || (minute.oiEst?.length ?? 0) > 0,
+    faMinutes,
     callPrinted,
     putPrinted,
     callStructured,
@@ -1318,10 +1339,22 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   }
   const grid = buildModeGrid(raw, 'oi', 'linear')
   // FA zdroj (#232): tatáž matice s OI_est místo měřeného OI — módy heatmapy
-  // se nad ní přepínají stejně. Bez odhadu je null a UI padá na měřené.
-  const rawFa: RawDay | null = inputs.hasOiEst
-    ? { ...raw, callOi: inputs.callOiEst, putOi: inputs.putOiEst }
-    : null
+  // se nad ní přepínají stejně. Minuta bez FA řad je mezera, ne tichý přechod
+  // na měřené OI (ADR-0057 bod 4, #1632) — i celý den bez FA (FA vypnutá do
+  // kalibrace z tisků, den před FA vrstvou)
+  const rawFa: RawDay = {
+    ...raw,
+    callOi: inputs.callOiEst,
+    putOi: inputs.putOiEst,
+    // Minuta bez snímku (díra ve sběru, #459) má nuly v obou maticích — mezera
+    // FA je jen minuta se snímkem bez FA řad. Den bez FA řad má mezeru celý,
+    // i v minutách bez snímku: `every` pak znamená „den bez FA“ (badge v App)
+    oiGapMinutes: minuteKeys.map(
+      (ts, minuteIdx) =>
+        inputs.faMinutes.size === 0 ||
+        (inputs.snapshotMinutes[minuteIdx] !== false && !inputs.faMinutes.has(ts)),
+    ),
+  }
 
   // Minuta bez snapshotu nese v maticích nuly, ne měření (#459) — Max Pain z
   // nulového OI by ukázal libovolný strike, takže se v díře nekreslí vůbec
