@@ -13,7 +13,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
-from gexlens_engine.compute.cumdelta import flow_window_sum
+from gexlens_engine.compute.cumdelta import FLOW_WINDOW_MIN, flow_window_sum
 from gexlens_engine.compute.gexfield import gamma_at_price
 from gexlens_engine.compute.settle import settle_ts, trading_session_date
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS, max_pain_strike
@@ -31,8 +31,9 @@ from gexlens_engine.storage.tendency_store import TendencyRepository, votes_payl
 
 logger = logging.getLogger(__name__)
 
-# Okno sklonů (Cum Δ, cena, SentIndex) — shodné s CumΔ oknem signal enginu
-SLOPE_LOOKBACK_MIN = 10
+# Okno sklonů (Cum Δ, cena, SentIndex) — délka okna sklonu CumΔ, jediná pro
+# tendenci i potvrzení COMBINED v news-engine (ADR-0057 bod 4, #1589)
+SLOPE_LOOKBACK_MIN = FLOW_WINDOW_MIN
 SENTIMENT_SUBDIR = "sentiment"
 #: Škrcení warningu o chybějící partici SentIndexu (#1136)
 SENTIMENT_MISSING_WARN_MIN = 30

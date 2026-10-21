@@ -17,13 +17,23 @@
 import datetime as dt
 import logging
 from collections import Counter
+from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.cumdelta import (
+    FLOW_WINDOW_MIN,
+    SOURCE_AGGRESSOR,
+    SOURCE_MIDPOINT,
+    flow_window_sum,
+)
 from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.storage.parquet_store import FLOW_SCHEMA
 from gexlens_engine.storage.sentiment import (
     news_classifications,
     news_events,
@@ -48,8 +58,12 @@ logger = logging.getLogger(__name__)
 # Jak daleko zpět hledat kandidátní eventy — nejdelší τ je 6 h (GEOPOLITICS
 # importance 3), starší event už čerstvostí (≤ τ) neprojde nikdy
 CANDIDATE_LOOKBACK_HOURS = 8
-# Sklon CumΔ se měří přes tohle okno (SPEC 6.1 „směr a sklon CumΔ")
-CUM_DELTA_SLOPE_MINUTES = 10
+# Nejstarší použitelný řádek kontextu za minutou `now` (#1589). Engine píše
+# bary, levels i flow každou minutu a řádek minuty M uzavře až kolem M:54
+# (ADR-0005), čerstvý řádek je tedy 1–2 minuty za `now` (konvence
+# `STORED_BAR_LAG` setupů). Starší = engine nepíše a zmrzlé číslo by
+# potvrzovalo COMBINED stavem z doby před výpadkem (fail fast, SPEC 3.7).
+CONTEXT_MAX_LAG = dt.timedelta(minutes=2)
 
 # Důvody odpadnutí, které patří jobu (ne čistým pravidlům) — viz #453
 REJECT_STATE = "stav"  # stav není RiskOn/RiskOff, negeneruje se vůbec
@@ -57,67 +71,161 @@ REJECT_DEDUP = "dedup"  # týž (event, mode) už signál založil
 REJECT_CLOSED = "trh zavřený"  # mimo obchodní dobu (#968)
 
 
-def load_gex_context(data_dir: Any, symbol: str, now: dt.datetime) -> GexContext | None:
-    """GEX kontext z parquet vrstev enginu; None = kontext není k dispozici.
+def _partition_days(now: dt.datetime) -> list[dt.date]:
+    """UTC dny partic s řádky kontextu k `now`.
 
-    Čte aktivní expiraci (nejbližší ≥ dnešek s dnešní particí levels),
-    poslední bar podkladu (spot) a sklon CumΔ za posledních N minut.
+    Seance leží ve dvou UTC particích (#1002, #1390): okno sklonu i s hraničním
+    řádkem a tolerancí stáří sahá po půlnoci UTC do včerejší partice.
     """
-    from pathlib import Path
+    oldest = now - CONTEXT_MAX_LAG - dt.timedelta(minutes=FLOW_WINDOW_MIN + 1)
+    return sorted({oldest.date(), now.date()})
 
-    base = Path(data_dir)
-    today = now.date()
-    bars_path = base / "derived" / symbol / "bars" / f"{today.isoformat()}.parquet"
-    if not bars_path.exists():
-        return None
+
+def _read_rows(
+    paths: Sequence[Path],
+    columns: list[str],
+    now: dt.datetime,
+    *,
+    schema: pa.Schema | None = None,
+) -> list[dict[str, Any]]:
+    """Řádky partic s `ts_min <= now` seřazené podle času; chybějící partice nevadí.
+
+    Kontext se čte k okamžiku `now` (#1583): engine mezitím píše další minuty
+    a řádek po `now` by bráně COMBINED prozradil začátek okna, které se jí
+    potom počítá jako výsledek. Nečitelná partice vyhodí výjimku — kterou
+    nohu kontextu tím ztratí, rozhodne volající.
+    """
+    rows: list[dict[str, Any]] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        table = pq.read_table(path, columns=columns, schema=schema)
+        rows.extend(
+            row for row in table.to_pylist() if row["ts_min"] is not None and row["ts_min"] <= now
+        )
+    rows.sort(key=lambda row: row["ts_min"])
+    return rows
+
+
+def cum_delta_slope(
+    rows: Sequence[dict[str, Any]], now: dt.datetime
+) -> tuple[float | None, str | None]:
+    """Sklon CumΔ k poslednímu řádku flow a jeho zdroj (ADR-0057 body 4, 8 a 11).
+
+    `rows` = řádky flow do `now` seřazené podle času (`ts_min`, `flow_delta`,
+    `cum_delta`, `source`). Zlom midpoint → tisky nesou řádky, ne datum:
+
+    - poslední řádek ze zdroje `aggressor` → Σ flowΔ za `FLOW_WINDOW_MIN` v seanci
+      (`flow_window_sum`, táž čistá funkce jako tendence); mezera, neúplné okno
+      nebo okno přes začátek seance → None, řádek jiného zdroje v okně je mezera;
+    - jinak (midpoint, NULL = partice před zavedením sloupce) rozdíl CumΔ
+      posledního řádku a řádku aspoň okno zpět v UTC partici dne `now`, jako
+      před #1589 — do `main` smí před bumpem v6 jen kód, který je pod
+      midpointem netečný (bod 11; tendence v4 totéž).
+
+    Zdroj None = žádný řádek.
+    """
+    if not rows:
+        return None, None
+    last = rows[-1]
+    if last["source"] == SOURCE_AGGRESSOR:
+        series = [
+            (row["ts_min"], row["flow_delta"] if row["source"] == SOURCE_AGGRESSOR else None)
+            for row in rows
+        ]
+        return flow_window_sum(series, last["ts_min"]), SOURCE_AGGRESSOR
+    source = last["source"] or SOURCE_MIDPOINT
+    today = [row for row in rows if row["ts_min"].date() == now.date()]
+    if not today:
+        return None, source
+    last = today[-1]
+    cutoff = last["ts_min"] - dt.timedelta(minutes=FLOW_WINDOW_MIN)
+    earlier = [row for row in today if row["ts_min"] <= cutoff]
+    if not earlier or last["cum_delta"] is None or earlier[-1]["cum_delta"] is None:
+        return None, source
+    return float(last["cum_delta"]) - float(earlier[-1]["cum_delta"]), source
+
+
+def load_gex_context(data_dir: Any, symbol: str, now: dt.datetime) -> GexContext | None:
+    """GEX kontext z parquet vrstev enginu k okamžiku `now`; None = kontext chybí.
+
+    Spot = poslední bar podkladu, flip = poslední řádek levels nejbližší
+    expirace s čerstvým řádkem (po settle tak ne flip expirovaného řetězu),
+    sklon CumΔ podle `cum_delta_slope`. Řádky po `now` se nečtou (#1583)
+    a řádek starší než `CONTEXT_MAX_LAG` za minutou `now` neplatí: starý spot
+    = kontext chybí, starý flip nebo sklon = noha nepodporuje (#1589).
+    """
+    symbol_dir = Path(data_dir) / "derived" / symbol
+    days = _partition_days(now)
+    minute = now.replace(second=0, microsecond=0)
+
+    def fresh(rows: list[dict[str, Any]]) -> bool:
+        return bool(rows) and minute - rows[-1]["ts_min"] <= CONTEXT_MAX_LAG
+
     try:
-        bar_rows = pq.read_table(bars_path, columns=["ts_min", "close"]).to_pylist()
+        bar_rows = _read_rows(
+            [symbol_dir / "bars" / f"{day.isoformat()}.parquet" for day in days],
+            ["ts_min", "close"],
+            now,
+        )
     except Exception:
-        logger.exception("GEX kontext: bary %s nečitelné", bars_path)
+        logger.exception("GEX kontext %s: bary nečitelné", symbol)
         return None
-    if not bar_rows:
+    bar_rows = [row for row in bar_rows if row["close"] is not None]
+    if not fresh(bar_rows):
         return None
-    spot = float(max(bar_rows, key=lambda row: row["ts_min"])["close"])
+    spot_row = bar_rows[-1]
 
     flip: float | None = None
-    symbol_dir = base / "derived" / symbol
-    today_compact = today.strftime("%Y%m%d")
+    flip_ts: dt.datetime | None = None
+    today_compact = now.date().strftime("%Y%m%d")
     expiries = sorted(
         path.name
         for path in symbol_dir.iterdir()
         if path.is_dir() and path.name.isdigit() and path.name >= today_compact
     )
     for expiry in expiries:
-        levels_path = symbol_dir / expiry / "levels" / f"{today.isoformat()}.parquet"
-        if not levels_path.exists():
-            continue
         try:
-            levels_rows = pq.read_table(levels_path, columns=["ts_min", "flip"]).to_pylist()
+            levels_rows = _read_rows(
+                [symbol_dir / expiry / "levels" / f"{day.isoformat()}.parquet" for day in days],
+                ["ts_min", "flip"],
+                now,
+            )
         except Exception:
-            logger.exception("GEX kontext: levels %s nečitelné", levels_path)
+            logger.exception("GEX kontext %s: levels %s nečitelné", symbol, expiry)
             break
-        if levels_rows:
-            last = max(levels_rows, key=lambda row: row["ts_min"])
+        if fresh(levels_rows):
+            last = levels_rows[-1]
             flip = float(last["flip"]) if last["flip"] is not None else None
-        break
+            flip_ts = last["ts_min"]
+            break
 
+    try:
+        flow_rows = _read_rows(
+            [symbol_dir / "flow" / f"{day.isoformat()}.parquet" for day in days],
+            ["ts_min", "flow_delta", "cum_delta", "source"],
+            now,
+            schema=FLOW_SCHEMA,
+        )
+    except Exception:
+        logger.exception("GEX kontext %s: flow nečitelný", symbol)
+        flow_rows = []
     slope: float | None = None
-    flow_path = base / "derived" / symbol / "flow" / f"{today.isoformat()}.parquet"
-    if flow_path.exists():
-        try:
-            flow_rows = pq.read_table(flow_path, columns=["ts_min", "cum_delta"]).to_pylist()
-        except Exception:
-            logger.exception("GEX kontext: flow %s nečitelný", flow_path)
-            flow_rows = []
-        if flow_rows:
-            flow_rows.sort(key=lambda row: row["ts_min"])
-            last_row = flow_rows[-1]
-            cutoff = last_row["ts_min"] - dt.timedelta(minutes=CUM_DELTA_SLOPE_MINUTES)
-            earlier = [row for row in flow_rows if row["ts_min"] <= cutoff]
-            if earlier:
-                slope = float(last_row["cum_delta"]) - float(earlier[-1]["cum_delta"])
+    source: str | None = None
+    slope_ts: dt.datetime | None = None
+    if fresh(flow_rows):
+        slope, source = cum_delta_slope(flow_rows, now)
+        slope_ts = flow_rows[-1]["ts_min"]
 
-    return GexContext(spot=spot, flip=flip, cum_delta_slope=slope)
+    return GexContext(
+        spot=float(spot_row["close"]),
+        flip=flip,
+        cum_delta_slope=slope,
+        cum_delta_source=source,
+        spot_ts=spot_row["ts_min"],
+        flip_ts=flip_ts,
+        slope_ts=slope_ts,
+    )
 
 
 class SignalJob:

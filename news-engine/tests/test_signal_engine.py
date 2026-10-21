@@ -134,7 +134,15 @@ def test_combined_requires_supporting_gex_context() -> None:
     supportive = GexContext(spot=7500.0, flip=7450.0, cum_delta_slope=None)
     both = evaluate_event(event(0.6), state="RiskOn", stats=stats(), now=NOW, gex=supportive)
     assert [c.mode for c in both] == ["NEWS", "COMBINED"]
-    assert both[1].inputs["gex"] == {"spot": 7500.0, "flip": 7450.0, "cum_delta_slope": None}
+    assert both[1].inputs["gex"] == {
+        "spot": 7500.0,
+        "flip": 7450.0,
+        "cum_delta_slope": None,
+        "cum_delta_source": None,
+        "spot_ts": None,
+        "flip_ts": None,
+        "slope_ts": None,
+    }
 
     # Spot pod flipem a klesající CumΔ → long kontext nesouhlasí → jen NEWS
     opposing = GexContext(spot=7400.0, flip=7450.0, cum_delta_slope=-500.0)
