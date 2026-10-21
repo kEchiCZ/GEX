@@ -912,7 +912,13 @@ export function StatsView() {
           ukládá engine pro každou obchodní seanci a symbol, platí poslední stav před US openem
           (#1595); do seance 16. 10. 2026 ho ukládal Briefing, jen když byl otevřený. Složka „nese
           informaci", když její hlas souhlasí se směrem seance. Brána n ≥{' '}
-          {verdictStats?.min_samples ?? 30} jako u signálů; do té doby jen sběr.
+          {verdictStats?.min_samples ?? 30} jako u signálů; do té doby jen sběr.{' '}
+          {verdictStats?.rules_version != null && (
+            <span data-testid="verdict-rules-version">
+              Jen aktuální verze pravidel (v{verdictStats.rules_version}) — výsledky starších verzí
+              o současných nevypovídají, v databázi zůstávají.
+            </span>
+          )}
         </p>
         <VerdictStatsSection stats={verdictStats} />
       </section>

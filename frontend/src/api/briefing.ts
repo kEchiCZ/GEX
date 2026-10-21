@@ -201,6 +201,8 @@ export interface VerdictStatBucket {
 export interface VerdictStats {
   evaluated: number
   min_samples: number
+  /** Verze pravidel verdiktu, ze které statistika je (#1588); null = starší API ji nenese. */
+  rules_version: number | null
   by_verdict: Record<string, VerdictStatBucket>
   by_vote: Record<string, VerdictStatBucket>
 }
@@ -212,6 +214,7 @@ export async function fetchVerdictStats(symbol?: string): Promise<VerdictStats> 
   return {
     evaluated: typeof data.evaluated === 'number' ? data.evaluated : 0,
     min_samples: typeof data.min_samples === 'number' ? data.min_samples : 30,
+    rules_version: typeof data.rules_version === 'number' ? data.rules_version : null,
     by_verdict: data.by_verdict ?? {},
     by_vote: data.by_vote ?? {},
   }
