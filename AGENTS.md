@@ -84,6 +84,9 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 - **Ověřuj na tvrdých datech**: metriku dohledej v kódu, stav issue z `gh issue view`, ne z paměti;
   cenzurovaná/neúplná data neextrapoluj.
 - Explicitní chyby, ne tiché selhání; pacing chyby IBKR nikdy neshodí engine (SPEC kap. 8).
+- **Minutový cyklus nečeká na nic delšího než sweep** (#1337, #1646): přetažená iterace = ztracená
+  minuta ES i NQ. IO bez IBKR přes `background.BackgroundJob` nebo task; čtení z IBKR po dávkách do
+  zbytku minuty (`advance_oi_archives`), nikdy souběžně se sweepem (100 lines).
 - Skripty: před založením nového fix/probe/measure skriptu prohledej `scripts/`; nový ulož tam.
 - **`docs/lessons-learned.md`**: před laděním problému ho projít (vzorce chyb se opakují); po opravě
   s netriviální příčinou přidat záznam; opakující se poučení povýšit na pravidlo sem nebo na kontrolu.
