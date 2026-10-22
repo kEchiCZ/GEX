@@ -92,6 +92,7 @@ from gexlens_engine.instruments import (
     InstrumentSetupError,
     SetupCooldown,
     WatchlistReader,
+    advance_oi_archives,
     aggregate_status,
     expiry_expired,
     gather_metrics,
@@ -3520,6 +3521,10 @@ async def main() -> None:
                     "ts": now.timestamp(),
                 },
             )
+
+        # OI archiv po dávkách ve zbytku minuty (#1646) — až po sweepech a statusu,
+        # aby dávka nikdy neběžela souběžně se sweepem a nezdržela další cyklus
+        await advance_oi_archives(list(pipelines.values()), cycle_start + 60.0)
 
         cycle += 1
         elapsed = asyncio.get_running_loop().time() - cycle_start

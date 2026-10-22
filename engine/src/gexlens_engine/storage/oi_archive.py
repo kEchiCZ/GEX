@@ -752,30 +752,55 @@ class OIArchiver:
         missing: list[OptionContractSpec] = []
         batch_size = self._settings.batch_size
         for offset in range(0, len(contracts), batch_size):
-            batch = contracts[offset : offset + batch_size]
-            values = await asyncio.gather(*(self._fetch_one(spec) for spec in batch))
-            for spec, snapshot in zip(batch, values, strict=True):
-                if snapshot is None:
-                    missing.append(spec)
-                else:
-                    records.append(
-                        OIRecord(
-                            symbol=spec.symbol,
-                            expiry=spec.expiry,
-                            strike=spec.strike,
-                            right=spec.right,
-                            day=day,
-                            oi=snapshot.oi,
-                            iv=snapshot.iv,
-                            delta=snapshot.delta,
-                            gamma=snapshot.gamma,
-                            theta=snapshot.theta,
-                            vega=snapshot.vega,
-                            close_prem=snapshot.close_prem,
-                            und_price=snapshot.und_price,
-                            trading_class=spec.trading_class or "",
-                        )
+            read, absent = await self.fetch_batch(contracts[offset : offset + batch_size], day)
+            records.extend(read)
+            missing.extend(absent)
+        return await self.commit(records, missing, day, now)
+
+    async def fetch_batch(
+        self, batch: Sequence[OptionContractSpec], day: dt.date
+    ) -> tuple[list[OIRecord], list[OptionContractSpec]]:
+        """Jedna dávka čtení z IBKR bez zápisu: záznamy s OI a kontrakty bez něj.
+
+        Dávka drží nejvýš `batch_size` subskripcí naráz (100 lines, ADR-0001
+        bod 4). Obnova po publikaci volá dávky po jedné mezi minutovými cykly
+        (#1646) a zapíše je až `commit` po celém průchodu.
+        """
+        records: list[OIRecord] = []
+        missing: list[OptionContractSpec] = []
+        values = await asyncio.gather(*(self._fetch_one(spec) for spec in batch))
+        for spec, snapshot in zip(batch, values, strict=True):
+            if snapshot is None:
+                missing.append(spec)
+            else:
+                records.append(
+                    OIRecord(
+                        symbol=spec.symbol,
+                        expiry=spec.expiry,
+                        strike=spec.strike,
+                        right=spec.right,
+                        day=day,
+                        oi=snapshot.oi,
+                        iv=snapshot.iv,
+                        delta=snapshot.delta,
+                        gamma=snapshot.gamma,
+                        theta=snapshot.theta,
+                        vega=snapshot.vega,
+                        close_prem=snapshot.close_prem,
+                        und_price=snapshot.und_price,
+                        trading_class=spec.trading_class or "",
                     )
+                )
+        return records, missing
+
+    async def commit(
+        self,
+        records: Sequence[OIRecord],
+        missing: Sequence[OptionContractSpec],
+        day: dt.date,
+        now: dt.datetime | None = None,
+    ) -> ArchiveResult:
+        """Zápis přečteného průchodu: dedupe, srovnání s archivem, upsert (idempotentní)."""
         # Dedupe přes klíč archivu (#215 → #736): klíč nově nese trading_class,
         # takže série se STEJNOU expirací (MES) už se neslévají — každá má svůj
         # řádek. Merge zůstává jen jako pojistka proti skutečnému duplikátu
