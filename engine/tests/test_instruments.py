@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime as dt
+import logging
 import math
 from collections.abc import Sequence
 from dataclasses import replace
@@ -52,6 +53,7 @@ from gexlens_engine.storage.oi_archive import (
     ContractSnapshot,
     OIArchiver,
     OIEodRepository,
+    OIMiss,
     OIRecord,
 )
 from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
@@ -592,7 +594,7 @@ async def test_expanze_sekundaru_doarchivuje_nove_striky(
 
         async def fetch_snapshot(
             self, spec: OptionContractSpec, timeout_s: float
-        ) -> ContractSnapshot | None:
+        ) -> ContractSnapshot | OIMiss:
             return ContractSnapshot(oi=77.0)
 
     pipeline.archiver = OIArchiver(repository, ConstOIFetcher(), settings)
@@ -2075,10 +2077,10 @@ class TimedArchiver(CountingArchiver):
         self.batches: list[float] = []
 
     async def fetch_batch(
-        self, batch: Sequence[OptionContractSpec], day: dt.date
+        self, batch: Sequence[OptionContractSpec], day: dt.date, *, offset: int, total: int
     ) -> tuple[list[OIRecord], list[OptionContractSpec]]:
         self.batches.append(self.clock.t)
-        result = await super().fetch_batch(batch, day)
+        result = await super().fetch_batch(batch, day, offset=offset, total=total)
         self.clock.t += 4.0
         return result
 
@@ -2108,7 +2110,7 @@ class SweepGuardFetcher(MockOIFetcher):
 
     async def fetch_snapshot(
         self, spec: OptionContractSpec, timeout_s: float
-    ) -> ContractSnapshot | None:
+    ) -> ContractSnapshot | OIMiss:
         if self.sweeping[0]:
             self.during_sweep.append(spec)
         return await super().fetch_snapshot(spec, timeout_s)
@@ -2226,6 +2228,44 @@ async def test_finalita_oi_az_po_celem_pruchodu(
     await pipeline._oi_jobs_task
 
 
+async def test_log_pruchodu_po_davkach_nese_pozici_davek_a_duvod_nefinality(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#1650: řádek dávky nese pozici v celém průchodu i v další minutě (D1),
+    řádek průchodu důvod nefinality — změněné hodnoty, chybějící dřív archivované
+    a pokrytí (D2)."""
+    settings, _, repository, _ = env
+    pipeline, archiver, clock = timed_pipeline(env, 700.0)
+    day = TS.date()
+    po_okne = settings.oi_publication_utc(day) + dt.timedelta(minutes=5)
+    specs = list(pipeline.runtime.contracts)
+    repository.upsert_many(
+        [
+            OIRecord("ES", s.expiry, s.strike, s.right, day, 500.0, trading_class=s.trading_class)
+            for s in specs
+        ],
+        po_okne - dt.timedelta(minutes=1),
+    )
+    fetcher = archiver._fetcher
+    assert isinstance(fetcher, MockOIFetcher)
+    del fetcher.values[specs[0]]  # dřív archivovaný kontrakt teď OI nedodá
+    pipeline._cycles_since_oi = OI_RETRY_CYCLES
+    await pipeline.run_minute(po_okne)
+    caplog.set_level(logging.INFO, logger="gexlens_engine")
+
+    await advance_oi_archives([pipeline], 8.0 + OI_ARCHIVE_RESERVE_S, clock=clock)
+    await advance_oi_archives([pipeline], math.inf, clock=clock)
+
+    messages = [r.getMessage() for r in caplog.records]
+    positions = [m.split(": dávka ")[1].split(" ")[0] for m in messages if ": dávka " in m]
+    assert positions == [f"{i}–{i}/{len(specs)}" for i in range(1, len(specs) + 1)]
+    n = len(specs)
+    pruchod = f"OI archiv ES {day}: {n - 1} zapsáno, 1 chybí — pokrytí {100 * (n - 1) / n:.0f} %"
+    assert f"{pruchod}, změněno {n - 1}, chybí dřív archivovaných 1" in messages
+    assert pipeline.oi_final is False
+
+
 async def test_rozpracovany_pruchod_oi_se_zahodi_novy_den(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:
@@ -2320,7 +2360,7 @@ async def test_chyba_davky_oi_nezastavi_ostatni_pipeline(
 
     class BrokenArchiver(OIArchiver):
         async def fetch_batch(
-            self, batch: Sequence[OptionContractSpec], day: dt.date
+            self, batch: Sequence[OptionContractSpec], day: dt.date, *, offset: int, total: int
         ) -> tuple[list[OIRecord], list[OptionContractSpec]]:
             raise RuntimeError("mock: neočekávaná chyba dávky")
 
@@ -2370,7 +2410,7 @@ async def test_watchdog_zahodi_visici_davku_oi_a_pusti_dalsi_pipeline(
 
     class HangingArchiver(OIArchiver):
         async def fetch_batch(
-            self, batch: Sequence[OptionContractSpec], day: dt.date
+            self, batch: Sequence[OptionContractSpec], day: dt.date, *, offset: int, total: int
         ) -> tuple[list[OIRecord], list[OptionContractSpec]]:
             await asyncio.sleep(3600)
             raise AssertionError("nedosažitelné")

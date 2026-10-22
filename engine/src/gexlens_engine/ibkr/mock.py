@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot
 from gexlens_engine.ibkr.underlying import Bar
-from gexlens_engine.storage.oi_archive import ContractSnapshot
+from gexlens_engine.storage.oi_archive import ContractSnapshot, OIMiss
 
 
 class PacingViolationError(RuntimeError):
@@ -166,30 +166,35 @@ class MockQuoteStreamer:
 
 
 class MockOIFetcher:
-    """Mock denního snímku pro OIArchiver: hodnoty per kontrakt, chybějící None.
+    """Mock denního snímku pro OIArchiver: hodnoty per kontrakt, chybějící s důvodem.
 
     `values` drží floaty (OI) kvůli stávajícím testům; `snapshots` umí vracet
-    plný ContractSnapshot včetně IV/greeks (#519).
+    plný ContractSnapshot včetně IV/greeks (#519). Kontrakt bez hodnoty vrací
+    důvod z `misses`, jinak „bez ticku“ (#1650).
     """
 
     def __init__(
         self,
         values: dict[OptionContractSpec, float] | None = None,
         snapshots: dict[OptionContractSpec, ContractSnapshot] | None = None,
+        misses: dict[OptionContractSpec, OIMiss] | None = None,
     ) -> None:
         self.values = dict(values or {})
         self.snapshots = dict(snapshots or {})
+        self.misses = dict(misses or {})
         self.fetch_calls: list[OptionContractSpec] = []
 
     async def fetch_snapshot(
         self, spec: OptionContractSpec, timeout_s: float
-    ) -> ContractSnapshot | None:
+    ) -> ContractSnapshot | OIMiss:
         self.fetch_calls.append(spec)
         await asyncio.sleep(0)
         if spec in self.snapshots:
             return self.snapshots[spec]
         oi = self.values.get(spec)
-        return ContractSnapshot(oi=oi) if oi is not None else None
+        if oi is None:
+            return self.misses.get(spec, OIMiss.NO_TICK)
+        return ContractSnapshot(oi=oi)
 
 
 class MockHistoricalClient:

@@ -11,6 +11,7 @@ from gexlens_engine.storage.oi_archive import (
     ContractSnapshot,
     OIArchiver,
     OIEodRepository,
+    OIMiss,
     OIRecord,
 )
 
@@ -93,9 +94,9 @@ class _Fetcher:
 
     async def fetch_snapshot(
         self, spec: OptionContractSpec, timeout_s: float
-    ) -> ContractSnapshot | None:
+    ) -> ContractSnapshot | OIMiss:
         oi = self._values.get(spec.trading_class or "")
-        return None if oi is None else ContractSnapshot(oi=oi)
+        return OIMiss.NO_TICK if oi is None else ContractSnapshot(oi=oi)
 
 
 async def test_prechodovy_den_neuplne_cteni_nechava_souhrn(tmp_path: Path) -> None:

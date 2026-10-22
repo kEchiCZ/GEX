@@ -6,6 +6,7 @@ prošel kontrakt, pro který TWS nic neposlala, jako kompletní se starými čí
 
 import asyncio
 import datetime as dt
+import math
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -16,6 +17,7 @@ from gexlens_engine.adapters import IbOIFetcher, IbQuoteStreamer
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot
 from gexlens_engine.ibkr.subscription import ReqIdTombstones
+from gexlens_engine.storage.oi_archive import ContractSnapshot, OIMiss
 
 SPEC = OptionContractSpec(
     symbol="ES",
@@ -150,7 +152,7 @@ async def test_oi_snapshot_vyzaduje_cerstvy_tick() -> None:
     ib = _FakeIB(_contract())
     streamer = IbQuoteStreamer(cast(IB, ib))
     fetcher = IbOIFetcher(cast(IB, ib), streamer)
-    assert await fetcher.fetch_snapshot(SPEC, timeout_s=0.6) is None
+    assert await fetcher.fetch_snapshot(SPEC, timeout_s=0.6) is OIMiss.NO_TICK
 
     async def tws() -> None:
         await asyncio.sleep(0.3)
@@ -159,4 +161,27 @@ async def test_oi_snapshot_vyzaduje_cerstvy_tick() -> None:
     task = asyncio.create_task(tws())
     snapshot = await fetcher.fetch_snapshot(SPEC, timeout_s=2.0)
     await task
-    assert snapshot is not None and snapshot.oi == 1234.0
+    assert isinstance(snapshot, ContractSnapshot) and snapshot.oi == 1234.0
+
+
+@pytest.mark.asyncio
+async def test_oi_snapshot_rozlisi_tick_bez_oi_a_nekvalifikovany_kontrakt() -> None:
+    """#1650: důvod chybění do řádku dávky — ticky chodí, ale OI strany ne
+    (IBKR posílá 101 pozdě), a kontrakt, který nejde kvalifikovat."""
+    ib = _FakeIB(_contract())
+    ib.ticker.callOpenInterest = math.nan
+    fetcher = IbOIFetcher(cast(IB, ib), IbQuoteStreamer(cast(IB, ib)))
+
+    async def tws() -> None:
+        await asyncio.sleep(0.3)
+        ib.deliver_tick()
+
+    task = asyncio.create_task(tws())
+    assert await fetcher.fetch_snapshot(SPEC, timeout_s=0.8) is OIMiss.NO_OI
+    await task
+    assert ib.cancelled  # odhlášeno i bez OI
+
+    unknown = _FakeIB(SimpleNamespace(conId=0))
+    fetcher = IbOIFetcher(cast(IB, unknown), IbQuoteStreamer(cast(IB, unknown)))
+    assert await fetcher.fetch_snapshot(SPEC, timeout_s=0.6) is OIMiss.UNQUALIFIED
+    assert not unknown.cancelled  # bez kontraktu se nic nepřihlásilo
