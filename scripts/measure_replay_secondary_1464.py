@@ -9,8 +9,9 @@ bez PG) a spočítá:
   od #1331) nebo od settle vlastní expirace — po opravě musí být 0;
 - setupy večera před #1331: do nasazení #1331 (7. 10. 2026) roloval živý řetěz
   až s novým dnem v UTC, takže v okně po settle předchozí expirace psal E ještě
-  sekundár. Konec večera = první minuta aktivní kadence (`ACTIVE_RUN` minut
-  levels po sobě; sekundár píše jednou za 3 min).
+  sekundár. Konec večera = první minuta aktivní kadence (`bt.live_start`).
+  Replay tyto minuty od #1464 vynechává — sloupec ověřuje, že je to 0
+  (před vynecháním 22. 10.: ES 5 setupů, ΣR −5,0; NQ 10, ΣR −2,0).
 
 Jen čte partice `data/derived`. Řez `--to` drží měření opakovatelné (jen
 uzavřené expirace):
@@ -21,12 +22,9 @@ uzavřené expirace):
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import glob
 import os
 import sys
-
-import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_setups as bt  # noqa: E402 — sousední skript, ne balík
@@ -34,31 +32,12 @@ import backtest_setups as bt  # noqa: E402 — sousední skript, ne balík
 from gexlens_engine.compute.settle import history_expiry_settle  # noqa: E402
 from gexlens_engine.compute.setups import SetupParams  # noqa: E402
 
-#: Den nasazení #1331 — od něj živá pipeline roluje v settle expirace
-ROLL_AT_SETTLE_FROM = dt.datetime(2026, 10, 7, tzinfo=dt.UTC)
-#: Aktivní kadence = tolik minut levels po sobě (sekundár souvislý běh nemá)
-ACTIVE_RUN = 3
-
 
 class _NoOiRepo:
     """Max Pain bez PG: `max_pain_for` výjimku převede na None."""
 
     def values_for(self, *_args: object) -> list[object]:
         raise RuntimeError("měření běží bez PG")
-
-
-def active_cadence_start(symbol: str, expiry: str, start: dt.datetime) -> dt.datetime | None:
-    """První minuta levels od `start`, za kterou jdou další minuty bez mezery."""
-    levels = bt.load_series(f"{bt.DATA}/{symbol}/{expiry}/levels/*.parquet")
-    if levels is None:
-        return None
-    stamps = sorted(ts for ts in bt._utc_ns(levels["ts_min"]) if ts >= start)
-    present = set(stamps)
-    step = pd.Timedelta(minutes=1)
-    for ts in stamps:
-        if all(ts + k * step in present for k in range(1, ACTIVE_RUN)):
-            return ts.to_pydatetime()
-    return None
 
 
 def measure(symbol: str, last: int, to: str) -> dict[str, float]:
@@ -90,9 +69,8 @@ def measure(symbol: str, last: int, to: str) -> dict[str, float]:
         stats["expiries"] += 1
         stats["skipped_minutes"] += skip.minutes
         start = bt.active_window(symbol, expiry)[0]
-        evening_end = (
-            active_cadence_start(symbol, expiry, start) if start < ROLL_AT_SETTLE_FROM else None
-        )
+        levels = bt.load_series(f"{bt.DATA}/{symbol}/{expiry}/levels/*.parquet")
+        evening_end = None if levels is None else bt.live_start(levels["ts_min"], start)
         if evening_end is not None and evening_end > start:
             stats["evenings"] += 1
             stats["evening_minutes"] += sum(1 for m in minutes if m.ts < evening_end)

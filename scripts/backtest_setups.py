@@ -9,6 +9,8 @@ Okno aktivního řetězu (#1464, ADR-0034 doplněk 22. 10. 2026): adresář expi
 nese i minuty, kdy ji psal sekundární runtime (kadence 3 min), ale živý
 `SetupEngine` běží jen nad aktivním řetězem. Replay proto přehraje expiraci E
 jen v [settle předchozí expirace, settle E) — pravidlo živého rollu od #1331.
+Okna před nasazením #1331 (7. 10. 2026) začínají až aktivní kadencí levels
+(`live_start`): živý řetěz tehdy roloval s novým dnem UTC nebo restartem.
 
 Otevřené setupy jdou týmž krokem jako živý engine (#1320, #1345): po cestě
 ceny od baru vstupu, bary od settle se nehodnotí, timeout za close baru
@@ -417,11 +419,37 @@ def settled(symbol: str, expiry: str, now: dt.datetime) -> bool:
     return now >= end
 
 
+#: Nasazení #1331: od 7. 10. 2026 živá pipeline roluje v settle expirace
+ROLL_AT_SETTLE_FROM = dt.datetime(2026, 10, 7, tzinfo=dt.UTC)
+#: Aktivní kadence = tolik minut levels po sobě; sekundár píše jednou za 3 min
+ACTIVE_RUN = 3
+
+
+def live_start(levels: pd.Series, start: dt.datetime) -> dt.datetime | None:
+    """Odkdy byla E živě aktivní v okně od `start` (#1464).
+
+    Do nasazení #1331 roloval živý řetěz až s novým dnem UTC nebo restartem:
+    večer po settle předchozí expirace psal E jen sekundár (kadence 3 min)
+    a živý engine nad ní nehledal. Začátek = první minuta levels od `start`,
+    po které jdou další bez mezery; None = aktivní kadence chybí. Od #1331
+    je E aktivní hned od `start`.
+    """
+    if start >= ROLL_AT_SETTLE_FROM:
+        return start
+    stamps = _utc_ns(levels)
+    present = set(stamps[stamps >= start])
+    for ts in sorted(present):
+        if all(ts + k * _MINUTE in present for k in range(1, ACTIVE_RUN)):
+            return ts.to_pydatetime()
+    return None
+
+
 @dataclasses.dataclass
 class WindowSkip:
     """Co replay vynechal kvůli oknu aktivního řetězu (#1464) — hlavička walk-forwardu."""
 
-    #: minut (bar ∩ levels) mimo [settle předchozí expirace, settle E)
+    #: minut (bar ∩ levels) mimo [settle předchozí expirace, settle E),
+    #: před #1331 i večer před aktivní kadencí (`live_start`)
     minutes: int = 0
     #: expirace, jejichž settle proti času běhu ještě nenastal
     unsettled: list[str] = dataclasses.field(default_factory=list)
@@ -447,9 +475,10 @@ def build_minutes(
 ) -> list[MinuteInputs]:
     """MinuteInputs jednoho obchodního dne (expirace = adresář derived).
 
-    Jen minuty v okně aktivního řetězu (`active_window`, #1464); kolik jich
-    padlo mimo, přičte do `skip`. `prints` = mechanika replaye: CumΔ z tisků
-    (v6, ADR-0057 bod 7), jinak midpoint (v5); výchozí je mechanika kódu.
+    Jen minuty v okně aktivního řetězu (`active_window`, před #1331 od
+    `live_start`, #1464); kolik jich padlo mimo, přičte do `skip`. `prints` =
+    mechanika replaye: CumΔ z tisků (v6, ADR-0057 bod 7), jinak midpoint (v5);
+    výchozí je mechanika kódu.
     `shadow_only` čte pod v6 stín i v seancích s 1A (brána parity,
     `cum_delta_series`).
     """
@@ -469,6 +498,7 @@ def build_minutes(
     # Sekundární minuty před rollem a minuty od settle živý engine nad E
     # nehledá (#1464) — filtr jen minut, zdroje CumΔ ani toků se nemění
     start, settle = active_window(symbol, expiry)
+    start = live_start(levels["ts_min"], start) or settle
     stamps = _utc_ns(frame["ts_min"])
     inside = (stamps >= start) & (stamps < settle)
     if skip is not None:

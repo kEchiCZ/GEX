@@ -372,6 +372,22 @@ def test_build_minutes_pondelni_expirace_bere_patecni_vecer_a_nedeli(tmp_path: P
     assert skip.minutes == 1
 
 
+def test_build_minutes_pred_1331_vecer_sekundaru_vynecha_do_aktivni_kadence(
+    tmp_path: Path,
+) -> None:
+    """Úterý 6. 10. (před #1331): po settle 20261005 psal E jen sekundár à 3 min,
+    živý řetěz roloval až o půlnoci UTC — replay začne první souvislou kadencí."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    evening = [_at(5, 20, 30), _at(5, 20, 33), _at(5, 20, 36)]
+    active = [_at(6, 0, 0), _at(6, 0, 1), _at(6, 0, 2), _at(6, 0, 3), _at(6, 19, 59)]
+    _partitions(tmp_path, {"20261006": evening + active})
+    assert module.active_window("ES", "20261006")[0] == _at(5, 20, 0)
+    skip = module.WindowSkip()
+    assert [m.ts for m in module.build_minutes("ES", "20261006", None, skip=skip)] == active
+    assert skip.minutes == len(evening)
+
+
 def test_option_flows_po_dnech_nese_posledni_objem_kontraktu_do_dalsiho_dne(
     tmp_path: Path,
 ) -> None:
