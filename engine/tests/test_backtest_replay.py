@@ -461,7 +461,7 @@ def _live_flows(
         cumdelta_prints=True,
     )
     runtime = QuotesRuntime()
-    flows = []
+    flows: list[tuple[float, float, float]] = []
     for ts, quotes in cycles:
         runtime.quotes = quotes
         flows.append(engine._flows(cast(EngineRuntime, runtime), trading_session_date(ts)))
@@ -472,12 +472,14 @@ def _replay_flows(
     module: Any, cycles: list[tuple[dt.datetime, Any]], **kwargs: Any
 ) -> list[tuple[float, float, float]]:
     flows = module.option_flows("ES", "20261021", prints=True, **kwargs).set_index("ts_min")
-    return [
-        tuple(float(flows.loc[ts, column]) for column in ("call_flow", "put_flow", "opt_vol"))
-        if ts in flows.index
-        else (0.0, 0.0, 0.0)  # minuta bez řádku s objemem = merge left → 0 v `build_minutes`
-        for ts, _ in cycles
-    ]
+    rows: list[tuple[float, float, float]] = []
+    for ts, _ in cycles:
+        if ts not in flows.index:  # minuta bez řádku s objemem = merge left → 0 v `build_minutes`
+            rows.append((0.0, 0.0, 0.0))
+            continue
+        row = flows.loc[ts]
+        rows.append((float(row["call_flow"]), float(row["put_flow"]), float(row["opt_vol"])))
+    return rows
 
 
 def test_option_flows_v6_proti_maximu_seance_nese_stav_do_dalsiho_dne(tmp_path: Path) -> None:
