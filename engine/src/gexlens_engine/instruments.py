@@ -730,7 +730,7 @@ class InstrumentPipeline:
         # Důvod nefinality (#1650): finální je jen průchod bez změněné hodnoty,
         # bez chybějícího dřív archivovaného kontraktu a s pokrytím nad prahem
         logger.info(
-            "OI archiv %s %s: %d zapsáno, %d chybí — pokrytí %.0f %%, změněno %d, "
+            "OI archiv %s %s: %d zapsáno, %d chybí — pokrytí %.1f %%, změněno %d, "
             "chybí dřív archivovaných %d",
             self.symbol,
             today,

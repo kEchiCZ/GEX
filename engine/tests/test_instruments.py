@@ -2261,7 +2261,7 @@ async def test_log_pruchodu_po_davkach_nese_pozici_davek_a_duvod_nefinality(
     positions = [m.split(": dávka ")[1].split(" ")[0] for m in messages if ": dávka " in m]
     assert positions == [f"{i}–{i}/{len(specs)}" for i in range(1, len(specs) + 1)]
     n = len(specs)
-    pruchod = f"OI archiv ES {day}: {n - 1} zapsáno, 1 chybí — pokrytí {100 * (n - 1) / n:.0f} %"
+    pruchod = f"OI archiv ES {day}: {n - 1} zapsáno, 1 chybí — pokrytí {100 * (n - 1) / n:.1f} %"
     assert f"{pruchod}, změněno {n - 1}, chybí dřív archivovaných 1" in messages
     assert pipeline.oi_final is False
 
