@@ -5,6 +5,13 @@ Nepřepisuje logiku detekce ani vyhodnocení: importuje `detect_all`,
 nich staví orchestraci, kterou jinak dělá `SetupEngine` (anti-spam per šablona,
 blokace směru po sérii stopů, cooldown v kontra-režimu).
 
+Okno aktivního řetězu (#1464, ADR-0034 doplněk 22. 10. 2026): adresář expirace
+nese i minuty, kdy ji psal sekundární runtime (kadence 3 min), ale živý
+`SetupEngine` běží jen nad aktivním řetězem. Replay proto přehraje expiraci E
+jen v [settle předchozí expirace, settle E) — pravidlo živého rollu od #1331.
+Okna před nasazením #1331 (7. 10. 2026) začínají až aktivní kadencí levels
+(`live_start`): živý řetěz tehdy roloval s novým dnem UTC nebo restartem.
+
 Otevřené setupy jdou týmž krokem jako živý engine (#1320, #1345): po cestě
 ceny od baru vstupu, bary od settle se nehodnotí, timeout za close baru
 končícího v settle (dřív replay timeout neměl a setup skončil jako `active`,
@@ -51,6 +58,7 @@ from gexlens_engine.compute.gexfield import GexProfile, gamma_edges
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import (
     history_expiry_settle,
+    is_trading_session,
     settle_ts,
     trading_session_date,
 )
@@ -86,7 +94,28 @@ def set_data_root(root: str) -> None:
 
 
 def load_series(pattern: str) -> pd.DataFrame | None:
-    files = sorted(glob.glob(pattern))
+    return load_files(sorted(glob.glob(pattern)))
+
+
+def load_bars(symbol: str, decisions: pd.Series) -> pd.DataFrame | None:
+    """Bary k rozhodovacím minutám `decisions` (bar N − 1 k minutě N).
+
+    Partice barů = UTC den jejich minut, bez duplicit mezi dny (ověřeno
+    22. 10. 2026 nad ES i NQ): stačí partice dnů těchto minut — celý archiv
+    (~700 dní) pro každou expiraci stál ~0,2 GB špičky (#1464).
+    """
+    stamps = _utc_ns(decisions) - _MINUTE
+    first, last = stamps.min().date().isoformat(), stamps.max().date().isoformat()
+    return load_files(
+        [
+            path
+            for path in sorted(glob.glob(f"{DATA}/{symbol}/bars/*.parquet"))
+            if first <= os.path.basename(path)[:10] <= last
+        ]
+    )
+
+
+def load_files(files: list[str]) -> pd.DataFrame | None:
     if not files:
         return None
     frame = pd.concat([pd.read_parquet(f) for f in files])
@@ -100,23 +129,30 @@ def option_flows(symbol: str, expiry: str) -> pd.DataFrame | None:
     minuty; tady je totéž jako `groupby(strike, right).shift()` nad uloženou
     maticí. Kontrakt, který se ve sweepu poprvé objeví, přírůstek nemá (NaN →
     zahodit) — shodné s `previous is None: continue` v produkci.
+
+    Partice se čtou po dnech (expirace má ~měsíc snapshotů, najednou přes
+    0,35 GB, #1464): do dalšího dne jde jen poslední řádek každého kontraktu.
     """
     files = sorted(glob.glob(f"{ROOT}/snapshots/{symbol}/{expiry}/*.parquet"))
-    if not files:
+    keys = ["strike", "right"]
+    carry: pd.DataFrame | None = None
+    parts: list[pd.DataFrame] = []
+    for path in files:
+        day = pd.read_parquet(path, columns=["ts_min", "strike", "right", "volume", "delta"])
+        if day.empty:
+            continue
+        day = day.assign(carried=False)
+        snap = day if carry is None else pd.concat([carry, day])
+        snap = snap.sort_values([*keys, "ts_min"])
+        previous = snap.groupby(keys, sort=False)["volume"].shift()
+        increment = (snap["volume"] - previous).where(lambda s: s > 0)  # ≤ 0 se přeskakuje
+        snap = snap.assign(inc=increment, weighted=increment * snap["delta"].abs())
+        own = snap[~snap["carried"]]
+        parts.append(own.groupby(["ts_min", "right"], sort=True)[["inc", "weighted"]].sum())
+        carry = snap.groupby(keys, sort=False).tail(1)[day.columns].assign(carried=True)
+    if not parts:
         return None
-    snap = pd.concat(
-        [
-            pd.read_parquet(f, columns=["ts_min", "strike", "right", "volume", "delta"])
-            for f in files
-        ]
-    )
-    if snap.empty:
-        return None
-    snap = snap.sort_values(["strike", "right", "ts_min"])
-    previous = snap.groupby(["strike", "right"], sort=False)["volume"].shift()
-    increment = (snap["volume"] - previous).where(lambda s: s > 0)  # ≤ 0 se přeskakuje
-    snap = snap.assign(inc=increment, weighted=increment * snap["delta"].abs())
-    grouped = snap.groupby(["ts_min", "right"], sort=True)[["inc", "weighted"]].sum()
+    grouped = pd.concat(parts).groupby(level=["ts_min", "right"], sort=True).sum()
     wide = grouped.unstack("right")
     return pd.DataFrame(
         {
@@ -349,6 +385,76 @@ def expiry_end(symbol: str, expiry: str) -> dt.datetime | None:
     return history_expiry_settle(expiry, symbol)[0]
 
 
+def previous_expiry(expiry: str) -> str:
+    """Expirace řetězu před `expiry` = předchozí obchodní den (ES/NQ mají denní
+    expirace; pondělí → pátek, svátek se přeskočí přes `is_trading_session`)."""
+    day = dt.datetime.strptime(expiry, "%Y%m%d").date() - dt.timedelta(days=1)
+    while not is_trading_session(day):
+        day -= dt.timedelta(days=1)
+    return day.strftime("%Y%m%d")
+
+
+def active_window(symbol: str, expiry: str) -> tuple[dt.datetime, dt.datetime]:
+    """Okno aktivního řetězu expirace: [settle předchozí expirace, settle E) (#1464).
+
+    Živá pipeline roluje v settle expirace (#1331), takže E je aktivní od settle
+    předchozí expirace do vlastního settle; dřív ji psal jen sekundární runtime.
+    Minuta settle E patří už další expiraci: replay v ní setup nezaloží
+    (`born_after_settle`) ani nehodnotí (`walk_setup_path` bere minuty před
+    settle) a otevřený setup uzavře timeout už v minutě před ní (`now` = settle).
+    """
+    start = expiry_end(symbol, previous_expiry(expiry))
+    end = expiry_end(symbol, expiry)
+    if start is None or end is None:
+        raise ValueError(f"Nečitelná expirace {expiry!r}")
+    return start, end
+
+
+def settled(symbol: str, expiry: str, now: dt.datetime) -> bool:
+    """Nastal settle expirace proti okamžiku běhu `now` (UTC)? Neuzavřená seance
+    nese jen minuty do teď a setupy bez výsledku — do denní ΣR nepatří (#1464)."""
+    end = expiry_end(symbol, expiry)
+    if end is None:
+        raise ValueError(f"Nečitelná expirace {expiry!r}")
+    return now >= end
+
+
+#: Nasazení #1331: od 7. 10. 2026 živá pipeline roluje v settle expirace
+ROLL_AT_SETTLE_FROM = dt.datetime(2026, 10, 7, tzinfo=dt.UTC)
+#: Aktivní kadence = tolik minut levels po sobě; sekundár píše jednou za 3 min
+ACTIVE_RUN = 3
+
+
+def live_start(levels: pd.Series, start: dt.datetime) -> dt.datetime | None:
+    """Odkdy byla E živě aktivní v okně od `start` (#1464).
+
+    Do nasazení #1331 roloval živý řetěz až s novým dnem UTC nebo restartem:
+    večer po settle předchozí expirace psal E jen sekundár (kadence 3 min)
+    a živý engine nad ní nehledal. Začátek = první minuta levels od `start`,
+    po které jdou další bez mezery; None = aktivní kadence chybí. Od #1331
+    je E aktivní hned od `start`.
+    """
+    if start >= ROLL_AT_SETTLE_FROM:
+        return start
+    stamps = _utc_ns(levels)
+    present = set(stamps[stamps >= start])
+    for ts in sorted(present):
+        if all(ts + k * _MINUTE in present for k in range(1, ACTIVE_RUN)):
+            return ts.to_pydatetime()
+    return None
+
+
+@dataclasses.dataclass
+class WindowSkip:
+    """Co replay vynechal kvůli oknu aktivního řetězu (#1464) — hlavička walk-forwardu."""
+
+    #: minut (bar ∩ levels) mimo [settle předchozí expirace, settle E),
+    #: před #1331 i večer před aktivní kadencí (`live_start`)
+    minutes: int = 0
+    #: expirace, jejichž settle proti času běhu ještě nenastal
+    unsettled: list[str] = dataclasses.field(default_factory=list)
+
+
 def max_pain_for(repo: OIEodRepository, symbol: str, expiry: str, day: dt.date) -> float | None:
     try:
         records = repo.values_for(symbol, expiry, day)
@@ -365,16 +471,20 @@ def build_minutes(
     prints: bool = CUMDELTA_PRINTS,
     *,
     shadow_only: bool = False,
+    skip: WindowSkip | None = None,
 ) -> list[MinuteInputs]:
     """MinuteInputs jednoho obchodního dne (expirace = adresář derived).
 
-    `prints` = mechanika replaye: CumΔ z tisků (v6, ADR-0057 bod 7), jinak
-    midpoint (v5); výchozí je mechanika kódu. `shadow_only` čte pod v6 stín
-    i v seancích s 1A (brána parity, `cum_delta_series`).
+    Jen minuty v okně aktivního řetězu (`active_window`, před #1331 od
+    `live_start`, #1464); kolik jich padlo mimo, přičte do `skip`. `prints` =
+    mechanika replaye: CumΔ z tisků (v6, ADR-0057 bod 7), jinak midpoint (v5);
+    výchozí je mechanika kódu.
+    `shadow_only` čte pod v6 stín i v seancích s 1A (brána parity,
+    `cum_delta_series`).
     """
-    bars = load_series(f"{DATA}/{symbol}/bars/*.parquet")
     levels = load_series(f"{DATA}/{symbol}/{expiry}/levels/*.parquet")
     dom = load_series(f"{DATA}/{symbol}/{expiry}/walldom/*.parquet")
+    bars = None if levels is None else load_bars(symbol, levels["ts_min"])
     if bars is None or levels is None:
         return []
     # Decision-time konvence (#794 f. 1, změřeno 24. 8.): živý engine v minutě N
@@ -385,6 +495,15 @@ def build_minutes(
     bars = bars.copy()
     bars["ts_min"] = bars["ts_min"] + pd.Timedelta(minutes=1)
     frame = bars.merge(levels, on="ts_min", how="inner")
+    # Sekundární minuty před rollem a minuty od settle živý engine nad E
+    # nehledá (#1464) — filtr jen minut, zdroje CumΔ ani toků se nemění
+    start, settle = active_window(symbol, expiry)
+    start = live_start(levels["ts_min"], start) or settle
+    stamps = _utc_ns(frame["ts_min"])
+    inside = (stamps >= start) & (stamps < settle)
+    if skip is not None:
+        skip.minutes += int((~inside).sum())
+    frame = frame[inside]
     if dom is not None:
         frame = frame.merge(dom, on="ts_min", how="left")
     flows = option_flows(symbol, expiry)
@@ -414,11 +533,7 @@ def build_minutes(
     pain = max_pain_for(repo, symbol, expiry, day)
     # Settle vlastní expirace = konec života setupu, táž hranice jako živý
     # SetupEngine (`expiry_end`, ADR-0039 bod 2, DST #511, #1366; dřív pevně
-    # 20:00 UTC). Minuty po něm se přehrávají dál, ale nehodnotí: otevřený
-    # setup uzavře timeout v settle a nový nevznikne — viz `replay`.
-    settle = expiry_end(symbol, expiry)
-    if settle is None:
-        raise ValueError(f"Nečitelná expirace {expiry!r}")
+    # 20:00 UTC) a konec okna: otevřený setup uzavře timeout v settle — viz `replay`
 
     minutes: list[MinuteInputs] = []
     for row in frame.itertuples():
@@ -863,6 +978,7 @@ def main() -> None:
         return
 
     repo = OIEodRepository(create_engine(args.db)) if args.db else None
+    now = dt.datetime.now(dt.UTC)
 
     # Produkční default = absolutní prahy (násobky ATR jsou 0, viz #434)
     configs = {
@@ -883,6 +999,8 @@ def main() -> None:
         }
         per_day: dict[str, dict[str, float]] = defaultdict(dict)
         for expiry in expiries:
+            if not settled(symbol, expiry, now):
+                continue  # neuzavřená seance (#1464)
             minutes = build_minutes(symbol, expiry, repo) if repo else []
             if len(minutes) < 60:
                 continue

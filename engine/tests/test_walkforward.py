@@ -159,3 +159,8 @@ def test_walk_forward_validace_a_report() -> None:
     assert "| ES | base |" in report
     assert "## ES — folds" in report
     assert "Podíl foldů:" in report
+    # Poznámky hlavičky (#1464) jdou jako odrážky hned pod nadpis
+    noted = render_markdown(
+        {"ES": result}, title="Walk-forward test", notes=["ES: vynecháno 3 minut"]
+    )
+    assert noted.splitlines()[:3] == ["# Walk-forward test", "", "- ES: vynecháno 3 minut"]

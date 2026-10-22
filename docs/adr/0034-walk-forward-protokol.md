@@ -25,8 +25,9 @@ Start: 6 kandidátů z hypotéz kalibrací #394/#434 a R-mechaniky #302.
 
 `scripts/backtest_setups.py` (`build_minutes` + `replay`) nad archivem
 (snapshots/, derived/ mimo retenci, ADR-0029), stejná mechanika jako živě
-(`mechanics_version` aktuální). Seance = expirace řetězu (0DTE). Bloky:
-per symbol a **portfolio** (ES+NQ sečtené per seance, ADR-0030).
+(`mechanics_version` aktuální). Seance = expirace řetězu (0DTE) v okně
+aktivního řetězu, viz doplněk 22. 10. 2026. Bloky: per symbol a **portfolio**
+(ES+NQ sečtené per seance, ADR-0030).
 
 ### 3. Walk-forward
 
@@ -90,6 +91,41 @@ pravidlo o pořadí:
 3. Výjimka je jen oprava chyby, která data znehodnocuje (precedens v5, #859 —
    Max Pain zamrzlý na ranní hodnotě): ta se nasazuje hned a rozběhnutá
    měření se explicitně restartují s poznámkou v jejich issue.
+
+**Doplněk 22. 10. 2026 (#1464, nález #1081) — seance = okno aktivního řetězu.**
+Adresář expirace E nese i minuty, kdy E psal sekundární runtime (levels jednou
+za 3 min), ale živý `SetupEngine` běží jen nad aktivním řetězem. Replay je
+dosud přehrával: v řezu 25 expirací do 7. 10. vzniklo mimo okno 36 % setupů ES
+(112 z 315, ΣR +15,7) a 44 % NQ (180 z 411, ΣR −20,8). Noční report zároveň
+počítal neuzavřenou expiraci jako OOS den. Platí (rozhodnutí A v #1385):
+
+1. **Seance E = minuty v [settle předchozí expirace, settle E)** —
+   `settle.history_expiry_settle` (`expiry_end`), předchozí expirace =
+   předchozí obchodní den podle `is_trading_session` (pondělí bere páteční
+   večer a neděli, po svátku den před ním). Je to pravidlo živého rollu od
+   #1331; minuta settle E patří už další expiraci.
+2. **Okna před nasazením #1331 (7. 10. 2026) začínají aktivní kadencí** —
+   první minutou levels, po které jdou další bez mezery (`live_start`, tři
+   minuty po sobě). Živý řetěz tehdy roloval až s novým dnem UTC nebo
+   restartem; večer po settle (typicky 20:00–00:00 UTC) psal E jen sekundár
+   a živě nad ní žádný setup nevznikl. Replay by je skládal z každé třetí
+   minuty: v řezu 25 expirací ES 5 setupů (2 %, ΣR −5,0), NQ 10 (4 %,
+   ΣR −2,0) ve 23 večerech.
+3. **Expirace, jejíž settle proti okamžiku běhu (UTC, ne datum) ještě
+   nenastal, se vynechá** — rozhoduje okamžik, ne místní datum, takže platí
+   i v týdnech posunu času (26. 10.–1. 11. je settle dál 20:00 UTC = 21:00
+   SEČ, od 2. 11. 21:00 UTC). Report dne D proto končí OOS dnem D jen po
+   settle D a fold z reportu D má v reportu D+1 tutéž OOS ΣR.
+4. Hlavička reportu uvádí per symbol počet vynechaných minut a expirace bez
+   settle; JSON nese `run_at` a `skipped`.
+
+Zdroj CumΔ (`build_cum_series` / `attach_cum_delta`, #1590) a opční toky se
+oknem nemění — je to jen filtr minut. Po opravě je v témž řezu mimo okno
+i ve večerech před #1331 0 setupů (ES 224, ΣR +23,9; NQ 246, ΣR +44,8).
+Walk-forward 22. 10. má 46 místo 49 OOS seancí: chybí 22. a 23. 10. (bez
+settle) a 17. 9. — expirace 20260917 živě aktivní nebyla (pipeline z 20260916
+rolovala rovnou na 20260918), seance je proto mezera, ne minuty 16. 9.
+pod cizím datem.
 
 ## Důsledky
 
