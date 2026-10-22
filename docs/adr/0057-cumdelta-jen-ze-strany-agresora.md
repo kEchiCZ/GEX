@@ -431,3 +431,53 @@ Zpřesnění bodu 7, které zavádí #1590. Nové rozhodnutí je jen číselný 
   a stav α jen zdroje živé mechaniky) filtrují řádky podle `source`.
 - **Přehrání v5 × v6** nad 21. 9.–15. 10. nese `scripts/compare_mechanics_v5_v6.py`
   (report v #1403).
+
+## Doplněk (22. 10. 2026, #1602 engine část)
+
+Vstup objemu pod mechanikou v6. Vlastník rozhodl o dvou věcech v epice #1385: #1602 jde
+variantou B, tedy s bumpem v6 (20. 10.), a minuta po mezeře v objemu je B, i v enginu
+(21. 10.). Ostatní body plynou z bodu 11.
+
+- **Přírůstek denního kumulativního volume se počítá proti maximu seance**
+  (`compute/volume.py`, `volume_increment`, `SessionVolumes`).
+  - Proč: IBKR kumulativ kmitá (862 ↔ 863) a propadá (pauza Globexu, noc). Přírůstek proti
+    poslední hodnotě proto po každém poklesu započetl návrat znovu: Opt Vol v RTH +12–70 %,
+    Δ Flow C/P +5–22 % (#1602).
+  - Reference je maximum viděné v seanci. Pokles i návrat k maximu dají 0, NULL referenci
+    nemění.
+  - První výskyt kontraktu v seanci a minuta po mezeře jen založí stav. Přírůstek se
+    neměří (v součtu 0) a reference = max(reference, hodnota).
+  - Mezera = kontrakt v minulém cyklu objem nenesl (NULL z tasty fallbacku, chybějící nebo
+    stará kotace). Jinak by celý objem výpadku spadl do jedné minuty: ES 2. 10. 19:18 UTC
+    C 44 243 / P 49 343.
+  - Nová seance (17:00 CT) stav maže, restart začíná prázdný.
+  - Totéž počítají API a frontend od #1630 a #1636. Daily ale minutu po mezeře započte.
+- **Kde pravidlo platí (jen pod v6):**
+  - bar větev trackeru pod tisky (`CumDeltaTracker.add_volume`: `printvol`, pokrytí):
+    - pokles ani návrat k maximu nevyprázdní počítadla tisků;
+    - pokles varuje jednou za kontrakt a seanci;
+    - bar po cyklu bez baru (doplněk 18. 10., „jen založí stav“) drží maximum;
+    - předání v rollu (`promote`) drží maximum a první bar aktivního řetězu jde jako po mezeře;
+  - `SetupEngine._flows`: Δ Flow C/P pro T4 a `opt_vol` pro aktivitu T3. Cyklus je volání
+    v minutě s bary;
+  - `TendencyEngine._flows`, hlas `delta_flow` pravidel tendence v5. Minuta, ve které žádný
+    kontrakt nemá měřený přírůstek, hlas vynechá jako dosud za fallbacku;
+  - replay (`scripts/backtest_setups.py`, `option_flows`) jako vektorové zrcadlo:
+    - cyklus = zapsaná minuta expirace;
+    - stav začíná prázdný na začátku okna aktivního řetězu (#1464), protože živý `SetupEngine`
+      kontrakty expirace před rollem nečte;
+    - parita s živým `_flows` má test.
+- **Pod v5 beze změny (bod 11):** tracker pod midpointem, setupy v5, tendence v4 i replay v5
+  počítají přírůstek dál proti poslední hodnotě. `main` jde proto nasadit kdykoli a vzorky v5
+  se nemění. Tabulka bodu 5 („T3, … Δ Flow C/P … beze změny“) mluví o zdroji znaménka. Vstup
+  objemu T3, T4 a hlasu `delta_flow` se pod v6 mění tímto doplňkem.
+- **Verze:** tendence přechází s bumpem na pravidla v5 a hlas `delta_flow` se mění jen pod
+  nimi, vlastní zvýšení verze proto nepotřebuje. Mechanika setupů v6 nese změnu T3 a T4
+  v téže dávce. Přehrání v5 × v6 (#1403) spuštěné po tomto doplňku už nový vstup objemu
+  obsahuje.
+- **Limit replaye:** restart enginu uprostřed okna replay nezná. Živý engine po restartu jen
+  založí stav, replay přírůstek přes restart započte.
+- **Ověření po nasazení (AC #1602):**
+  - Σ `volume_delta` v `printvol` za RTH = Σ přírůstků od průběžného maxima ze snapshotů;
+  - okno CumΔ v tendenci má v minutách pauzy řád jednotek tisíc;
+  - partice `flow` nemá v 16:34–16:45 CT skok.
