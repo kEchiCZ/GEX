@@ -2095,16 +2095,22 @@ class TimedArchiver(CountingArchiver):
 
 
 class SweepGuardFetcher(MockOIFetcher):
-    """Čtení OI z IBKR, které selže, když zrovna běží sweep (100 lines, ADR-0001 bod 4)."""
+    """Čtení OI z IBKR, které si zapíše, když zrovna běží sweep (100 lines, ADR-0001 bod 4).
+
+    Výjimka by se ztratila v `OIArchiver._fetch_one` (chyba čtení = chybějící
+    kontrakt), proto se souběh sbírá do seznamu, který test ověří.
+    """
 
     def __init__(self, values: dict[OptionContractSpec, float], sweeping: list[bool]) -> None:
         super().__init__(values)
         self.sweeping = sweeping
+        self.during_sweep: list[OptionContractSpec] = []
 
     async def fetch_snapshot(
         self, spec: OptionContractSpec, timeout_s: float
     ) -> ContractSnapshot | None:
-        assert not self.sweeping[0], "dávka OI archivu běží souběžně se sweepem"
+        if self.sweeping[0]:
+            self.during_sweep.append(spec)
         return await super().fetch_snapshot(spec, timeout_s)
 
 
@@ -2178,8 +2184,11 @@ async def test_obnova_oi_po_davkach_neblokuje_cyklus_ani_sweep(
     assert archiver.calls == [po_okne.date()]
     assert archiver.times == [po_okne]  # k minutě otevření, jako čtení naráz
     assert pipeline._oi_pass is None
-    spec = pipeline.runtime.contracts[0]
-    assert repository.get_oi("ES", po_okne.date(), spec.strike, spec.right) == 700.0
+    fetcher = archiver._fetcher
+    assert isinstance(fetcher, SweepGuardFetcher)
+    assert fetcher.during_sweep == []  # žádné čtení z IBKR souběžně se sweepem
+    for spec in pipeline.runtime.contracts:
+        assert repository.get_oi("ES", po_okne.date(), spec.strike, spec.right) == 700.0
 
 
 async def test_finalita_oi_az_po_celem_pruchodu(
@@ -2325,4 +2334,53 @@ async def test_chyba_davky_oi_nezastavi_ostatni_pipeline(
     await advance_oi_archives([broken, healthy], math.inf, clock=clock)
     assert broken._oi_pass is None
     assert healthy._oi_pass is None
+    assert archiver.calls == [po_okne.date()]
+
+
+async def test_selhani_zapisu_pruchodu_po_davkach_hlasi_jako_cteni_naraz(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1646 + #494: selhání zápisu po celém průchodu je neúspěšná obnova, stejně
+    jako pád `archive_day` při čtení naráz — starší snímek platí, hlásí se hranově."""
+    settings, _, _, publisher = env
+    pipeline, archiver, clock = timed_pipeline(env, 700.0)
+
+    async def broken_commit(*args: object, **kwargs: object) -> ArchiveResult:
+        raise RuntimeError("mock: PG nedostupné")
+
+    archiver.commit = broken_commit  # type: ignore[method-assign]
+    po_okne = settings.oi_publication_utc(TS.date()) + dt.timedelta(hours=1)
+    pipeline._cycles_since_oi = OI_RETRY_CYCLES
+    await pipeline.run_minute(po_okne)
+    await advance_oi_archives([pipeline], math.inf, clock=clock)
+
+    assert pipeline._oi_pass is None
+    assert pipeline.oi_available is True  # platný starší snímek dne
+    assert pipeline.oi_final is False  # obnova se zopakuje dalším retry
+    assert [a["kind"] for a in alerts_of(publisher, OI_KINDS)] == ["oi_refresh_failed"]
+
+
+async def test_watchdog_zahodi_visici_davku_oi_a_pusti_dalsi_pipeline(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1646 + #219: dávka visící na mrtvém IBKR await nesmí zastavit smyčku."""
+    settings, writer, repository, publisher = env
+    healthy, archiver, clock = timed_pipeline(env, 700.0)
+    stuck = make_pipeline("NQ", 24000.0, settings, writer, repository, publisher)
+
+    class HangingArchiver(OIArchiver):
+        async def fetch_batch(
+            self, batch: Sequence[OptionContractSpec], day: dt.date
+        ) -> tuple[list[OIRecord], list[OptionContractSpec]]:
+            await asyncio.sleep(3600)
+            raise AssertionError("nedosažitelné")
+
+    stuck.archiver = HangingArchiver(repository, MockOIFetcher(), settings)
+    po_okne = settings.oi_publication_utc(TS.date()) + dt.timedelta(hours=1)
+    for pipeline in (stuck, healthy):
+        pipeline._cycles_since_oi = OI_RETRY_CYCLES
+        await pipeline.run_minute(po_okne)
+
+    await advance_oi_archives([stuck, healthy], math.inf, clock=clock, timeout_s=0.05)
+    assert stuck._oi_pass is None
     assert archiver.calls == [po_okne.date()]
