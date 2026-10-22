@@ -42,6 +42,8 @@ from gexlens_engine.compute.setups import (
     scale_params,
 )
 from gexlens_engine.config import Settings
+from gexlens_engine.ibkr.discovery import OptionContractSpec
+from gexlens_engine.ibkr.scheduler import CachedQuote, QuoteSnapshot
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
@@ -1891,3 +1893,113 @@ def test_detect_all_mezera_cumdelta_nespadne_a_sablony_bez_cumdelta_bezi() -> No
     assert detect_failed_break(no_cum, PARAMS) is not None
     pin = [minute(7530, max_pain=7510.0, minutes_to_expiry=100.0, cum_delta=None)]
     assert detect_max_pain_pin(pin, PARAMS) is not None
+
+
+# ── Přírůstky volume proti maximu seance pod v6 (#1602) ───────────────
+#: Řady „Hotovo když“ #1602 po cyklech (None = NULL z tasty fallbacku):
+#: call 7600 kmitá a propadá, put 7500 kmitá o 1, call 7700 má mezeru
+VOLUME_PLAN: dict[OptionContractSpec, tuple[float, list[float | None]]] = {
+    OptionContractSpec("ES", "FOP", "20991231", 7600.0, "C", "CME", "E3D", "50"): (
+        0.5,
+        [1000.0, 800.0, 760.0, 1000.0, 1010.0],
+    ),
+    OptionContractSpec("ES", "FOP", "20991231", 7500.0, "P", "CME", "E3D", "50"): (
+        -0.25,
+        [862.0, 863.0, 862.0, 863.0, 864.0],
+    ),
+    OptionContractSpec("ES", "FOP", "20991231", 7700.0, "C", "CME", "E3D", "50"): (
+        0.4,
+        [100.0, None, 130.0, 150.0, 150.0],
+    ),
+}
+
+
+class QuotesRuntime:
+    """Runtime jen s kotacemi aktivního zdroje — vstup `_flows` setupů i tendence."""
+
+    def __init__(self) -> None:
+        self.quotes: dict[OptionContractSpec, CachedQuote] = {}
+
+    def current_quotes(self) -> dict[OptionContractSpec, CachedQuote]:
+        return self.quotes
+
+    def step(self, index: int) -> "QuotesRuntime":
+        """Kotace cyklu `index` z `VOLUME_PLAN`."""
+        self.quotes = {
+            contract: quote(volumes[index], delta)
+            for contract, (delta, volumes) in VOLUME_PLAN.items()
+        }
+        return self
+
+
+def quote(volume: float | None, delta: float) -> CachedQuote:
+    snapshot = QuoteSnapshot(
+        bid=1.0,
+        ask=1.2,
+        last=1.1,
+        volume=volume,
+        iv=0.2,
+        delta=delta,
+        gamma=0.01,
+        theta=-0.1,
+        vega=0.1,
+    )
+    return CachedQuote(snapshot=snapshot, updated_at=0.0)
+
+
+@pytest.mark.parametrize(
+    ("prints", "expected"),
+    [
+        # v6: pokles a návrat 0, kmitání jen nad maximem, minuta po mezeře 0
+        (
+            True,
+            [
+                (0.0, 0.0, 0.0),
+                (0.0, 0.25, 1.0),
+                (0.0, 0.0, 0.0),
+                (8.0, 0.0, 20.0),
+                (5.0, 0.25, 11.0),
+            ],
+        ),
+        # v5 beze změny (ADR-0057 bod 11): návrat 240 znovu, mezera celá v jedné minutě
+        (
+            False,
+            [
+                (0.0, 0.0, 0.0),
+                (0.0, 0.25, 1.0),
+                (12.0, 0.0, 30.0),
+                (128.0, 0.25, 261.0),
+                (5.0, 0.25, 11.0),
+            ],
+        ),
+    ],
+)
+def test_setups_flows_proti_maximu_seance_pod_v6(
+    tmp_path: Path, prints: bool, expected: list[tuple[float, float, float]]
+) -> None:
+    """#1602 AC: tytéž řady jako čistá funkce; Δ Flow C/P (|Δ|) a opt_vol pro T3/T4."""
+    engine, _, _ = _bare_engine(tmp_path, cumdelta_prints=prints)
+    runtime = QuotesRuntime()
+    session = dt.date(2026, 10, 15)
+    flows = [engine._flows(cast(EngineRuntime, runtime.step(index)), session) for index in range(5)]
+    assert flows == [pytest.approx(row) for row in expected]
+
+
+def test_setups_flows_nova_seance_a_chybejici_kotace_jen_zalozi_stav(tmp_path: Path) -> None:
+    """v6: nová seance referenci smaže (kumulativ IBKR od ~0), kontrakt, který v cyklu
+    chyběl úplně (kotace mimo cache), má v dalším cyklu mezeru."""
+    engine, _, _ = _bare_engine(tmp_path, cumdelta_prints=True)
+    runtime = QuotesRuntime()
+    call, put = list(VOLUME_PLAN)[:2]
+    day = dt.date(2026, 10, 15)
+
+    def flows(quotes: dict[OptionContractSpec, CachedQuote], session: dt.date) -> float:
+        runtime.quotes = quotes
+        return engine._flows(cast(EngineRuntime, runtime), session)[2]
+
+    assert flows({call: quote(1000.0, 0.5), put: quote(50.0, -0.2)}, day) == 0.0
+    assert flows({put: quote(55.0, -0.2)}, day) == 5.0  # call v cyklu chybí
+    assert flows({call: quote(1400.0, 0.5), put: quote(56.0, -0.2)}, day) == 1.0
+    next_day = day + dt.timedelta(days=1)
+    assert flows({call: quote(1405.0, 0.5), put: quote(3.0, -0.2)}, next_day) == 0.0
+    assert flows({call: quote(1410.0, 0.5), put: quote(4.0, -0.2)}, next_day) == 6.0

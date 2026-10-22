@@ -4,9 +4,11 @@ import datetime as dt
 import logging
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy import create_engine
+from test_setups import VOLUME_PLAN, QuotesRuntime, quote
 
 from gexlens_engine.compute.cumdelta import FlowRow
 from gexlens_engine.compute.gexfield import GexProfile, gamma_at_price
@@ -25,6 +27,7 @@ from gexlens_engine.compute.tendency import (
     band_of,
     evaluate_tendency,
 )
+from gexlens_engine.runtime import EngineRuntime
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.tendency import TendencyEngine
 
@@ -548,3 +551,46 @@ def test_v5_sentindex_hodnota_pred_oknem_ze_vcerejsi_partice(tmp_path: Path) -> 
     current, then = _engine(prints=False, tmp_path=tmp_path)._sentiment(now)
     assert current == pytest.approx(0.30)
     assert then is None
+
+
+@pytest.mark.parametrize(
+    ("prints", "expected"),
+    [
+        # Pravidla v5 (mechanika v6): proti maximu seance, minuta po mezeře 0
+        (True, [(None, None), (0.0, 0.25), (0.0, 0.0), (8.0, 0.0), (5.0, 0.25)]),
+        # v4 beze změny (ADR-0057 bod 11): návrat 240 znovu, mezera celá v jedné minutě
+        (False, [(None, None), (0.0, 0.25), (12.0, 0.0), (128.0, 0.25), (5.0, 0.25)]),
+    ],
+)
+def test_tendence_flows_proti_maximu_seance(
+    prints: bool, expected: list[tuple[float | None, float | None]]
+) -> None:
+    """#1602 AC: tytéž řady jako `setups._flows` (hlas `delta_flow`); první cyklus
+    nic neměří a hlas vynechá."""
+    engine = _engine(prints)
+    runtime = QuotesRuntime()
+    session = dt.date(2026, 10, 15)
+    flows = [engine._flows(cast(EngineRuntime, runtime.step(index)), session) for index in range(5)]
+    assert flows == expected
+
+
+@pytest.mark.parametrize(("prints", "after"), [(True, (None, None)), (False, (210.0, 0.0))])
+def test_tendence_flows_null_uprostred_seance_neprida_cely_kumulativ(
+    prints: bool, after: tuple[float | None, float | None]
+) -> None:
+    """Fallback tasty (všechno NULL) a návrat IBKR: pod v5 tendence první minutu
+    po mezeře vynechá; v4 by započetla celý výpadek (420 kontraktů · |0,5|)."""
+    engine = _engine(prints)
+    runtime = QuotesRuntime()
+    call = next(iter(VOLUME_PLAN))
+    session = dt.date(2026, 10, 15)
+
+    def flows(volume: float | None) -> tuple[float | None, float | None]:
+        runtime.quotes = {call: quote(volume, 0.5)}
+        return engine._flows(cast(EngineRuntime, runtime), session)
+
+    assert flows(1000.0) == (None, None)
+    assert flows(1010.0) == (5.0, 0.0)
+    assert flows(None) == (None, None)
+    assert flows(1430.0) == after
+    assert flows(1440.0) == (5.0, 0.0)

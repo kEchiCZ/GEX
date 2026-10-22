@@ -24,6 +24,7 @@ from gexlens_engine.compute.tendency import (
     TendencyInputs,
     evaluate_tendency,
 )
+from gexlens_engine.compute.volume import SessionVolumes
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import ArchiveVersion, OIEodRepository
 from gexlens_engine.storage.parquet_store import FlowRowLike
@@ -67,7 +68,10 @@ class TendencyEngine:
             maxlen=SLOPE_LOOKBACK_MIN + 1
         )
         self._price_history: deque[tuple[dt.datetime, float]] = deque(maxlen=SLOPE_LOOKBACK_MIN + 1)
+        # Reference přírůstků volume: v4 poslední známá hodnota, v5 maximum
+        # seance s mezerou (`compute/volume.py`, #1602)
         self._prev_volumes: dict[object, float] = {}
+        self._volumes = SessionVolumes()
         self._max_pain: float | None = None
         self._max_pain_loaded_for: tuple[str, dt.date, ArchiveVersion] | None = None
         # Cache parquet řad SentIndexu podle cesty: (mtime, řada). Dnešní partice
@@ -118,28 +122,33 @@ class TendencyEngine:
         self._max_pain = max_pain_strike(oi_map)
         self._max_pain_loaded_for = (expiry, today, version)
 
-    def _flows(self, runtime: EngineRuntime) -> tuple[float | None, float | None]:
+    def _flows(self, runtime: EngineRuntime, session: dt.date) -> tuple[float | None, float | None]:
         """Δ-vážené přírůstky volume per strana — vlastní stav diffu.
 
-        Nesdílí `_prev_volumes` se SetupEngine: dva konzumenti nad jedním
-        stavem by si navzájem nulovali přírůstky.
+        Nesdílí stav se SetupEngine: dva konzumenti nad jedním stavem by si
+        navzájem nulovali přírůstky. Pravidla v5 (zlom mechaniky v6): přírůstek
+        proti maximu seance (`compute/volume.py`, #1602) — pokles i návrat
+        k maximu dají 0, kontrakt po cyklu bez objemu jen založí stav, nová
+        seance (`session`) stav maže. Pravidla v4 beze změny proti poslední
+        známé hodnotě (ADR-0057 bod 11).
         """
         call_flow = put_flow = 0.0
         seen = False
+        if self.cumdelta_prints:
+            self._volumes.roll(session)
         # Aktivní zdroj řetězu, ne přímo sweep cache (#614 fáze 2b)
         for spec, cached in runtime.current_quotes().items():
             snapshot = cached.snapshot
             # Fallback z tasty objem nenese — přírůstek se za něj nepočítá
             # a `seen` zůstane False, takže tendence minutu vynechá místo
-            # aby ohlásila nulový tok jako změřený
+            # aby ohlásila nulový tok jako změřený. Totéž platí pro první
+            # výskyt kontraktu a pod v5 i pro minutu po mezeře.
             if snapshot.volume is None:
                 continue
-            previous = self._prev_volumes.get(spec)
-            self._prev_volumes[spec] = snapshot.volume
-            if previous is None:
+            increment = self._increment(spec, snapshot.volume)
+            if increment is None:
                 continue
             seen = True
-            increment = snapshot.volume - previous
             if increment <= 0:
                 continue
             weighted = increment * abs(snapshot.delta)
@@ -147,9 +156,19 @@ class TendencyEngine:
                 call_flow += weighted
             else:
                 put_flow += weighted
+        if self.cumdelta_prints:
+            self._volumes.end_cycle()
         if not seen:
             return None, None
         return call_flow, put_flow
+
+    def _increment(self, spec: object, volume: float) -> float | None:
+        """Přírůstek kontraktu; None = neměřený (první výskyt, pod v5 i minuta po mezeře)."""
+        if self.cumdelta_prints:
+            return self._volumes.add(spec, volume).increment
+        previous = self._prev_volumes.get(spec)
+        self._prev_volumes[spec] = volume
+        return None if previous is None else volume - previous
 
     def _atm_iv(self, runtime: EngineRuntime, spot: float) -> float | None:
         """Průměrná IV kotací nejblíž spotu (obě strany) — trend řady čte vanna hlas."""
@@ -307,7 +326,7 @@ class TendencyEngine:
         levels = runtime.last_gex_levels
         flow = runtime.last_flow
         self._refresh_max_pain(runtime.expiry, now.date())
-        call_flow, put_flow = self._flows(runtime)
+        call_flow, put_flow = self._flows(runtime, trading_session_date(now))
         sent_value, sent_then = self._sentiment(now)
         cum_slope, price_then = self._slope_inputs(now, spot, flow)
 

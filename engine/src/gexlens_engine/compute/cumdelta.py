@@ -18,9 +18,11 @@ trade větve (`observe`) a v témž okamžiku řeže tisky (`seal`), takže inte
 řádku M je (vzorek M−1, vzorek M] a oba jeho konce pokrývá vzorek. `begin_cycle`
 ze vzorků zafixuje verdikt minuty. Minuta s mezerou má v řadě flowΔ i CumΔ NULL,
 její tisky se zahodí (i z čistého objemu) a CumΔ pokračuje od poslední měřené
-úrovně; při zavřeném trhu mezera nevzniká. Kontrakt bez baru v cyklu (fallback
-řetězu, stará kotace) má po mezeře jen znovu založený stav objemu; bar bez
-přírůstku (kotace z cache) počítadla tisků nevyprázdní (#1460).
+úrovně; při zavřeném trhu mezera nevzniká. Reference přírůstku objemu je pod
+tisky maximum seance (`compute/volume.py`, #1602): kontrakt bez baru v cyklu
+(fallback řetězu, stará kotace) má po mezeře jen znovu založený stav objemu,
+bar bez přírůstku (kotace z cache, pokles, návrat k maximu) počítadla tisků
+nevyprázdní (#1460).
 """
 
 import datetime as dt
@@ -31,6 +33,7 @@ from typing import NamedTuple
 
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS
+from gexlens_engine.compute.volume import SessionVolumes
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 
 logger = logging.getLogger(__name__)
@@ -189,7 +192,12 @@ class CumDeltaTracker:
         self._source = source
         self._cum = 0.0
         self._minute_flow = 0.0
+        # Reference přírůstku objemu: pod midpointem (v5) poslední hodnota,
+        # pod tisky maximum seance s mezerou po cyklu bez baru (#1602)
         self._last_volume: dict[OptionContractSpec, float] = {}
+        self._volumes = SessionVolumes()
+        # Kontrakty, jejichž pokles pod maximum už v seanci varoval (jen tisky)
+        self._decline_warned: set[OptionContractSpec] = set()
         # Tisky od posledního baru kontraktu (#615 fáze 3): bar větev z nich
         # pozná, kolik přírůstku objemu přišlo jako tisk (rozklad, pokrytí)
         self._printed_since_bar: dict[OptionContractSpec, float] = {}
@@ -229,15 +237,15 @@ class CumDeltaTracker:
         # `_next_session_sealed` = kolik z nich přišlo před posledním řezem.
         self._next_session: list[_PendingPrint] = []
         self._next_session_sealed = 0
-        # Kontrakty s barem od posledního `begin_cycle` (jen zdroj `aggressor`):
-        # kontrakt bez baru v cyklu (fallback řetězu s `volume=None`, kotace nad
-        # `quote_max_age_s`, pád cyklu po `begin_cycle` mezi verdiktem a bary)
-        # v dalším `begin_cycle` ztratí stav objemu — jeho další bar nese
-        # přírůstek celé mezery a jen znovu založí stav jako po restartu (#1460).
-        # Bar s přírůstkem 0 (zamrzlá kotace, kotace z cache) je krmený. Cyklus,
+        # Kontrakty s barem od posledního `begin_cycle` drží `_volumes` (jen
+        # zdroj `aggressor`): kontrakt bez baru v cyklu (fallback řetězu
+        # s `volume=None`, kotace nad `quote_max_age_s`, pád cyklu po
+        # `begin_cycle` mezi verdiktem a bary) má v dalším `begin_cycle` mezeru —
+        # jeho další bar nese přírůstek celé mezery, a tak jen znovu založí stav;
+        # reference = max(reference, hodnota) (#1460 krok 4, #1602 B). Bar
+        # s přírůstkem 0 (zamrzlá kotace, kotace z cache) je krmený. Cyklus,
         # který spadl před `begin_cycle` (sweep), množinu nemaže ani řádek
         # nezapíše: další řádek i bar nesou tentýž delší interval.
-        self._fed: set[OptionContractSpec] = set()
         # Kontrakty, jejichž tisky čekající na bar s přírůstkem zasáhla mezera
         # trade větve (bar s přírůstkem 0 v minutě s mezerou): rozklad dalšího
         # přírůstku je NULL a do pokrytí nejde (#1460, jen zdroj `aggressor`)
@@ -307,11 +315,12 @@ class CumDeltaTracker:
         doloženo → mezera. Minutu, kterou spadlý cyklus neuzavřel, nese i tento —
         měřená je jen tehdy, byl-li měřený i ten.
 
-        Pod tisky kontrakt, který v minulém cyklu nedostal bar, ztratí stav
-        objemu (#1460): přírůstek jeho dalšího baru pokrývá celou mezeru, ne
+        Pod tisky má kontrakt, který v minulém cyklu nedostal bar, mezeru
+        (#1460, #1602 B): přírůstek jeho dalšího baru pokrývá celou mezeru, ne
         jednu minutu, a tisky od posledního baru nesou celou mezeru — bar jen
-        znovu založí stav a vynuluje počítadla tisků, do rozkladu ani pokrytí
-        nejde. Tok za mezeru nesou tisky započtené v okamžiku tisku.
+        znovu založí stav (reference = max(reference, hodnota)) a vynuluje
+        počítadla tisků, do rozkladu ani pokrytí nejde. Tok za mezeru nesou
+        tisky započtené v okamžiku tisku.
         """
         carried = self._verdict if self._cycle_open else True
         cut = self._sealed or not self.prints
@@ -319,9 +328,7 @@ class CumDeltaTracker:
         self._window_ok = None
         self._cycle_open = True
         if self.prints:
-            for spec in self._last_volume.keys() - self._fed:
-                del self._last_volume[spec]
-            self._fed.clear()
+            self._volumes.end_cycle()
 
     def seal(self) -> None:
         """Řez tisků v okamžiku vzorku; orchestrátor ho volá hned po `observe` (#1460).
@@ -415,6 +422,8 @@ class CumDeltaTracker:
         self._minute_flow = 0.0
         self._sealed_flow = 0.0
         self._last_volume.clear()
+        self._volumes.clear()
+        self._decline_warned.clear()
         self._net_volume.clear()
         self._printed_since_bar.clear()
         self._unknown_since_bar.clear()
@@ -424,7 +433,6 @@ class CumDeltaTracker:
         self._breakdowns.clear()
         self._minute_net.clear()
         self._sealed_net.clear()
-        self._fed.clear()
         self._gapped.clear()
         self._paired_printed = 0.0
         self._paired_unknown = 0.0
@@ -486,7 +494,8 @@ class CumDeltaTracker:
         - pokrytí a podíly: jen tisky po hranici, ostatní čítače od nuly;
         - rozklady a stav barů: rozklady sekundáru se nezapisují, první bar
           aktivního řetězu stav jen založí — jinak by jeho přírůstek a tisky
-          sahaly přes hranici do doby sekundáru.
+          sahaly přes hranici do doby sekundáru. Maximum seance zůstává
+          (hranice leží uvnitř seance, #1602): bar jde jako po mezeře.
 
         Pod midpointem se nevolá (předání jen pod tisky).
         """
@@ -502,11 +511,10 @@ class CumDeltaTracker:
         self._coverage_at_seal = CumDeltaCoverage()
         self._cum = 0.0
         self._sealed_flow = 0.0
-        self._last_volume.clear()
+        self._volumes.gap_all()
         self._printed_since_bar.clear()
         self._unknown_since_bar.clear()
         self._breakdowns.clear()
-        self._fed.clear()
         self._gapped.clear()
         self._paired_printed = 0.0
         self._paired_unknown = 0.0
@@ -581,43 +589,74 @@ class CumDeltaTracker:
     def add_volume(self, spec: OptionContractSpec, cumulative_volume: float) -> float:
         """Bar větev bez znaménka: přírůstek kumulativního volume, rozklad a pokrytí.
 
-        Vrací přírůstek objemu za bar. První bar dne přírůstek nemá (jen založí
-        stav); pokles kumulativního volume je nekonzistence feedu → přírůstek 0
-        s varováním, nikdy záporný. Zdroj `aggressor` volá jen tuhle část —
-        objem bez tisku jde mimo tok a jen se měří (ADR-0057 bod 1); `midpoint`
-        ji volá z `add_bar`.
+        Vrací přírůstek objemu za bar, nikdy záporný. Zdroj `aggressor` volá
+        jen tuhle část — objem bez tisku jde mimo tok a jen se měří (ADR-0057
+        bod 1); `midpoint` ji volá z `add_bar`.
 
-        Tisky od minulého baru jsou úplné, jen když trade větev celou dobu běžela:
-        pod `midpoint` rozhoduje okamžitý `dx_active` (v5), pod tisky verdikt
-        minuty (#1460). Jinak se přírůstek rozloží jako neznámý (NULL) a do
-        pokrytí nejde. Pod tisky má minulý bar kontrakt vždy z minulého cyklu:
-        po cyklu bez baru (fallback, stará kotace) stav objemu zahodí
-        `begin_cycle` a bar jen znovu založí stav jako po restartu.
+        Pod tisky je reference přírůstku maximum seance (`compute/volume.py`,
+        #1602): pokles i návrat k maximu dají 0, započte se jen objem nad
+        maximem; pokles zaloguje varování jednou za kontrakt a seanci. První
+        bar (start, restart, nová seance), bar po cyklu bez baru (fallback,
+        stará kotace, `begin_cycle`) a první bar po předání v rollu jen založí
+        stav: jeho přírůstek i tisky od posledního baru pokrývají celou mezeru,
+        ne jednu minutu — počítadla tisků se vynulují a do rozkladu ani pokrytí
+        nic nejde. Tisky od minulého baru jsou úplné, jen když trade větev
+        celou dobu běžela (verdikt minuty, #1460); jinak se přírůstek rozloží
+        jako neznámý (NULL) a do pokrytí nejde.
 
         Pod tisky bar bez přírůstku (kotace z cache mezi sweepy křídel, zamrzlá
-        kotace, objem IBKR pozadu za tisky) počítadla tisků nevyprázdní — objem
-        k nim přinese až bar s přírůstkem, jinak by jeho rozklad tisky ztratil
-        a zbytek připsal struktuře (#1460). Vyprázdní je každý jiný bar: bar
-        s přírůstkem (rozklad), bar s poklesem kumulativu i bar, který stav
-        objemu zakládá (oba bez rozkladu). Rozklad baru s přírůstkem je NULL
-        a do pokrytí nejde, je-li mezerou minuta toho baru nebo baru bez
-        přírůstku od posledního vyprázdnění (`_gapped`). Verdikt ale končí
-        řezem ve vzorku, kdežto bar po sweepu vyprázdní i tisky po řezu:
-        výpadek mezi vzorkem a barem rozklad nezneplatní (limit metriky,
-        ADR-0057 doplněk).
+        kotace, objem IBKR pozadu za tisky, pokles, návrat k maximu) počítadla
+        tisků nevyprázdní — objem k nim přinese až bar s přírůstkem, jinak by
+        jeho rozklad tisky ztratil a zbytek připsal struktuře (#1460, #1602).
+        Rozklad baru s přírůstkem je NULL a do pokrytí nejde, je-li mezerou
+        minuta toho baru nebo baru bez přírůstku od posledního vyprázdnění
+        (`_gapped`). Verdikt ale končí řezem ve vzorku, kdežto bar po sweepu
+        vyprázdní i tisky po řezu: výpadek mezi vzorkem a barem rozklad
+        nezneplatní (limit metriky, ADR-0057 doplněk).
+
+        Pod midpointem (v5) beze změny (ADR-0057 bod 11): viz `_add_volume_midpoint`.
+        """
+        if not self.prints:
+            return self._add_volume_midpoint(spec, cumulative_volume)
+        step = self._volumes.add(spec, cumulative_volume)
+        if step.declined and spec not in self._decline_warned:
+            self._decline_warned.add(spec)
+            logger.warning(
+                "Kumulativní volume kleslo pod maximum seance (%s: %.0f → %.0f) — přírůstek 0, "
+                "reference zůstává; další poklesy kontraktu v seanci bez varování (#1602)",
+                spec,
+                step.reference,
+                cumulative_volume,
+            )
+        if step.increment is None:
+            self._gapped.discard(spec)
+            self._printed_since_bar.pop(spec, None)
+            self._unknown_since_bar.pop(spec, None)
+            return 0.0
+        if step.increment == 0.0:
+            if not self._verdict:
+                self._gapped.add(spec)
+            return 0.0
+        branch_ran = self._verdict and spec not in self._gapped
+        self._gapped.discard(spec)
+        printed = self._printed_since_bar.pop(spec, 0.0)
+        unknown = self._unknown_since_bar.pop(spec, 0.0)
+        self._decompose(spec, step.increment, printed, unknown, branch_ran=branch_ran)
+        if branch_ran:
+            self._paired_printed += printed
+            self._paired_unknown += unknown
+        return step.increment
+
+    def _add_volume_midpoint(self, spec: OptionContractSpec, cumulative_volume: float) -> float:
+        """Bar větev mechaniky v5: přírůstek proti POSLEDNÍ hodnotě (do bumpu v6 beze změny).
+
+        První bar dne přírůstek nemá (jen založí stav); pokles je nekonzistence
+        feedu → přírůstek 0 s varováním a návrat se započte znovu (#1602 to
+        opravuje jen pod tisky, ADR-0057 bod 11). Každý bar vyprázdní počítadla
+        tisků; úplnost tisků určuje okamžitý `dx_active`.
         """
         previous = self._last_volume.get(spec)
         self._last_volume[spec] = cumulative_volume
-        if self.prints:
-            self._fed.add(spec)
-            if previous is not None and cumulative_volume == previous:
-                if not self._verdict:
-                    self._gapped.add(spec)
-                return 0.0
-            branch_ran = self._verdict and spec not in self._gapped
-            self._gapped.discard(spec)
-        else:
-            branch_ran = self.dx_active
         printed = self._printed_since_bar.pop(spec, 0.0)
         unknown = self._unknown_since_bar.pop(spec, 0.0)
         if previous is None:
@@ -631,6 +670,19 @@ class CumDeltaTracker:
                 cumulative_volume,
             )
             return 0.0
+        self._decompose(spec, delta_volume, printed, unknown, branch_ran=self.dx_active)
+        return delta_volume
+
+    def _decompose(
+        self,
+        spec: OptionContractSpec,
+        delta_volume: float,
+        printed: float,
+        unknown: float,
+        *,
+        branch_ran: bool,
+    ) -> None:
+        """Rozklad přírůstku na tisky a strukturu (printvol, #1007) a pokrytí (#1071)."""
         if delta_volume > 0.0:
             printed_total = printed + unknown
             self._breakdowns[spec] = BarBreakdown(
@@ -639,7 +691,7 @@ class CumDeltaTracker:
                 structured=max(delta_volume - printed_total, 0.0) if branch_ran else None,
             )
         if self.prints and not branch_ran:
-            return delta_volume
+            return
         # Pokrytí (#1071) se měří NEZÁVISLE na zdroji znaménka: v režimu midpoint
         # říká, co trade větev pokrývá — verdikt #1018 i srovnání před a po
         # přepnutí stojí na týchž číslech. Fallback se počítá jen s běžící trade
@@ -648,10 +700,6 @@ class CumDeltaTracker:
             self._coverage.structured_volume += max(delta_volume - printed - unknown, 0.0)
         elif branch_ran:
             self._coverage.fallback_volume += delta_volume
-        if self.prints:
-            self._paired_printed += printed
-            self._paired_unknown += unknown
-        return delta_volume
 
     def add_bar(
         self,
