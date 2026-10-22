@@ -463,10 +463,12 @@ variantou B, tedy s bumpem v6 (20. 10.), a minuta po mezeře v objemu je B, i v 
   - `TendencyEngine._flows`, hlas `delta_flow` pravidel tendence v5. Minuta, ve které žádný
     kontrakt nemá měřený přírůstek, hlas vynechá jako dosud za fallbacku;
   - replay (`scripts/backtest_setups.py`, `option_flows`) jako vektorové zrcadlo:
-    - cyklus = zapsaná minuta expirace;
-    - stav začíná prázdný na začátku okna aktivního řetězu (#1464), protože živý `SetupEngine`
-      kontrakty expirace před rollem nečte;
-    - parita s živým `_flows` má test.
+    - cyklus = rozhodovací minuta (minuta s barem v okně aktivního řetězu #1464), stejně jako
+      volání živého `_flows`. Přírůstek zapsané minuty bez baru připadne dalšímu cyklu;
+    - cyklus bez jediného objemu (plný tasty fallback) je tok 0, ne chybějící řádek;
+    - stav začíná prázdný na začátku okna, protože živý `SetupEngine` kontrakty expirace před
+      rollem nečte;
+    - parita s živým `_flows` má test (roll seance, víkend, mezera, fallback, minuta bez baru).
 - **Pod v5 beze změny (bod 11):** tracker pod midpointem, setupy v5, tendence v4 i replay v5
   počítají přírůstek dál proti poslední hodnotě. `main` jde proto nasadit kdykoli a vzorky v5
   se nemění. Tabulka bodu 5 („T3, … Δ Flow C/P … beze změny“) mluví o zdroji znaménka. Vstup
