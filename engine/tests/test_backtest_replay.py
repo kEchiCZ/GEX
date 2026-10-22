@@ -15,12 +15,12 @@ from typing import Any, cast
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine
-from test_setups import FakeRuntime, RecordingPublisher
+from test_setups import VOLUME_PLAN, FakeRuntime, QuotesRuntime, RecordingPublisher, quote
 
 import gexlens_engine.setups as live_setups
 from gexlens_engine.compute.bandregime import band_zone
 from gexlens_engine.compute.gexfield import GexProfile
-from gexlens_engine.compute.settle import expiry_settle, is_trading_session
+from gexlens_engine.compute.settle import expiry_settle, is_trading_session, trading_session_date
 from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
@@ -31,6 +31,7 @@ from gexlens_engine.compute.setups import (
     SetupTemplate,
 )
 from gexlens_engine.compute.walkforward import WalkForwardParams, walk_forward
+from gexlens_engine.ibkr.scheduler import CachedQuote
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime
 from gexlens_engine.setups import SetupEngine
@@ -392,7 +393,8 @@ def test_option_flows_po_dnech_nese_posledni_objem_kontraktu_do_dalsiho_dne(
     tmp_path: Path,
 ) -> None:
     """Partice snapshotů se čtou po dnech: přírůstek první minuty dne počítá
-    proti poslednímu objemu kontraktu z předchozí partice, i přes víkend."""
+    proti poslednímu objemu kontraktu z předchozí partice, i přes víkend (v5;
+    v6 viz `test_option_flows_v6_proti_maximu_seance_nese_stav_do_dalsiho_dne`)."""
     module = _load()
     module.set_data_root(str(tmp_path))
     folder = tmp_path / "snapshots" / "ES" / "20261019"
@@ -421,13 +423,133 @@ def test_option_flows_po_dnech_nese_posledni_objem_kontraktu_do_dalsiho_dne(
             }
         ),
     )
-    flows = module.option_flows("ES", "20261019").set_index("ts_min")
+    flows = module.option_flows("ES", "20261019", prints=False).set_index("ts_min")
     # Call 5000 v neděli: 15 − 12 z pátku; put 4900 se objevil poprvé → bez přírůstku
     assert flows.loc[sunday, "call_flow"] == pytest.approx(3 * 0.5)
     assert flows.loc[sunday, "put_flow"] == 0.0
     assert flows.loc[sunday, "opt_vol"] == pytest.approx(3.0)
     assert flows.loc[sunday + MINUTE, "put_flow"] == pytest.approx(2 * 0.25)
     assert flows.loc[friday, "opt_vol"] == pytest.approx(2.0)
+
+
+def _snapshot_partitions(
+    root: Path, expiry: str, cycles: list[tuple[dt.datetime, dict[Any, CachedQuote]]]
+) -> None:
+    """Snapshoty expirace z kotací cyklů (řádek = kontrakt s kotací) po UTC dnech jako engine."""
+    rows = [
+        (ts, contract.strike, contract.right, cached.snapshot.volume, cached.snapshot.delta)
+        for ts, quotes in cycles
+        for contract, cached in quotes.items()
+    ]
+    frame = pd.DataFrame(rows, columns=["ts_min", "strike", "right", "volume", "delta"])
+    folder = root / "snapshots" / "ES" / expiry
+    for day, part in frame.groupby(frame["ts_min"].dt.strftime("%Y-%m-%d")):
+        _write(folder / f"{day}.parquet", part)
+
+
+def _live_flows(
+    tmp_path: Path, cycles: list[tuple[dt.datetime, dict[Any, CachedQuote]]]
+) -> list[tuple[float, float, float]]:
+    """Živý `SetupEngine._flows` pod v6 nad týmiž kotacemi, cyklus = minuta s bary."""
+    repository = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 's.db'}"))
+    repository.ensure_schema()
+    engine = SetupEngine(
+        symbol="ES",
+        repository=repository,
+        oi_repository=OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'o.db'}")),
+        publisher=RecordingPublisher(),
+        cumdelta_prints=True,
+    )
+    runtime = QuotesRuntime()
+    flows: list[tuple[float, float, float]] = []
+    for ts, quotes in cycles:
+        runtime.quotes = quotes
+        flows.append(engine._flows(cast(EngineRuntime, runtime), trading_session_date(ts)))
+    return flows
+
+
+def _replay_flows(
+    module: Any, cycles: list[tuple[dt.datetime, Any]]
+) -> list[tuple[float, float, float]]:
+    """Replay v6 s cykly = rozhodovací minuty; každý cyklus musí mít řádek toku."""
+    minutes = pd.Series([ts for ts, _ in cycles])
+    flows = module.option_flows("ES", "20261021", prints=True, minutes=minutes)
+    flows = flows.set_index("ts_min")
+    assert list(flows.index) == list(minutes)  # i cyklus bez objemu (NaN by prošel do T3/T4)
+    return [
+        (float(row.call_flow), float(row.put_flow), float(row.opt_vol))
+        for row in flows.itertuples()
+    ]
+
+
+def test_option_flows_v6_proti_maximu_seance_nese_stav_do_dalsiho_dne(tmp_path: Path) -> None:
+    """#1602 AC: řady „Hotovo když“ přes půlnoc UTC (dvě partice, táž seance 21. 10.).
+    Do dalšího dne jde maximum i mezera: NULL ve 23:59 a 130 v 00:00 = minuta po mezeře."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    runtime = QuotesRuntime()
+    first = _at(20, 23, 58)
+    cycles = [(first + i * MINUTE, dict(runtime.step(i).quotes)) for i in range(5)]
+    _snapshot_partitions(tmp_path, "20261021", cycles)
+    expected = [(0.0, 0.0, 0.0), (0.0, 0.25, 1.0), (0.0, 0.0, 0.0), (8.0, 0.0, 20.0)]
+    expected.append((5.0, 0.25, 11.0))
+    replayed = _replay_flows(module, cycles)
+    assert replayed == [pytest.approx(row) for row in expected]
+    assert replayed == [pytest.approx(row) for row in _live_flows(tmp_path, cycles)]
+
+
+def test_option_flows_v6_parita_se_zivym_enginem_seance_mezera_a_okno(tmp_path: Path) -> None:
+    """Parita replay ↔ živý `SetupEngine._flows` pod v6 (#1602). Cyklus = rozhodovací
+    minuta (minuta s barem v okně aktivního řetězu): roll seance v 17:00 CT (22:00 UTC)
+    referenci maže, chybějící řádek kontraktu je mezera, cyklus bez jediného objemu
+    (plný tasty fallback) je tok 0, ne NaN, zapsaná minuta bez baru se přičte dalšímu
+    cyklu a okno začíná prázdným stavem — minuty před ním živý engine nečetl."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    call, put = list(VOLUME_PLAN)[:2]
+
+    def both(c: float | None, p: float | None) -> dict[Any, CachedQuote]:
+        return {call: quote(c, 0.5), put: quote(p, -0.2)}
+
+    before, no_bar = (_at(20, 21, 56), both(500.0, 10.0)), (_at(20, 22, 4), both(1420.0, 12.0))
+    cycles = [
+        (_at(20, 21, 57), both(1000.0, 50.0)),  # první cyklus okna
+        (_at(20, 21, 58), {put: quote(55.0, -0.2)}),  # call bez řádku
+        (_at(20, 21, 59), both(1400.0, 53.0)),
+        (_at(20, 22, 0), both(1405.0, 3.0)),  # seance 21. 10.
+        (_at(20, 22, 1), both(1410.0, None)),
+        (_at(20, 22, 2), both(1408.0, 9.0)),
+        (_at(20, 22, 3), both(1412.0, 10.0)),
+        (_at(20, 22, 5), both(1425.0, 14.0)),  # 22:04 bez baru: přírůstek nese 22:05
+        (_at(20, 22, 6), both(None, None)),  # plný fallback
+        (_at(20, 22, 7), both(1430.0, 15.0)),
+    ]
+    written = sorted([before, no_bar, *cycles], key=lambda item: item[0])
+    _snapshot_partitions(tmp_path, "20261021", written)
+    replayed = _replay_flows(module, cycles)
+    assert [row[2] for row in replayed] == [0.0, 5.0, 0.0, 0.0, 5.0, 0.0, 3.0, 17.0, 0.0, 0.0]
+    assert replayed == [pytest.approx(row) for row in _live_flows(tmp_path, cycles)]
+
+
+def test_option_flows_v6_vikend_zacina_novou_seanci(tmp_path: Path) -> None:
+    """Pátek → nedělní open → pondělí (obchodní den, ne kalendářní): nedělní open
+    17:00 CT je seance pondělí 19. 10., reference z pátku neplatí; nedělní večer
+    a pondělní RTH jsou táž seance. Parita s živým `_flows` (`trading_session_date`)."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    call, put = list(VOLUME_PLAN)[:2]
+    cycles = [
+        (_at(16, 19, 58), {call: quote(10.0, 0.5)}),
+        (_at(16, 19, 59), {call: quote(12.0, 0.5)}),
+        (_at(18, 22, 0), {call: quote(15.0, 0.5), put: quote(7.0, -0.25)}),
+        (_at(18, 22, 1), {put: quote(9.0, -0.25)}),
+        (_at(19, 13, 30), {call: quote(40.0, 0.5), put: quote(30.0, -0.25)}),
+    ]
+    _snapshot_partitions(tmp_path, "20261021", cycles)
+    replayed = _replay_flows(module, cycles)
+    # Neděle: call 15 jen založí stav (v5 by dal 15 − 12); pondělí: call po mezeře 0
+    assert [row[2] for row in replayed] == [0.0, 2.0, 0.0, 2.0, 21.0]
+    assert replayed == [pytest.approx(row) for row in _live_flows(tmp_path, cycles)]
 
 
 def test_walkforward_vynecha_expiraci_bez_settle_podle_okamziku_ne_data(

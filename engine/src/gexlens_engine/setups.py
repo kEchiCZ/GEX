@@ -69,6 +69,7 @@ from gexlens_engine.compute.setups import (
     template_label,
     walk_setup_path,
 )
+from gexlens_engine.compute.volume import SessionVolumes
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
@@ -205,8 +206,10 @@ class SetupEngine:
     request_bars: BarRequester | None = None
     # CumΔ jen z tisků (ADR-0057, mechanika v6): reset CumΔ v 17:00 CT se
     # značí do `cum_gap_before`, takže T1, T4, T5 ani kontra-režim nesrovnávají
-    # CumΔ přes hranici seance (#1581). Pole, ne čtení globálu, ať jde v testech
-    # přepnout; pod v5 zůstává srovnání přes reset jako dosud.
+    # CumΔ přes hranici seance (#1581), a přírůstky volume (Δ Flow C/P, opt_vol)
+    # jdou proti maximu seance (#1602). Pole, ne čtení globálu, ať jde v testech
+    # přepnout; pod v5 zůstává srovnání přes reset i přírůstek proti poslední
+    # hodnotě jako dosud (ADR-0057 bod 11).
     cumdelta_prints: bool = CUMDELTA_PRINTS
 
     def apply_params(self, params: SetupParams, version: int | None) -> bool:
@@ -231,7 +234,10 @@ class SetupEngine:
         # Mezera CumΔ v minutě bez baru (ADR-0057 bod 3) — řádek historie
         # nevznikne, příznak `cum_gap_before` dostane další přidaný řádek
         self._cum_gap_pending = False
+        # Reference přírůstků volume: v5 poslední známá hodnota, v6 maximum
+        # seance s mezerou (`compute/volume.py`, #1602)
         self._prev_volumes: dict[object, float] = {}
+        self._volumes = SessionVolumes()
         self._open: list[_OpenSetup] = []
         self._last_created: dict[str, dt.datetime] = {}
         # Poslední stop kontra-režimového setupu per šablona (#252 C)
@@ -291,24 +297,29 @@ class SetupEngine:
         self._max_pain = max_pain_strike(oi_map)
         self._max_pain_loaded_for = (expiry, today, version)
 
-    def _flows(self, runtime: EngineRuntime) -> tuple[float, float, float]:
-        """Δ-vážené přírůstky volume per strana + surový přírůstek (z cache kotací)."""
+    def _flows(self, runtime: EngineRuntime, session: dt.date) -> tuple[float, float, float]:
+        """Δ-vážené přírůstky volume per strana + surový přírůstek (z cache kotací).
+
+        Mechanika v6: přírůstek proti maximu seance (`compute/volume.py`, #1602)
+        — pokles i návrat k maximu dají 0, kontrakt po cyklu bez objemu (tasty
+        fallback, chybějící kotace) jen založí stav a nová seance (`session`)
+        stav maže. Cyklus = volání v minutě s bary. Mechanika v5 beze změny
+        proti poslední známé hodnotě (ADR-0057 bod 11).
+        """
         call_flow = put_flow = raw = 0.0
+        if self.cumdelta_prints:
+            self._volumes.roll(session)
         # Aktivní zdroj řetězu, ne přímo sweep cache (#614 fáze 2b) — jinak by
         # se za fallbacku počítal tok ze zmrzlých IBKR kotací
         for spec, cached in runtime.current_quotes().items():
             snapshot = cached.snapshot
-            # Bez objemu (fallback z tasty) se přírůstek počítat nedá. Poslední
-            # známou hodnotu si držíme dál, ať se po návratu na IBKR naváže
-            # na ni, a ne na první ponovu viděné číslo jako na celý přírůstek.
+            # Bez objemu (fallback z tasty) se přírůstek počítat nedá. Pod v5
+            # se drží poslední známá hodnota a návrat na IBKR nese přírůstek
+            # celého výpadku; pod v6 jde první objem po výpadku jako po mezeře.
             if snapshot.volume is None:
                 continue
-            previous = self._prev_volumes.get(spec)
-            self._prev_volumes[spec] = snapshot.volume
-            if previous is None:
-                continue
-            increment = snapshot.volume - previous
-            if increment <= 0:
+            increment = self._increment(spec, snapshot.volume)
+            if increment is None or increment <= 0:
                 continue
             raw += increment
             weighted = increment * abs(snapshot.delta)
@@ -316,7 +327,17 @@ class SetupEngine:
                 call_flow += weighted
             else:
                 put_flow += weighted
+        if self.cumdelta_prints:
+            self._volumes.end_cycle()
         return call_flow, put_flow, raw
+
+    def _increment(self, spec: object, volume: float) -> float | None:
+        """Přírůstek kontraktu; None = neměřený (první výskyt, pod v6 i minuta po mezeře)."""
+        if self.cumdelta_prints:
+            return self._volumes.add(spec, volume).increment
+        previous = self._prev_volumes.get(spec)
+        self._prev_volumes[spec] = volume
+        return None if previous is None else volume - previous
 
     @staticmethod
     def _new_path(entry_bar: Bar) -> PathState:
@@ -369,7 +390,7 @@ class SetupEngine:
         )
         self._cum_gap_pending = False
         self._refresh_max_pain(runtime.expiry, now.date())
-        call_flow, put_flow, raw_flow = self._flows(runtime)
+        call_flow, put_flow, raw_flow = self._flows(runtime, trading_session_date(now))
 
         bar_open = bars[0].open
         bar_high = max(b.high for b in bars)

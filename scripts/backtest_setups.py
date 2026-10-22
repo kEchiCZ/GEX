@@ -22,9 +22,10 @@ Opční toky (`call_flow` / `put_flow` / `opt_vol`) se **rekonstruují ze snapsh
 (`data/snapshots/{symbol}/{expiry}/*.parquet`), ne z předpočítané řady — engine
 je nikam neukládá, počítá si je za běhu z cache kotací. Snapshot ale nese per
 minutu a kontrakt `volume` i `delta`, což jsou přesně vstupy `SetupEngine._flows`:
-přírůstek volume proti předchozí minutě téhož kontraktu, vážený |delta|, sečtený
-zvlášť za call a put strany (`opt_vol` je nevážený součet přírůstků). Záporné
-přírůstky (reset volume na přelomu seance) se zahazují, stejně jako v produkci.
+přírůstek volume kontraktu, vážený |delta|, sečtený zvlášť za call a put strany
+(`opt_vol` je nevážený součet přírůstků). Podle mechaniky replaye jako živý
+engine (`option_flows`): v6 proti maximu seance s mezerou (#1602), v5 proti
+předchozí minutě se zahozením záporných přírůstků.
 
 CumΔ podle mechaniky replaye (`cum_delta_series`, #1590): v5 midpoint řada
 `flow` jako živý engine v5; v6 tisky (ADR-0057 bod 7) — seance se zdrojem
@@ -122,34 +123,35 @@ def load_files(files: list[str]) -> pd.DataFrame | None:
     return frame.sort_values("ts_min").drop_duplicates("ts_min", keep="last")
 
 
-def option_flows(symbol: str, expiry: str) -> pd.DataFrame | None:
+def option_flows(
+    symbol: str,
+    expiry: str,
+    prints: bool = CUMDELTA_PRINTS,
+    minutes: pd.Series | None = None,
+) -> pd.DataFrame | None:
     """Δ-vážený opční tok per minuta ze snapshotů — zrcadlo `SetupEngine._flows`.
 
-    Engine porovnává `snapshot.volume` proti hodnotě téhož kontraktu z minulé
-    minuty; tady je totéž jako `groupby(strike, right).shift()` nad uloženou
-    maticí. Kontrakt, který se ve sweepu poprvé objeví, přírůstek nemá (NaN →
-    zahodit) — shodné s `previous is None: continue` v produkci.
+    Snapshot nese per minutu a kontrakt `volume` i `delta`, tedy vstupy živého
+    `_flows`. Partice se čtou po dnech (expirace má ~měsíc snapshotů, najednou
+    přes 0,35 GB, #1464), do dalšího dne jde jen stav kontraktů.
 
-    Partice se čtou po dnech (expirace má ~měsíc snapshotů, najednou přes
-    0,35 GB, #1464): do dalšího dne jde jen poslední řádek každého kontraktu.
+    - **v6** (`prints`, #1602): přírůstek proti maximu seance
+      (`compute/volume.py`). Cyklus = minuta, ve které živý engine `_flows`
+      volá: rozhodovací minuta `build_minutes` (`minutes` — minuta s barem
+      v okně aktivního řetězu #1464; None = každá zapsaná minuta). Přírůstek
+      zapsané minuty mimo cyklus (bez baru) připadne dalšímu cyklu. Kontrakt
+      bez objemu v předchozím cyklu (NULL z tasty fallbacku, chybějící řádek)
+      má mezeru a jen založí stav, stejně jako první výskyt v seanci a první
+      cyklus okna — živý engine kontrakty expirace před rollem nečte. Cyklus
+      bez jediného objemu je tok 0. Partice mimo cykly se nečtou.
+    - **v5** (ADR-0057 bod 11 beze změny): přírůstek proti předchozímu řádku
+      kontraktu (`groupby(strike, right).shift()`), ≤ 0 se zahazuje; kontrakt,
+      který se ve sweepu poprvé objeví, přírůstek nemá (NaN → zahodit) —
+      shodné s `previous is None: continue` v produkci. Do dalšího dne jde
+      poslední řádek každého kontraktu.
     """
     files = sorted(glob.glob(f"{ROOT}/snapshots/{symbol}/{expiry}/*.parquet"))
-    keys = ["strike", "right"]
-    carry: pd.DataFrame | None = None
-    parts: list[pd.DataFrame] = []
-    for path in files:
-        day = pd.read_parquet(path, columns=["ts_min", "strike", "right", "volume", "delta"])
-        if day.empty:
-            continue
-        day = day.assign(carried=False)
-        snap = day if carry is None else pd.concat([carry, day])
-        snap = snap.sort_values([*keys, "ts_min"])
-        previous = snap.groupby(keys, sort=False)["volume"].shift()
-        increment = (snap["volume"] - previous).where(lambda s: s > 0)  # ≤ 0 se přeskakuje
-        snap = snap.assign(inc=increment, weighted=increment * snap["delta"].abs())
-        own = snap[~snap["carried"]]
-        parts.append(own.groupby(["ts_min", "right"], sort=True)[["inc", "weighted"]].sum())
-        carry = snap.groupby(keys, sort=False).tail(1)[day.columns].assign(carried=True)
+    parts = _flows_session_max(files, minutes) if prints else _flows_last_value(files)
     if not parts:
         return None
     grouped = pd.concat(parts).groupby(level=["ts_min", "right"], sort=True).sum()
@@ -162,6 +164,85 @@ def option_flows(symbol: str, expiry: str) -> pd.DataFrame | None:
             "opt_vol": wide["inc"].sum(axis=1).fillna(0.0),
         }
     ).reset_index(drop=True)
+
+
+_SNAPSHOT_COLUMNS = ["ts_min", "strike", "right", "volume", "delta"]
+_CONTRACT = ["strike", "right"]
+
+
+def _flows_last_value(files: list[str]) -> list[pd.DataFrame]:
+    """Přírůstky v5 po dnech: proti předchozímu řádku kontraktu (viz `option_flows`)."""
+    carry: pd.DataFrame | None = None
+    parts: list[pd.DataFrame] = []
+    for path in files:
+        day = pd.read_parquet(path, columns=_SNAPSHOT_COLUMNS)
+        if day.empty:
+            continue
+        day = day.assign(carried=False)
+        snap = day if carry is None else pd.concat([carry, day])
+        snap = snap.sort_values([*_CONTRACT, "ts_min"])
+        previous = snap.groupby(_CONTRACT, sort=False)["volume"].shift()
+        increment = (snap["volume"] - previous).where(lambda s: s > 0)  # ≤ 0 se přeskakuje
+        snap = snap.assign(inc=increment, weighted=increment * snap["delta"].abs())
+        own = snap[~snap["carried"]]
+        parts.append(own.groupby(["ts_min", "right"], sort=True)[["inc", "weighted"]].sum())
+        carry = snap.groupby(_CONTRACT, sort=False).tail(1)[day.columns].assign(carried=True)
+    return parts
+
+
+def _flows_session_max(files: list[str], minutes: pd.Series | None) -> list[pd.DataFrame]:
+    """Přírůstky v6 po dnech: proti maximu seance s mezerou (viz `option_flows`, #1602).
+
+    Stav kontraktu nese do dalšího dne řádek s minutou posledního objemu,
+    seancí a maximem seance ve sloupci `volume`; mezeru určuje předchozí cyklus
+    (`last_cycle`).
+    """
+    cycles = None if minutes is None else pd.Index(_utc_ns(pd.Series(minutes))).unique()
+    if cycles is not None and cycles.empty:
+        return []
+    # Partice = UTC den minut; čtou se jen dny s cykly
+    span = None if cycles is None else (str(cycles.min().date()), str(cycles.max().date()))
+    state: pd.DataFrame | None = None
+    last_cycle: pd.Timestamp | None = None
+    parts: list[pd.DataFrame] = []
+    for path in files:
+        if span is not None and not span[0] <= os.path.basename(path)[:10] <= span[1]:
+            continue
+        day = pd.read_parquet(path, columns=_SNAPSHOT_COLUMNS)
+        if cycles is not None:
+            day = day[_utc_ns(day["ts_min"]).isin(cycles)]
+        if day.empty:
+            continue
+        stamps = day["ts_min"].drop_duplicates().sort_values().reset_index(drop=True)
+        previous = stamps.shift()
+        if last_cycle is not None:
+            previous.iloc[0] = last_cycle
+        last_cycle = stamps.iloc[-1]
+        frame = pd.DataFrame(
+            {"ts_min": stamps, "session": _session_of(stamps), "previous_cycle": previous}
+        )
+        fed = day[day["volume"].notna()].merge(frame, on="ts_min").assign(carried=False)
+        if state is not None:
+            fed = pd.concat([state.assign(carried=True), fed], ignore_index=True)
+        fed = fed.sort_values([*_CONTRACT, "session", "ts_min"], kind="stable")
+        seance = [*_CONTRACT, "session"]
+        fed = fed.assign(maximum=fed.groupby(seance, sort=False)["volume"].cummax())
+        by_seance = fed.groupby(seance, sort=False)
+        reference = by_seance["maximum"].shift()
+        # Kontrakt bez objemu v předchozím cyklu = mezera; první výskyt v seanci
+        # referenci nemá — oba jen založí stav (`volume_increment`)
+        measured = reference.notna() & by_seance["ts_min"].shift().eq(fed["previous_cycle"])
+        increment = (fed["volume"] - reference).clip(lower=0.0).where(measured)
+        fed = fed.assign(inc=increment, weighted=increment * fed["delta"].abs())
+        own = fed[~fed["carried"]]
+        parts.append(own.groupby(["ts_min", "right"], sort=True)[["inc", "weighted"]].sum())
+        # Cyklus bez jediného objemu (plný tasty fallback) je tok 0 jako v živém
+        # `_flows`, ne chybějící řádek (left merge by dal NaN)
+        sides = day[["ts_min", "right"]].drop_duplicates()
+        parts.append(sides.assign(inc=0.0, weighted=0.0).set_index(["ts_min", "right"]))
+        last = fed.groupby(_CONTRACT, sort=False).tail(1)
+        state = last[["ts_min", *_CONTRACT, "session", "delta"]].assign(volume=last["maximum"])
+    return parts
 
 
 #: Stín `cumdelta_dx` zastupuje živou 1A v replayi v6 od této seance do nasazení
@@ -506,7 +587,7 @@ def build_minutes(
     frame = frame[inside]
     if dom is not None:
         frame = frame.merge(dom, on="ts_min", how="left")
-    flows = option_flows(symbol, expiry)
+    flows = option_flows(symbol, expiry, prints, frame["ts_min"])
     if flows is not None:
         frame = frame.merge(flows, on="ts_min", how="left")
     if frame.empty:
@@ -555,9 +636,11 @@ def build_minutes(
                 # Mezera CumΔ = None, ne 0,0 (ADR-0057 bod 3): nula by byla
                 # vymyšlená hodnota, kterou by T4 brala jako potvrzení
                 cum_delta=none_if_nan(row.cum_delta),
-                call_flow=float(getattr(row, "call_flow", 0.0) or 0.0),
-                put_flow=float(getattr(row, "put_flow", 0.0) or 0.0),
-                opt_vol=float(getattr(row, "opt_vol", 0.0) or 0.0),
+                # Minuta bez řádku toku = 0 jako živý `_flows` bez kotací; NaN
+                # z left merge je „truthy“ a `or 0.0` by ho nechal projít
+                call_flow=none_if_nan(getattr(row, "call_flow", None)) or 0.0,
+                put_flow=none_if_nan(getattr(row, "put_flow", None)) or 0.0,
+                opt_vol=none_if_nan(getattr(row, "opt_vol", None)) or 0.0,
                 minutes_to_expiry=left if left > 0 else None,
                 call_wall_dom=none_if_nan(getattr(row, "call_wall_dom", None)),
                 put_wall_dom=none_if_nan(getattr(row, "put_wall_dom", None)),

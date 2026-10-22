@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import logging
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -756,6 +757,135 @@ def test_restart_bar_jen_zalozi_stav() -> None:
     next_cycle(tracker, True)
     assert tracker.add_volume(c, 5006.0) == 6.0
     assert tracker.take_breakdowns()[c] == BarBreakdown(6.0, 1.0, 5.0)
+
+
+# ── Reference přírůstku objemu = maximum seance, pod tisky (#1602) ────
+DECLINE = "kleslo pod maximum seance"
+
+
+def _declines(caplog: pytest.LogCaptureFixture) -> int:
+    return sum(DECLINE in record.getMessage() for record in caplog.records)
+
+
+def test_pokles_a_navrat_k_maximu_nic_nezapocte(caplog: pytest.LogCaptureFixture) -> None:
+    """#1602 AC: 1000 → 800 → 760 → 1000 → 1010. Bar tok ani čistý objem nedává (v6),
+    printvol a pokrytí nesou jen 10 nad maximem, tisk před poklesem zůstane v rozkladu
+    a pokles varuje jednou za kontrakt a seanci. Dřív návrat přidal 240 znovu."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = spec("C")
+    start_measured(tracker)
+    tracker.add_volume(c, 1000.0)
+    tracker.close_minute(GAP_TS)
+    tracker.add_dx_trade(c, size=4.0, aggressor="BUY", delta=0.5)  # tisk před poklesem
+    caplog.set_level(logging.WARNING, logger="gexlens_engine.compute.cumdelta")
+    for minute, volume in enumerate((800.0, 760.0, 1000.0), start=1):
+        next_cycle(tracker, True)
+        assert tracker.add_bar(c, volume, last=10.3, bid=10.0, ask=10.4, delta=0.5) == 0.0
+        assert tracker.add_volume(c, volume) == 0.0
+        tracker.close_minute(GAP_TS + dt.timedelta(minutes=minute))
+    assert tracker.take_breakdowns() == {}
+    assert _declines(caplog) == 1
+
+    next_cycle(tracker, True)
+    assert tracker.add_volume(c, 1010.0) == 10.0
+    assert tracker.take_breakdowns() == {c: BarBreakdown(10.0, 4.0, 6.0)}
+    row = tracker.close_minute(GAP_TS + dt.timedelta(minutes=4))
+    assert (row.printed_volume, row.structured_volume, row.fallback_volume) == (0.0, 6.0, 0.0)
+    stats = tracker.day_stats()
+    assert (stats["printed_volume"], stats["structured_volume"]) == (4.0, 6.0)
+    assert stats["fallback_volume"] == 0.0
+    assert tracker.net_volumes() == {c: 4.0}  # jen tisk, bar čistý objem nedává
+    assert tracker.cum_delta == 100.0  # jen tisk: 4 · 0,5 · 50
+
+
+def test_kmitani_pod_tisky_jen_objem_nad_maximem() -> None:
+    """#1602 AC: 862 → 863 → 862 → 863 → 864 dá přírůstky 1, 0, 0, 1 (dřív 1, 0, 1, 1)."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = spec("C", strike=7915.0)
+    start_measured(tracker)
+    increments = [tracker.add_volume(c, 862.0)]
+    for volume in (863.0, 862.0, 863.0, 864.0):
+        next_cycle(tracker, True)
+        increments.append(tracker.add_volume(c, volume))
+    assert increments == [0.0, 1.0, 0.0, 0.0, 1.0]
+    assert tracker.day_stats()["fallback_volume"] == 2.0
+
+
+def test_bar_po_mezere_drzi_maximum_seance() -> None:
+    """#1602 B (Rozhodnuto 21. 10.): bar po cyklu bez baru jen založí stav
+    a reference = max(reference, hodnota). 100 → NULL → 130 → 150 dá 0, –, 0, 20;
+    1000 → NULL → 900 → 1000 → 1010 dá 0, –, 0, 0, 10 — po #1460 kroku 4 by 900
+    založilo stav a návrat k 1000 se započetl."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c, p = spec("C"), spec("P")
+    start_measured(tracker)
+    plan: dict[OptionContractSpec, list[float | None]] = {
+        p: [100.0, None, 130.0, 150.0, None],
+        c: [1000.0, None, 900.0, 1000.0, 1010.0],
+    }
+    got: dict[OptionContractSpec, list[float | None]] = {p: [], c: []}
+    for minute in range(5):
+        if minute:
+            next_cycle(tracker, True)
+        for contract, volumes in plan.items():
+            volume = volumes[minute]
+            got[contract].append(None if volume is None else tracker.add_volume(contract, volume))
+        tracker.close_minute(GAP_TS + dt.timedelta(minutes=minute))
+    assert got[p] == [0.0, None, 0.0, 20.0, None]
+    assert got[c] == [0.0, None, 0.0, 0.0, 10.0]
+    assert tracker.day_stats()["fallback_volume"] == 30.0
+
+
+def test_roll_seance_maze_maximum_i_varovani(caplog: pytest.LogCaptureFixture) -> None:
+    """Restart jen založí stav, roll seance referenci smaže (kumulativ IBKR od ~0)."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = spec("C")
+    caplog.set_level(logging.WARNING, logger="gexlens_engine.compute.cumdelta")
+    tracker.roll_session(dt.date(2026, 10, 20))
+    start_measured(tracker)
+    assert tracker.add_volume(c, 1000.0) == 0.0  # start: jen založí stav
+    next_cycle(tracker, True)
+    tracker.add_volume(c, 900.0)
+    assert tracker.roll_session(dt.date(2026, 10, 21))
+    next_cycle(tracker, True)
+    assert tracker.add_volume(c, 40.0) == 0.0  # nová seance: založí, pod starým maximem nevaruje
+    next_cycle(tracker, True)
+    assert tracker.add_volume(c, 46.0) == 6.0
+    next_cycle(tracker, True)
+    assert tracker.add_volume(c, 30.0) == 0.0
+    assert _declines(caplog) == 2  # 900 v seanci 20. 10. a 30 v seanci 21. 10.
+
+
+def test_promote_drzi_maximum_sekundaru() -> None:
+    """Předání v rollu leží uvnitř seance: první bar aktivního řetězu jen založí stav,
+    maximum ze sekundáru zůstává a návrat k němu nic nezapočte."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = _secondary_before_roll(tracker)  # sekundár viděl 1000
+    tracker.promote()
+    next_cycle(tracker, True)
+    assert tracker.add_volume(c, 900.0) == 0.0
+    tracker.close_minute(ROLL_M + MIN)
+    next_cycle(tracker, True)
+    assert tracker.add_volume(c, 1000.0) == 0.0
+    tracker.close_minute(ROLL_M + 2 * MIN)
+    next_cycle(tracker, True)
+    assert tracker.add_volume(c, 1004.0) == 4.0
+    assert tracker.take_breakdowns() == {c: BarBreakdown(4.0, 0.0, 4.0)}
+
+
+def test_midpoint_pokles_a_navrat_beze_zmeny() -> None:
+    """Mechanika v5 do bumpu beze změny (ADR-0057 bod 11): návrat po poklesu
+    se započte znovu s midpoint znaménkem, pokles vyprázdní počítadla tisků."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT)
+    tracker.dx_active = True
+    c = spec("C")
+    tracker.add_bar(c, 1000.0, last=10.3, bid=10.0, ask=10.4, delta=0.5)
+    tracker.add_dx_trade(c, size=4.0, aggressor="BUY", delta=0.5)
+    assert tracker.add_bar(c, 760.0, last=10.3, bid=10.0, ask=10.4, delta=0.5) == 0.0
+    flow = tracker.add_bar(c, 1010.0, last=10.3, bid=10.0, ask=10.4, delta=0.5)
+    assert flow == 250 * 0.5 * 50.0
+    assert tracker.take_breakdowns() == {c: BarBreakdown(250.0, 0.0, 250.0)}
+    assert tracker.net_volumes() == {c: 250.0}
 
 
 def test_midpoint_bar_po_nekrmenem_cyklu_beze_zmeny() -> None:

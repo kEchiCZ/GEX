@@ -291,6 +291,19 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-22 — reference přírůstku z maxima seance potřebuje vlastní reset na hranici seance, dřív ho nesl pokles (#1602).**
+  `SetupEngine._flows` a `TendencyEngine._flows` držely referenci objemu přes 17:00 CT.
+  - Proti poslední hodnotě to nevadilo: kumulativ IBKR začíná seanci od ~0, první nízké číslo
+    se bralo jako pokles a samo se stalo referencí.
+  - S maximem seance by celý další den dal 0, dokud by objem nepřerostl včerejší maximum.
+  - Totéž hrozí v replayi, který nese stav mezi denními particemi, a po předání řetězu v rollu.
+
+  Odhalil to návrh engine části #1602. Reset dřív nikde nebyl, protože ho zastupoval pokles.
+  → Kdo mění referenci kumulativu z poslední hodnoty na maximum, nuluje stav na hranici seance
+  (`SessionVolumes.roll`, `roll_session`). Test přechodu seance musí mít první hodnotu nad
+  včerejším maximem. Oprava vstupu mechaniky před bumpem jde pod příznak v6 (ADR-0057 bod 11),
+  aby šel `main` dál nasadit kdykoli.
+
 - **2026-10-20 — roll v settle zahodil stav kalibrovaného řetězu a mezera blokovala α každý den (#1460).**
   Tracker netu řetězu D+1 žil v runtime pipeline, která se v settle zastaví. Nová pipeline
   začala s novým trackerem: tisky od posledního zápisu sekundáru (každý 3. cyklus) do první
