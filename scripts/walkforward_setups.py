@@ -10,7 +10,10 @@ Když kandidát splní všechny zábrany, report obsahuje i tělo pro
 
 Baseline = platná verze parameter store (tabulka `setup_params`), bez DB
 defaulty kódu. Bloky: per symbol a portfolio (ES+NQ sečtené per seance,
-ADR-0030). Seance = expirace řetězu (0DTE), tj. jeden den archivu.
+ADR-0030). Seance = expirace řetězu (0DTE) v okně aktivního řetězu
+[settle předchozí expirace, settle E) jako živý roll od #1331; expirace, jejíž
+settle proti času běhu ještě nenastal, se vynechá (ADR-0034 doplněk 22. 10.
+2026, #1464). Kolik minut a expirací padlo mimo, uvádí hlavička reportu.
 
 Mechanika replaye (`--mechanics`, výchozí mechanika kódu) určuje zdroj CumΔ
 (#1590, ADR-0057 bod 7): v5 midpoint, v6 tisky — stín `cumdelta_dx` od 21. 9.
@@ -93,11 +96,17 @@ def daily_series(
     *,
     prints: bool = CUMDELTA_PRINTS,
     start: dt.date | None = None,
+    now: dt.datetime | None = None,
+    skip: bt.WindowSkip | None = None,
 ) -> dict[str, dict[dt.date, float]]:
     """Denní ΣR per kandidát z replaye expirací symbolu v archivu od seance `start`.
 
     `prints` = mechanika replaye (CumΔ z tisků pod v6, `bt.build_minutes`).
+    Expirace, jejíž settle proti času běhu `now` (UTC, výchozí teď) ještě
+    nenastal, se vynechá — rozhoduje okamžik, ne datum, i v týdnech posunu
+    času (#1464). Vynechané minuty a expirace přičte do `skip`.
     """
+    now = now if now is not None else dt.datetime.now(dt.UTC)
     expiries = sorted(
         os.path.basename(p)
         for p in glob.glob(f"{bt.DATA}/{symbol}/*")
@@ -108,7 +117,11 @@ def daily_series(
         day = session_date(expiry)
         if start is not None and day < start:
             continue
-        minutes = bt.build_minutes(symbol, expiry, repo, prints=prints)
+        if not bt.settled(symbol, expiry, now):
+            if skip is not None:
+                skip.unsettled.append(expiry)
+            continue
+        minutes = bt.build_minutes(symbol, expiry, repo, prints=prints, skip=skip)
         if len(minutes) < 60:
             continue
         for name, params in candidates.items():
@@ -127,6 +140,16 @@ def portfolio(
             for day, value in values.items():
                 combined[name][day] += value
     return {name: dict(values) for name, values in combined.items()}
+
+
+def skip_note(symbol: str, skip: bt.WindowSkip, now: dt.datetime) -> str:
+    """Řádek hlavičky: co replay vynechal kvůli oknu aktivního řetězu (#1464)."""
+    unsettled = ", ".join(skip.unsettled) if skip.unsettled else "žádné"
+    return (
+        f"{symbol}: mimo okno aktivního řetězu [settle předchozí expirace, settle E) "
+        f"vynecháno {skip.minutes} minut; expirace bez settle k {now:%Y-%m-%d %H:%M} UTC "
+        f"({len(skip.unsettled)}): {unsettled}"
+    )
 
 
 def proposal_payload(
@@ -207,8 +230,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    now = dt.datetime.now(dt.UTC)
+    skips = {symbol: bt.WindowSkip() for symbol in symbols}
     per_symbol = {
-        symbol: daily_series(symbol, candidates, oi_repo, prints=prints, start=start)
+        symbol: daily_series(
+            symbol, candidates, oi_repo, prints=prints, start=start, now=now, skip=skips[symbol]
+        )
         for symbol in symbols
     }
     blocks: dict[str, dict[str, dict[dt.date, float]]] = dict(per_symbol)
@@ -228,12 +255,18 @@ def main(argv: list[str] | None = None) -> int:
         f"IS {wf_params.in_sample_days} / OOS {wf_params.out_sample_days} seancí · "
         f"metrika {wf_params.metric} · kandidátů {len(candidates) - 1}"
     )
+    notes = [skip_note(symbol, skip, now) for symbol, skip in skips.items()]
     if args.json:
         payload: dict[str, Any] = {
             "title": title,
             "baseline": baseline_label,
             "mechanics": args.mechanics,
             "from": start.isoformat() if start else None,
+            "run_at": now.isoformat(),
+            "skipped": {
+                symbol: {"minutes": skip.minutes, "unsettled": skip.unsettled}
+                for symbol, skip in skips.items()
+            },
             "candidates": {name: params_to_dict(p) for name, p in candidates.items()},
             "blocks": {
                 block: {
@@ -254,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
     else:
-        text = render_markdown(results, title=title)
+        text = render_markdown(results, title=title, notes=notes)
         proposals = {
             block: proposal_payload(result, candidates, block) for block, result in results.items()
         }

@@ -5,6 +5,11 @@ Nepřepisuje logiku detekce ani vyhodnocení: importuje `detect_all`,
 nich staví orchestraci, kterou jinak dělá `SetupEngine` (anti-spam per šablona,
 blokace směru po sérii stopů, cooldown v kontra-režimu).
 
+Okno aktivního řetězu (#1464, ADR-0034 doplněk 22. 10. 2026): adresář expirace
+nese i minuty, kdy ji psal sekundární runtime (kadence 3 min), ale živý
+`SetupEngine` běží jen nad aktivním řetězem. Replay proto přehraje expiraci E
+jen v [settle předchozí expirace, settle E) — pravidlo živého rollu od #1331.
+
 Otevřené setupy jdou týmž krokem jako živý engine (#1320, #1345): po cestě
 ceny od baru vstupu, bary od settle se nehodnotí, timeout za close baru
 končícího v settle (dřív replay timeout neměl a setup skončil jako `active`,
@@ -51,6 +56,7 @@ from gexlens_engine.compute.gexfield import GexProfile, gamma_edges
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import (
     history_expiry_settle,
+    is_trading_session,
     settle_ts,
     trading_session_date,
 )
@@ -349,6 +355,50 @@ def expiry_end(symbol: str, expiry: str) -> dt.datetime | None:
     return history_expiry_settle(expiry, symbol)[0]
 
 
+def previous_expiry(expiry: str) -> str:
+    """Expirace řetězu před `expiry` = předchozí obchodní den (ES/NQ mají denní
+    expirace; pondělí → pátek, svátek se přeskočí přes `is_trading_session`)."""
+    day = dt.datetime.strptime(expiry, "%Y%m%d").date() - dt.timedelta(days=1)
+    while not is_trading_session(day):
+        day -= dt.timedelta(days=1)
+    return day.strftime("%Y%m%d")
+
+
+def active_window(symbol: str, expiry: str) -> tuple[dt.datetime, dt.datetime]:
+    """Okno aktivního řetězu expirace: [settle předchozí expirace, settle E) (#1464).
+
+    Živá pipeline roluje v settle expirace (#1331), takže E je aktivní od settle
+    předchozí expirace do vlastního settle; dřív ji psal jen sekundární runtime.
+    Minuta settle E patří už další expiraci: replay v ní setup nezaloží
+    (`born_after_settle`) ani nehodnotí (`walk_setup_path` bere minuty před
+    settle) a otevřený setup uzavře timeout už v minutě před ní (`now` = settle).
+    """
+    start = expiry_end(symbol, previous_expiry(expiry))
+    end = expiry_end(symbol, expiry)
+    if start is None or end is None:
+        raise ValueError(f"Nečitelná expirace {expiry!r}")
+    return start, end
+
+
+def settled(symbol: str, expiry: str, now: dt.datetime) -> bool:
+    """Nastal settle expirace proti okamžiku běhu `now` (UTC)? Neuzavřená seance
+    nese jen minuty do teď a setupy bez výsledku — do denní ΣR nepatří (#1464)."""
+    end = expiry_end(symbol, expiry)
+    if end is None:
+        raise ValueError(f"Nečitelná expirace {expiry!r}")
+    return now >= end
+
+
+@dataclasses.dataclass
+class WindowSkip:
+    """Co replay vynechal kvůli oknu aktivního řetězu (#1464) — hlavička walk-forwardu."""
+
+    #: minut (bar ∩ levels) mimo [settle předchozí expirace, settle E)
+    minutes: int = 0
+    #: expirace, jejichž settle proti času běhu ještě nenastal
+    unsettled: list[str] = dataclasses.field(default_factory=list)
+
+
 def max_pain_for(repo: OIEodRepository, symbol: str, expiry: str, day: dt.date) -> float | None:
     try:
         records = repo.values_for(symbol, expiry, day)
@@ -365,12 +415,15 @@ def build_minutes(
     prints: bool = CUMDELTA_PRINTS,
     *,
     shadow_only: bool = False,
+    skip: WindowSkip | None = None,
 ) -> list[MinuteInputs]:
     """MinuteInputs jednoho obchodního dne (expirace = adresář derived).
 
-    `prints` = mechanika replaye: CumΔ z tisků (v6, ADR-0057 bod 7), jinak
-    midpoint (v5); výchozí je mechanika kódu. `shadow_only` čte pod v6 stín
-    i v seancích s 1A (brána parity, `cum_delta_series`).
+    Jen minuty v okně aktivního řetězu (`active_window`, #1464); kolik jich
+    padlo mimo, přičte do `skip`. `prints` = mechanika replaye: CumΔ z tisků
+    (v6, ADR-0057 bod 7), jinak midpoint (v5); výchozí je mechanika kódu.
+    `shadow_only` čte pod v6 stín i v seancích s 1A (brána parity,
+    `cum_delta_series`).
     """
     bars = load_series(f"{DATA}/{symbol}/bars/*.parquet")
     levels = load_series(f"{DATA}/{symbol}/{expiry}/levels/*.parquet")
@@ -385,6 +438,14 @@ def build_minutes(
     bars = bars.copy()
     bars["ts_min"] = bars["ts_min"] + pd.Timedelta(minutes=1)
     frame = bars.merge(levels, on="ts_min", how="inner")
+    # Sekundární minuty před rollem a minuty od settle živý engine nad E
+    # nehledá (#1464) — filtr jen minut, zdroje CumΔ ani toků se nemění
+    start, settle = active_window(symbol, expiry)
+    stamps = _utc_ns(frame["ts_min"])
+    inside = (stamps >= start) & (stamps < settle)
+    if skip is not None:
+        skip.minutes += int((~inside).sum())
+    frame = frame[inside]
     if dom is not None:
         frame = frame.merge(dom, on="ts_min", how="left")
     flows = option_flows(symbol, expiry)
@@ -414,11 +475,7 @@ def build_minutes(
     pain = max_pain_for(repo, symbol, expiry, day)
     # Settle vlastní expirace = konec života setupu, táž hranice jako živý
     # SetupEngine (`expiry_end`, ADR-0039 bod 2, DST #511, #1366; dřív pevně
-    # 20:00 UTC). Minuty po něm se přehrávají dál, ale nehodnotí: otevřený
-    # setup uzavře timeout v settle a nový nevznikne — viz `replay`.
-    settle = expiry_end(symbol, expiry)
-    if settle is None:
-        raise ValueError(f"Nečitelná expirace {expiry!r}")
+    # 20:00 UTC) a konec okna: otevřený setup uzavře timeout v settle — viz `replay`
 
     minutes: list[MinuteInputs] = []
     for row in frame.itertuples():
@@ -863,6 +920,7 @@ def main() -> None:
         return
 
     repo = OIEodRepository(create_engine(args.db)) if args.db else None
+    now = dt.datetime.now(dt.UTC)
 
     # Produkční default = absolutní prahy (násobky ATR jsou 0, viz #434)
     configs = {
@@ -883,6 +941,8 @@ def main() -> None:
         }
         per_day: dict[str, dict[str, float]] = defaultdict(dict)
         for expiry in expiries:
+            if not settled(symbol, expiry, now):
+                continue  # neuzavřená seance (#1464)
             minutes = build_minutes(symbol, expiry, repo) if repo else []
             if len(minutes) < 60:
                 continue

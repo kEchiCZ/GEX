@@ -288,13 +288,21 @@ def _decide(
     )
 
 
-def render_markdown(results: Mapping[str, WalkForwardResult], *, title: str) -> str:
-    """Report pro člověka: souhrn per blok (symbol / portfolio) a folds."""
+def render_markdown(
+    results: Mapping[str, WalkForwardResult], *, title: str, notes: Sequence[str] = ()
+) -> str:
+    """Report pro člověka: souhrn per blok (symbol / portfolio) a folds.
+
+    `notes` = odrážky pod nadpisem (vstupy replaye, např. vynechané minuty, #1464).
+    """
 
     def fmt(value: float | None, digits: int = 2) -> str:
         return "—" if value is None else f"{value:.{digits}f}"
 
     lines = [f"# {title}", ""]
+    if notes:
+        lines.extend(f"- {note}" for note in notes)
+        lines.append("")
     lines.append(
         "| Blok | Baseline | OOS dnů | Foldů | Sharpe OOS strategie | Sharpe OOS baseline | "
         "Ø Δ R/den | t | p | Bonferroni α | Verdikt |"
