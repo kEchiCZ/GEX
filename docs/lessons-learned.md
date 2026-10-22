@@ -16,6 +16,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-22 — dlouhý await v minutovém cyklu = ztracená minuta, podruhé po #1337 (#1646).**
+  Obnova OI archivu po publikaci (`await self.try_archive_oi` à 30 cyklů) četla v cyklu ES celý
+  průchod ~1 400 kontraktů, ~100 s. Hlavní smyčka čeká `max(1, 60 − elapsed)`, takže přetažená
+  iterace posune start dalších a minuta ES i NQ vypadne (od ≥ 14. 10. 6–14 minut za RTH, 22. 10.
+  12:30, 13:01, 13:02, 13:33, 14:04, 14:35 UTC). Odhalilo to srovnání děr v `levels` s časy logu
+  „OI archiv ES“ při kontrole přehrání v5 × v6. Task na pozadí jako u #1337 nestačil: čtení z IBKR
+  souběžné se sweepem by sčítalo market data lines (100, ADR-0001 bod 4). → Práce, která čte IBKR,
+  jde po dávkách do zbytku minuty na konci iterace (`advance_oi_archives`, jen když se dávka vejde);
+  co IBKR nečte, jde na pozadí (`BackgroundJob`, task jako #1208). Hledat díry v minutových řadách
+  v rytmu jobu (à 31 min = 30 cyklů + vynechaná minuta) a měřit délku iterace, ne jen sweep.
+
 - **2026-10-14 — epika se rozjela do bočních issues (#1385).** Za týden od schválení: 44 PR, z nich
   18 (41 %) v pořadí plánu, 13 na Fázi 6 před její bránou, 13 bočních; 44 nových bočních issues
   (~7 denně), 13 ze 14 zavřených hotovo do 24 h. Datová oprava E-0.2, na které visí brána F6 a bod
