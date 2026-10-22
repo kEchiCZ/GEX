@@ -121,7 +121,11 @@ počítal neuzavřenou expiraci jako OOS den. Platí (rozhodnutí A v #1385):
 
 Zdroj CumΔ (`build_cum_series` / `attach_cum_delta`, #1590) a opční toky se
 oknem nemění — je to jen filtr minut. Po opravě je v témž řezu mimo okno
-0 setupů (ES 224, NQ 252).
+i ve večerech před #1331 0 setupů (ES 224, ΣR +23,9; NQ 246, ΣR +44,8).
+Walk-forward 22. 10. má 46 místo 49 OOS seancí: chybí 22. a 23. 10. (bez
+settle) a 17. 9. — expirace 20260917 živě aktivní nebyla (pipeline z 20260916
+rolovala rovnou na 20260918), seance je proto mezera, ne minuty 16. 9.
+pod cizím datem.
 
 ## Důsledky
 
