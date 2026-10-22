@@ -509,6 +509,18 @@ chyb**, hlavně diagnostických a provozních.
   denní fáze doměří minutovou a hodinový průchod 3 dnů dožene výpadek symbolu. Skript zůstává
   jen pro bary dodané víc než 16 dní po zprávě.
 
+- **2026-10-22 — noční walk-forward počítal neuzavřenou seanci jako OOS den a uzavřený fold se v dalším reportu přepočítal o 13–15 R (#1464).**
+  `daily_series` přehrála každý adresář expirace v `derived/`. Report ve 23:45 SELČ tak bral i zítřejší
+  expiraci: měla den sekundárních minut a hodinu aktivních, setupy otevřené na konci dat dostaly
+  `r: None` a do ΣR nevstoupily. Poslední OOS den reportu D byl proto vždy D+1. Fold OOS 29. 9.–5. 10.
+  měl v reportu 2. 10. portfolio −12,72 R a v reportu 5. 10. +1,29 R, bez commitu mezi běhy.
+  Odhalila to kontrola reportů pro ADR-0057: počet OOS dnů rostl o 1 za běh.
+  → Seance offline nástroje je **uzavřená, až nastal její settle proti okamžiku běhu** v UTC.
+  Rozhoduje okamžik, ne datum adresáře (pozor na týdny posunu času). Okno minut je stejné jako
+  okno živého rollu, tj. [settle předchozí expirace, settle E). Testy: report D končí dnem D
+  a fold reportu D má v reportu D+1 tutéž ΣR; parita počtu a časů vzniku setupů s živým
+  `SetupEngine` na fixture se sekundárními minutami.
+
 - **2026-10-08 — walk-forward spadl po změně signatury `replay` a replay měřil setupy, které živý engine nedetekuje (#1081, #1464).**
   #1366 přidal do `scripts/backtest_setups.py` `replay` povinný `symbol`; testy a jediný volající
   v témže souboru prošly, noční `walkforward_setups.py` spadl na `TypeError` — `scripts/` mypy

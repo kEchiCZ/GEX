@@ -1,10 +1,16 @@
-"""Kolik setupů replaye vzniká v minutách sekundárního řetězu (#1464, nález #1081).
+"""Kolik setupů replaye vzniká mimo okno aktivního řetězu (#1464, nález #1081).
 
-`backtest_setups.build_minutes` skládá minuty expirace ze všech jejích `levels`,
-jenže ty píše i sekundární runtime (kadence 3 min) dřív, než se expirace stane
-aktivní; živý `SetupEngine` běží jen nad aktivním řetězem. Skript přehraje
-expirace baseline parametry (`SetupParams()`, bez Max Pain — bez PG) a spočítá
-setupy vzniklé před settle předchozí expirace v archivu (= roll od #1331).
+Do #1464 skládal `backtest_setups.build_minutes` minuty expirace ze všech jejích
+`levels`, jenže ty píše i sekundární runtime (kadence 3 min) dřív, než se
+expirace stane aktivní; živý `SetupEngine` běží jen nad aktivním řetězem.
+Skript přehraje expirace baseline parametry (`SetupParams()`, bez Max Pain —
+bez PG) a spočítá:
+- setupy mimo okno: vzniklé před settle předchozí expirace v archivu (= roll
+  od #1331) nebo od settle vlastní expirace — po opravě musí být 0;
+- setupy večera před #1331: do nasazení #1331 (7. 10. 2026) roloval živý řetěz
+  až s novým dnem v UTC, takže v okně po settle předchozí expirace psal E ještě
+  sekundár. Konec večera = první minuta aktivní kadence (`ACTIVE_RUN` minut
+  levels po sobě; sekundár píše jednou za 3 min).
 
 Jen čte partice `data/derived`. Řez `--to` drží měření opakovatelné (jen
 uzavřené expirace):
@@ -15,15 +21,23 @@ uzavřené expirace):
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import glob
 import os
 import sys
+
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_setups as bt  # noqa: E402 — sousední skript, ne balík
 
 from gexlens_engine.compute.settle import history_expiry_settle  # noqa: E402
 from gexlens_engine.compute.setups import SetupParams  # noqa: E402
+
+#: Den nasazení #1331 — od něj živá pipeline roluje v settle expirace
+ROLL_AT_SETTLE_FROM = dt.datetime(2026, 10, 7, tzinfo=dt.UTC)
+#: Aktivní kadence = tolik minut levels po sobě (sekundár souvislý běh nemá)
+ACTIVE_RUN = 3
 
 
 class _NoOiRepo:
@@ -33,27 +47,65 @@ class _NoOiRepo:
         raise RuntimeError("měření běží bez PG")
 
 
+def active_cadence_start(symbol: str, expiry: str, start: dt.datetime) -> dt.datetime | None:
+    """První minuta levels od `start`, za kterou jdou další minuty bez mezery."""
+    levels = bt.load_series(f"{bt.DATA}/{symbol}/{expiry}/levels/*.parquet")
+    if levels is None:
+        return None
+    stamps = sorted(ts for ts in bt._utc_ns(levels["ts_min"]) if ts >= start)
+    present = set(stamps)
+    step = pd.Timedelta(minutes=1)
+    for ts in stamps:
+        if all(ts + k * step in present for k in range(1, ACTIVE_RUN)):
+            return ts.to_pydatetime()
+    return None
+
+
 def measure(symbol: str, last: int, to: str) -> dict[str, float]:
     expiries = sorted(
         os.path.basename(p)
         for p in glob.glob(f"{bt.DATA}/{symbol}/*")
         if os.path.basename(p).isdigit() and os.path.basename(p) <= to
     )
-    stats = {"expiries": 0, "setups": 0, "secondary": 0, "r_all": 0.0, "r_secondary": 0.0}
+    stats = {
+        "expiries": 0,
+        "setups": 0,
+        "outside": 0,
+        "r_all": 0.0,
+        "r_outside": 0.0,
+        "skipped_minutes": 0,
+        "evenings": 0,
+        "evening_minutes": 0,
+        "evening": 0,
+        "r_evening": 0.0,
+    }
     for index in range(max(1, len(expiries) - last), len(expiries)):
         expiry = expiries[index]
         rolled_in = history_expiry_settle(expiries[index - 1], symbol)[0]
-        minutes = bt.build_minutes(symbol, expiry, _NoOiRepo())
-        if rolled_in is None or len(minutes) < 60:
+        settle = bt.expiry_end(symbol, expiry)
+        skip = bt.WindowSkip()
+        minutes = bt.build_minutes(symbol, expiry, _NoOiRepo(), skip=skip)
+        if rolled_in is None or settle is None or len(minutes) < 60:
             continue
         stats["expiries"] += 1
+        stats["skipped_minutes"] += skip.minutes
+        start = bt.active_window(symbol, expiry)[0]
+        evening_end = (
+            active_cadence_start(symbol, expiry, start) if start < ROLL_AT_SETTLE_FROM else None
+        )
+        if evening_end is not None and evening_end > start:
+            stats["evenings"] += 1
+            stats["evening_minutes"] += sum(1 for m in minutes if m.ts < evening_end)
         for row in bt.replay(minutes, SetupParams(), expiry, symbol):
             r = row["r"] or 0.0
             stats["setups"] += 1
             stats["r_all"] += r
-            if row["created"] < rolled_in:
-                stats["secondary"] += 1
-                stats["r_secondary"] += r
+            if row["created"] < rolled_in or row["created"] >= settle:
+                stats["outside"] += 1
+                stats["r_outside"] += r
+            if evening_end is not None and row["created"] < evening_end:
+                stats["evening"] += 1
+                stats["r_evening"] += r
     return stats
 
 
@@ -64,15 +116,20 @@ def main() -> int:
     parser.add_argument("--to", default="20261007", help="poslední expirace (YYYYMMDD)")
     args = parser.parse_args()
 
-    print(f"Řez: {args.last} expirací do {args.to}, hranice = settle předchozí expirace")
-    print("| symbol | expirací | setupů | před rollem | ΣR vše | ΣR před rollem |")
-    print("|---|---|---|---|---|---|")
+    print(f"Řez: {args.last} expirací do {args.to}, okno = [settle předchozí expirace, settle E)")
+    print(
+        "| symbol | expirací | setupů | mimo okno | ΣR vše | ΣR mimo okno | minut mimo okno "
+        "| večerů před #1331 | minut večera | setupů večera | ΣR večera |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     for symbol in args.symbols.split(","):
         s = measure(symbol, args.last, args.to)
-        share = s["secondary"] / s["setups"] if s["setups"] else 0.0
+        share = s["evening"] / s["setups"] if s["setups"] else 0.0
         print(
-            f"| {symbol} | {s['expiries']:.0f} | {s['setups']:.0f} | "
-            f"{s['secondary']:.0f} ({share:.0%}) | {s['r_all']:+.1f} | {s['r_secondary']:+.1f} |"
+            f"| {symbol} | {s['expiries']:.0f} | {s['setups']:.0f} | {s['outside']:.0f} | "
+            f"{s['r_all']:+.1f} | {s['r_outside']:+.1f} | {s['skipped_minutes']:.0f} | "
+            f"{s['evenings']:.0f} | {s['evening_minutes']:.0f} | "
+            f"{s['evening']:.0f} ({share:.0%}) | {s['r_evening']:+.1f} |"
         )
     return 0
 
