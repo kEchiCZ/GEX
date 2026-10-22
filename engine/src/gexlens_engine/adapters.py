@@ -20,7 +20,7 @@ from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot
 from gexlens_engine.ibkr.subscription import ReqIdTombstones, contract_label
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import PublisherLike
-from gexlens_engine.storage.oi_archive import ContractSnapshot
+from gexlens_engine.storage.oi_archive import ContractSnapshot, OIMiss
 from gexlens_engine.ticker import symbol_root
 
 logger = logging.getLogger(__name__)
@@ -233,10 +233,10 @@ class IbOIFetcher:
 
     async def fetch_snapshot(
         self, spec: OptionContractSpec, timeout_s: float
-    ) -> ContractSnapshot | None:
+    ) -> ContractSnapshot | OIMiss:
         contract = await self._streamer._contract(spec)  # sdílená kvalifikační cache
         if contract is None:
-            return None
+            return OIMiss.UNQUALIFIED
         ticker = self._ib.reqMktData(contract, "101", False, False)
         self._streamer.remember(ticker, contract)
         if self._streamer._line_gauge is not None:
@@ -259,7 +259,9 @@ class IbOIFetcher:
                     oi = float(value)  # type: ignore[arg-type]
                     break
             if oi is None:
-                return None
+                # Důvod do řádku dávky (#1650): ticky bez OI = IBKR posílá 101
+                # pozdě nebo vůbec; žádný tick = request neodešel nebo smyčka stála
+                return OIMiss.NO_TICK if ticker.time == stale_time else OIMiss.NO_OI
             # Grace na greeks (#519): OI často dorazí dřív než model — krátké
             # dočkání, ale nikdy přes původní deadline
             grace_end = min(deadline, loop.time() + SNAPSHOT_GREEKS_GRACE_S)

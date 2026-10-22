@@ -652,7 +652,9 @@ class InstrumentPipeline:
             if archive.offset >= len(archive.contracts):
                 break
             batch = archive.contracts[archive.offset : archive.offset + size]
-            records, missing = await self.archiver.fetch_batch(batch, archive.day)
+            records, missing = await self.archiver.fetch_batch(
+                batch, archive.day, offset=archive.offset, total=len(archive.contracts)
+            )
             archive.records.extend(records)
             archive.missing.extend(missing)
             archive.offset += len(batch)
@@ -724,12 +726,19 @@ class InstrumentPipeline:
     async def _oi_archive_done(self, archive: OIArchivePass, result: ArchiveResult) -> bool:
         """Výsledek celého průchodu: log, upozornění a finalita (joby až po něm)."""
         today, now, has_snapshot = archive.day, archive.started, archive.has_snapshot
+        coverage = result.written / max(1, result.written + len(result.missing))
+        # Důvod nefinality (#1650): finální je jen průchod bez změněné hodnoty,
+        # bez chybějícího dřív archivovaného kontraktu a s pokrytím nad prahem
         logger.info(
-            "OI archiv %s %s: %d zapsáno, %d chybí",
+            "OI archiv %s %s: %d zapsáno, %d chybí — pokrytí %.1f %%, změněno %d, "
+            "chybí dřív archivovaných %d",
             self.symbol,
             today,
             result.written,
             len(result.missing),
+            coverage * 100,
+            result.changed_values,
+            result.missing_archived,
         )
         if result.written == 0:
             if has_snapshot:
@@ -752,7 +761,6 @@ class InstrumentPipeline:
             # Shoda čtení nestačí (#664): 12. 8. dvě shodná čtení 4 kontraktů
             # ze 160 zastavila obnovu 0DTE na celý den — řídký snímek finální
             # být nesmí, obnova jede dál, dokud CME nedopublikuje
-            coverage = result.written / max(1, result.written + len(result.missing))
             if coverage >= self.settings.oi_final_min_coverage:
                 self.oi_final = True
                 logger.info("OI archiv %s %s je finální (dvě shodná čtení)", self.symbol, today)

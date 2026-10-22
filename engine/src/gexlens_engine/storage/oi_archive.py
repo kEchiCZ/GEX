@@ -15,8 +15,10 @@ o likviditě — rozhodnutí uživatele 13. 8. 2026).
 import asyncio
 import datetime as dt
 import logging
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from sqlalchemy import (
@@ -161,15 +163,36 @@ class ContractSnapshot:
     und_price: float | None = None
 
 
+class OIMiss(StrEnum):
+    """Proč kontrakt v průchodu nedodal OI (#1650); hodnota je text řádku dávky v logu."""
+
+    #: Po requestu nedorazil žádný tick (request neodešel, smyčka stála, IBKR mlčí)
+    NO_TICK = "bez ticku"
+    #: Ticky chodily (kotace, greeks), ale OI strany kontraktu ne
+    NO_OI = "tick bez OI"
+    #: Kontrakt nejde kvalifikovat (sec-def farma mlčí nebo kontrakt nezná)
+    UNQUALIFIED = "nekvalifikováno"
+    #: Čtení spadlo výjimkou (detail v logu „fetch_snapshot selhal“)
+    ERROR = "chyba"
+
+
 @dataclass(frozen=True)
 class ArchiveResult:
     """Výsledek denní archivace: kolik záznamů zapsáno a které kontrakty OI nedodaly."""
 
     written: int
     missing: tuple[OptionContractSpec, ...]
-    #: Lišila se nová čtení od toho, co už v archivu bylo? `True` i pro první
-    #: snímek dne. Dvě po sobě jdoucí nezměněná čtení = OI se ustálilo (#463).
-    changed: bool = True
+    #: Zapsané hodnoty, které se liší od archivu dne nebo v něm chyběly (#1650)
+    changed_values: int = 0
+    #: Chybějící kontrakty, které archiv dne už má — nejdou potvrdit (#494, #1650)
+    missing_archived: int = 0
+
+    @property
+    def changed(self) -> bool:
+        """Lišila se nová čtení od toho, co už v archivu bylo? `True` i pro první
+        snímek dne (všechny hodnoty jsou nové). Dvě po sobě jdoucí nezměněná
+        čtení = OI se ustálilo (#463)."""
+        return self.changed_values > 0 or self.missing_archived > 0
 
 
 class OIFetcherLike(Protocol):
@@ -177,13 +200,13 @@ class OIFetcherLike(Protocol):
 
     Produkční implementace: FOP generic tick 101 přes reqMktData snapshot
     (ADR-0001: 588 intraday nechodí); IV/greeks/close se čtou opportunisticky
-    z téže subskripce. Vrací None, když OI není k dispozici — bez OI je
-    kontrakt missing, i kdyby greeks dorazily.
+    z téže subskripce. Bez OI vrací důvod chybění (#1650) — kontrakt je
+    missing, i kdyby greeks dorazily.
     """
 
     async def fetch_snapshot(
         self, spec: OptionContractSpec, timeout_s: float
-    ) -> ContractSnapshot | None: ...
+    ) -> ContractSnapshot | OIMiss: ...
 
 
 class OIEodRepository:
@@ -724,6 +747,35 @@ class OIEodRepository:
             return float(row.oi) if row is not None else None
 
 
+#: Krok sondy lagu smyčky během dávky (#1650) — týž jako krok čekání na tick
+#: v `IbOIFetcher.fetch_snapshot`
+LOOP_LAG_PROBE_S = 0.25
+
+
+class LoopLagProbe:
+    """Nejdelší přesah `asyncio.sleep` souběžně s dávkou čtení (#1650, hypotéza 1).
+
+    Smyčka, která stojí (CPU práce v témže vlákně, GIL držený vláknem
+    z `to_thread`), nezpracovává příchozí ticky a čekání na OI vyprší
+    naprázdno. Přesah spánku ukáže, jak dlouho smyčka nejvýš stála.
+    """
+
+    def __init__(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._since = self._loop.time()
+        self._worst = 0.0
+
+    async def run(self) -> None:
+        while True:
+            self._since = self._loop.time()
+            await asyncio.sleep(LOOP_LAG_PROBE_S)
+            self._worst = max(self._worst, self._loop.time() - self._since - LOOP_LAG_PROBE_S)
+
+    def worst(self) -> float:
+        """Nejdelší přesah včetně spánku, který právě běží (smyčka mohla stát na konci dávky)."""
+        return max(self._worst, self._loop.time() - self._since - LOOP_LAG_PROBE_S)
+
+
 def _as_utc(value: dt.datetime | None) -> dt.datetime | None:
     """sqlite vrací naivní datetime — archiv je vždy v UTC."""
     if value is None or value.tzinfo is not None:
@@ -752,27 +804,46 @@ class OIArchiver:
         missing: list[OptionContractSpec] = []
         batch_size = self._settings.batch_size
         for offset in range(0, len(contracts), batch_size):
-            read, absent = await self.fetch_batch(contracts[offset : offset + batch_size], day)
+            read, absent = await self.fetch_batch(
+                contracts[offset : offset + batch_size], day, offset=offset, total=len(contracts)
+            )
             records.extend(read)
             missing.extend(absent)
         return await self.commit(records, missing, day, now)
 
     async def fetch_batch(
-        self, batch: Sequence[OptionContractSpec], day: dt.date
+        self, batch: Sequence[OptionContractSpec], day: dt.date, *, offset: int, total: int
     ) -> tuple[list[OIRecord], list[OptionContractSpec]]:
         """Jedna dávka čtení z IBKR bez zápisu: záznamy s OI a kontrakty bez něj.
 
         Dávka drží nejvýš `batch_size` subskripcí naráz (100 lines, ADR-0001
         bod 4). Obnova po publikaci volá dávky po jedné mezi minutovými cykly
-        (#1646) a zapíše je až `commit` po celém průchodu.
+        (#1646) a zapíše je až `commit` po celém průchodu. `offset` a `total`
+        (pozice dávky v průchodu) jdou jen do řádku dávky v logu (#1650).
         """
         records: list[OIRecord] = []
         missing: list[OptionContractSpec] = []
-        values = await asyncio.gather(*(self._fetch_one(spec) for spec in batch))
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        probe = LoopLagProbe()
+        probe_task = asyncio.create_task(probe.run(), name="oi-loop-lag")
+        try:
+            values = await asyncio.gather(*(self._fetch_one(spec) for spec in batch))
+        finally:
+            probe_task.cancel()
+        elapsed, lag = loop.time() - started, probe.worst()
+        reasons: Counter[OIMiss] = Counter()
+        # Přečteno/celkem po sériích v pořadí průchodu: vypadávají celé expirace
+        # (#1650) — a jsou to ty, které čte i sweep (hypotéza 3)?
+        series: dict[str, list[int]] = {}
         for spec, snapshot in zip(batch, values, strict=True):
-            if snapshot is None:
+            tally = series.setdefault(f"{spec.trading_class or ''} {spec.expiry}".strip(), [0, 0])
+            tally[1] += 1
+            if isinstance(snapshot, OIMiss):
+                reasons[snapshot] += 1
                 missing.append(spec)
             else:
+                tally[0] += 1
                 records.append(
                     OIRecord(
                         symbol=spec.symbol,
@@ -791,6 +862,19 @@ class OIArchiver:
                         trading_class=spec.trading_class or "",
                     )
                 )
+        logger.info(
+            "OI archiv %s %s: dávka %d–%d/%d (%s) — přečteno %d, %s; %.1f s, lag smyčky max %.2f s",
+            batch[0].symbol,
+            day,
+            offset + 1,
+            offset + len(batch),
+            total,
+            ", ".join(f"{name} {read}/{size}" for name, (read, size) in series.items()),
+            len(records),
+            ", ".join(f"{reason} {reasons[reason]}" for reason in OIMiss),
+            elapsed,
+            lag,
+        )
         return records, missing
 
     async def commit(
@@ -840,10 +924,13 @@ class OIArchiver:
                 len(records) - len(deduped),
             )
         # Porovnání s archivem PŘED zápisem (#463): dvě po sobě jdoucí nezměněná
-        # čtení znamenají, že IBKR publikaci dokončil a snímek je finální
+        # čtení znamenají, že IBKR publikaci dokončil a snímek je finální.
+        # Srovná se i průchod bez jediné hodnoty — počet chybějících dřív
+        # archivovaných jde do logu průchodu (#1650)
+        symbol = deduped[0].symbol if deduped else missing[0].symbol if missing else None
         previous = (
-            await asyncio.to_thread(self._repository.snapshot_by_class, deduped[0].symbol, day)
-            if deduped
+            await asyncio.to_thread(self._repository.snapshot_by_class, symbol, day)
+            if symbol is not None
             else {}
         )  # prettier-ignore
 
@@ -856,15 +943,17 @@ class OIArchiver:
                 return exact
             return previous.get((r.expiry, "", r.strike, r.right))
 
-        changed = not previous or any(_previous_oi(r) != r.oi for r in deduped)
+        # Nový kontrakt (i celý první snímek dne) nemá s čím shodu — je změna
+        changed_values = sum(1 for r in deduped if _previous_oi(r) != r.oi)
         # Kontrakt dřív archivovaný, který teď čtení nedodalo, nejde potvrdit
         # jako nezměněný — neúplné čtení nesmí prohlásit snímek za finální (#494).
         # Trvale chybějící striky (OI bez hodnoty celý den) finalitě nebrání,
         # jinak by se archiv obnovoval donekonečna.
-        changed = changed or any(
-            (spec.expiry, spec.trading_class or "", spec.strike, spec.right) in previous
-            or (spec.expiry, "", spec.strike, spec.right) in previous
+        missing_archived = sum(
+            1
             for spec in missing
+            if (spec.expiry, spec.trading_class or "", spec.strike, spec.right) in previous
+            or (spec.expiry, "", spec.strike, spec.right) in previous
         )
         captured_ts = now or dt.datetime.now(dt.UTC)
         await asyncio.to_thread(self._repository.upsert_many, deduped, captured_ts)
@@ -883,11 +972,16 @@ class OIArchiver:
             await asyncio.to_thread(self._repository.supersede_legacy, complete_keys)
         if missing:
             logger.warning("OI archivace %s: %d kontraktů bez OI", day, len(missing))
-        return ArchiveResult(written=len(deduped), missing=tuple(missing), changed=changed)
+        return ArchiveResult(
+            written=len(deduped),
+            missing=tuple(missing),
+            changed_values=changed_values,
+            missing_archived=missing_archived,
+        )
 
-    async def _fetch_one(self, spec: OptionContractSpec) -> ContractSnapshot | None:
+    async def _fetch_one(self, spec: OptionContractSpec) -> ContractSnapshot | OIMiss:
         try:
             return await self._fetcher.fetch_snapshot(spec, self._settings.batch_timeout_s)
         except Exception:
             logger.exception("fetch_snapshot selhal pro %s", spec)
-            return None
+            return OIMiss.ERROR

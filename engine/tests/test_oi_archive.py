@@ -1,8 +1,12 @@
 """Testy OIArchiveru (issue #9): dva dny v archivu, idempotence, chybějící OI, real PG."""
 
+import asyncio
 import datetime as dt
+import logging
 import os
+import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy import create_engine, select, text
@@ -15,6 +19,7 @@ from gexlens_engine.storage.oi_archive import (
     ContractSnapshot,
     OIArchiver,
     OIEodRepository,
+    OIMiss,
     OIRecord,
     oi_eod_table,
 )
@@ -100,6 +105,7 @@ async def test_captured_ts_zaznamenan_a_changed_hlasi_ustaleni(
     first = await archiver.archive_day(specs, DAY_1, now=ranni)
 
     assert first.changed is True  # první snímek dne je vždy změna
+    assert first.changed_values == len(specs)  # všechny hodnoty jsou nové
     assert repository.captured_at("ES", DAY_1) == ranni
 
     # Publikace doběhla — jiné hodnoty, tedy ještě není ustáleno
@@ -108,6 +114,7 @@ async def test_captured_ts_zaznamenan_a_changed_hlasi_ustaleni(
     second = await archiver_new.archive_day(specs, DAY_1, now=po_publikaci)
 
     assert second.changed is True
+    assert (second.changed_values, second.missing_archived) == (len(specs), 0)
     assert repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right) == 1500.0
     assert repository.captured_at("ES", DAY_1) == po_publikaci
 
@@ -117,6 +124,7 @@ async def test_captured_ts_zaznamenan_a_changed_hlasi_ustaleni(
     )
 
     assert third.changed is False
+    assert (third.changed_values, third.missing_archived) == (0, 0)
 
 
 async def test_vypadek_drive_archivovaneho_kontraktu_brani_finalite(
@@ -136,6 +144,24 @@ async def test_vypadek_drive_archivovaneho_kontraktu_brani_finalite(
 
     assert specs[0] in result.missing
     assert result.changed is True
+    # Důvod nefinality do logu průchodu (#1650): hodnoty sedí, chybí archivovaný
+    assert (result.changed_values, result.missing_archived) == (0, 1)
+
+
+async def test_pruchod_bez_hodnot_spocita_chybejici_drive_archivovane(
+    repository: OIEodRepository,
+) -> None:
+    """#1650 (D2): ani průchod bez jediného OI neztratí počet dřív archivovaných,
+    které chybí — symbol pro srovnání s archivem dá chybějící kontrakt."""
+    specs = contracts()
+    archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), Settings())
+    await archiver.archive_day(specs, DAY_1)
+
+    result = await OIArchiver(repository, MockOIFetcher(), Settings()).archive_day(specs, DAY_1)
+
+    assert result.written == 0
+    assert (result.changed_values, result.missing_archived) == (0, len(specs))
+    assert result.changed is True
 
 
 async def test_trvale_chybejici_strike_nebrani_ustaleni(repository: OIEodRepository) -> None:
@@ -150,6 +176,7 @@ async def test_trvale_chybejici_strike_nebrani_ustaleni(repository: OIEodReposit
 
     assert specs[0] in result.missing
     assert result.changed is False  # dvě shodná čtení → ustáleno
+    assert (result.changed_values, result.missing_archived) == (0, 0)
 
 
 def test_captured_at_bez_archivu_je_none(repository: OIEodRepository) -> None:
@@ -238,7 +265,7 @@ async def test_fetcher_exception_counts_as_missing(repository: OIEodRepository) 
     class ExplodingFetcher(MockOIFetcher):
         async def fetch_snapshot(
             self, spec: OptionContractSpec, timeout_s: float
-        ) -> ContractSnapshot | None:
+        ) -> ContractSnapshot | OIMiss:
             if spec == specs[0]:
                 raise RuntimeError("mock: timeout")
             return ContractSnapshot(oi=42.0)
@@ -248,6 +275,83 @@ async def test_fetcher_exception_counts_as_missing(repository: OIEodRepository) 
 
     assert result.written == 1
     assert result.missing == (specs[0],)
+
+
+def _batch_lines(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if ": dávka " in r.getMessage()]
+
+
+async def test_davka_loguje_pozici_serie_a_duvody_chybeni(
+    repository: OIEodRepository, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1650 (D1): řádek dávky nese pozici v průchodu, přečteno/celkem po sériích
+    v pořadí průchodu a důvod každého chybějícího kontraktu."""
+    caplog.set_level(logging.INFO, logger="gexlens_engine.storage.oi_archive")
+    specs = contracts()
+    next_series = OptionContractSpec(
+        symbol="ES",
+        sec_type="FOP",
+        expiry="20260717",
+        strike=7600.0,
+        right="C",
+        exchange="CME",
+        trading_class="E3E",
+        multiplier="50",
+    )
+    fetcher = MockOIFetcher(
+        dict.fromkeys(specs[:3], 500.0),
+        misses={specs[3]: OIMiss.NO_OI, specs[4]: OIMiss.UNQUALIFIED},
+    )
+
+    class ExplodingFetcher(MockOIFetcher):
+        async def fetch_snapshot(
+            self, spec: OptionContractSpec, timeout_s: float
+        ) -> ContractSnapshot | OIMiss:
+            if spec == specs[5]:
+                raise RuntimeError("mock: chyba čtení")
+            return await fetcher.fetch_snapshot(spec, timeout_s)
+
+    archiver = OIArchiver(repository, ExplodingFetcher(), Settings())
+    records, missing = await archiver.fetch_batch(
+        [*specs, next_series], DAY_1, offset=80, total=1344
+    )
+
+    assert len(records) == 3
+    assert missing == [*specs[3:], next_series]
+    (line,) = [r.getMessage() for r in _batch_lines(caplog)]
+    assert line.startswith(
+        "OI archiv ES 2026-07-15: dávka 81–87/1344 (E3D 20260716 3/6, E3E 20260717 0/1) — "
+        "přečteno 3, bez ticku 1, tick bez OI 1, nekvalifikováno 1, chyba 1; "
+    )
+    assert "lag smyčky max" in line
+
+
+async def test_lag_smycky_zachyti_blokujici_praci_behem_davky(
+    repository: OIEodRepository, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1650, hypotéza 1: synchronní práce ve vlákně smyčky během dávky (ticky
+    se mezitím nezpracují) se ukáže v lagu smyčky; dávka bez ní lag nemá."""
+    caplog.set_level(logging.INFO, logger="gexlens_engine.storage.oi_archive")
+    specs = contracts(count=2)
+
+    class BlockingFetcher(MockOIFetcher):
+        async def fetch_snapshot(
+            self, spec: OptionContractSpec, timeout_s: float
+        ) -> ContractSnapshot | OIMiss:
+            await asyncio.sleep(0.05)
+            time.sleep(0.6)  # CPU práce v témže vlákně jako smyčka
+            return ContractSnapshot(oi=1.0)
+
+    archiver = OIArchiver(repository, BlockingFetcher(), Settings())
+    await archiver.fetch_batch(specs[:1], DAY_1, offset=0, total=2)
+    quiet = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 1.0)), Settings())
+    await quiet.fetch_batch(specs[1:], DAY_1, offset=1, total=2)
+
+    lags = [r.args[-1] for r in _batch_lines(caplog) if isinstance(r.args, tuple)]
+    assert len(lags) == 2 and all(isinstance(lag, float) for lag in lags)
+    blocked, healthy = (float(cast(float, lag)) for lag in lags)
+    assert blocked >= 0.3
+    assert healthy < 0.1
 
 
 @pytest.mark.skipif(
