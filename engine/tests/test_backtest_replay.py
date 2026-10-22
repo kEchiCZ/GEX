@@ -288,22 +288,25 @@ def _partitions(
     levels: dict[str, list[dt.datetime]],
     close: Callable[[dt.datetime], float] = lambda ts: 100.0,
 ) -> None:
-    """Bary ES a levels expirací: rozhodovací minuta N = bar N − 1 + levels N."""
+    """Bary ES a levels expirací: rozhodovací minuta N = bar N − 1 + levels N.
+
+    Bary v partici UTC dne svých minut jako v produkci; partice cizího dne je
+    rozbitá — `build_minutes` ji číst nesmí (#1464)."""
     derived = root / "derived" / "ES"
     decisions = sorted({ts for minutes in levels.values() for ts in minutes})
     prices = [close(ts) for ts in decisions]
-    _write(
-        derived / "bars" / "bars.parquet",
-        pd.DataFrame(
-            {
-                "ts_min": [ts - MINUTE for ts in decisions],
-                "open": prices,
-                "high": prices,
-                "low": prices,
-                "close": prices,
-            }
-        ),
+    bars = pd.DataFrame(
+        {
+            "ts_min": [ts - MINUTE for ts in decisions],
+            "open": prices,
+            "high": prices,
+            "low": prices,
+            "close": prices,
+        }
     )
+    for day, part in bars.groupby(bars["ts_min"].dt.strftime("%Y-%m-%d")):
+        _write(derived / "bars" / f"{day}.parquet", part)
+    (derived / "bars" / "2026-01-05.parquet").write_bytes(b"cizi den, ne parquet")
     for expiry, minutes in levels.items():
         _write(
             derived / expiry / "levels" / "levels.parquet",

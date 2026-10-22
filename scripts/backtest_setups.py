@@ -92,7 +92,28 @@ def set_data_root(root: str) -> None:
 
 
 def load_series(pattern: str) -> pd.DataFrame | None:
-    files = sorted(glob.glob(pattern))
+    return load_files(sorted(glob.glob(pattern)))
+
+
+def load_bars(symbol: str, decisions: pd.Series) -> pd.DataFrame | None:
+    """Bary k rozhodovacím minutám `decisions` (bar N − 1 k minutě N).
+
+    Partice barů = UTC den jejich minut, bez duplicit mezi dny (ověřeno
+    22. 10. 2026 nad ES i NQ): stačí partice dnů těchto minut — celý archiv
+    (~700 dní) pro každou expiraci stál ~0,2 GB špičky (#1464).
+    """
+    stamps = _utc_ns(decisions) - _MINUTE
+    first, last = stamps.min().date().isoformat(), stamps.max().date().isoformat()
+    return load_files(
+        [
+            path
+            for path in sorted(glob.glob(f"{DATA}/{symbol}/bars/*.parquet"))
+            if first <= os.path.basename(path)[:10] <= last
+        ]
+    )
+
+
+def load_files(files: list[str]) -> pd.DataFrame | None:
     if not files:
         return None
     frame = pd.concat([pd.read_parquet(f) for f in files])
@@ -432,9 +453,9 @@ def build_minutes(
     `shadow_only` čte pod v6 stín i v seancích s 1A (brána parity,
     `cum_delta_series`).
     """
-    bars = load_series(f"{DATA}/{symbol}/bars/*.parquet")
     levels = load_series(f"{DATA}/{symbol}/{expiry}/levels/*.parquet")
     dom = load_series(f"{DATA}/{symbol}/{expiry}/walldom/*.parquet")
+    bars = None if levels is None else load_bars(symbol, levels["ts_min"])
     if bars is None or levels is None:
         return []
     # Decision-time konvence (#794 f. 1, změřeno 24. 8.): živý engine v minutě N
