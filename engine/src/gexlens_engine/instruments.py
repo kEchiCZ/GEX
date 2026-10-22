@@ -71,7 +71,12 @@ from gexlens_engine.storage.fa_calibration import (
 )
 from gexlens_engine.storage.fa_validation import FaValidationRepository, collect_fa_validation
 from gexlens_engine.storage.meta import ensure_meta_schema, settings_table, watchlist_table
-from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
+from gexlens_engine.storage.oi_archive import (
+    ArchiveResult,
+    OIArchiver,
+    OIEodRepository,
+    OIRecord,
+)
 from gexlens_engine.t6 import T6Collector
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.verdict_writer import DayVerdictWriter
@@ -90,6 +95,28 @@ SETUP_RETRY_FIRST_CYCLES = 1
 # navždy (future se nikdy nevyřeší) a zastavit celý orchestrátor. Běžný sweep
 # trvá 0.5–35 s; strop je velkorysý, aby nezabíjel legitimní první sweep.
 CYCLE_TIMEOUT_S = 240.0
+# OI archiv z minutového cyklu po dávkách ve zbytku minuty (#1646): rezerva
+# před startem dalšího cyklu — dávka může přetáhnout `batch_timeout_s` o
+# kvalifikaci kontraktů a odhlášení subskripcí (22. 10. 2026: Ø 3,6 s na dávku)
+OI_ARCHIVE_RESERVE_S = 5.0
+
+
+@dataclass
+class OIArchivePass:
+    """Rozpracovaný průchod OI archivu dne, čtený po dávkách mezi cykly (#1646).
+
+    `started` je minuta otevření: k ní se vztahuje čas pořízení, finalita i
+    upozornění, stejně jako u čtení celého průchodu naráz.
+    """
+
+    day: dt.date
+    started: dt.datetime
+    #: Platný denní archiv už existuje → selhání je jen neúspěšná OBNOVA (#494)
+    has_snapshot: bool
+    contracts: tuple[OptionContractSpec, ...]
+    offset: int = 0
+    records: list[OIRecord] = field(default_factory=list)
+    missing: list[OptionContractSpec] = field(default_factory=list)
 
 
 class InstrumentSetupError(RuntimeError):
@@ -412,6 +439,10 @@ class InstrumentPipeline:
     _gap_fill_task: asyncio.Task[int] | None = field(default=None, repr=False)
     #: První OI archiv dne na pozadí (#1208); None = neběží (hotovo nebo nezačal)
     _initial_oi_task: asyncio.Task[bool] | None = field(default=None, repr=False)
+    #: OI archiv z minutového cyklu čtený po dávkách (#1646); None = neběží
+    _oi_pass: OIArchivePass | None = field(default=None, repr=False)
+    #: Joby po průchodu (FA, sebekontrola, Forward GEX) na pozadí (#1646)
+    _oi_jobs_task: asyncio.Task[None] | None = field(default=None, repr=False)
     # Kolik barů zatím doplnil tasty fallback během běžícího stall (do logu při zotavení)
     _gap_filled: int = field(default=0, repr=False)
     # Vol koncentrace (#208): už ohlášené strany (expirace, strike, right) —
@@ -552,15 +583,32 @@ class InstrumentPipeline:
         stavu, kde put strana měla Σ OI 1 877 proti 29 282 na call straně).
         `now` je injektovatelné kvůli testům — rozhodnutí o obnově závisí na
         hodině, takže by test jinak platil jen část dne.
+
+        Celý průchod naráz čte jen první archiv dne na pozadí (#1208); minutový
+        cyklus čte po dávkách ve zbytku minuty (#1646, `advance_oi_archive`).
         """
         now = now or dt.datetime.now(dt.UTC)
+        archive = await self._open_oi_archive(today, now)
+        if archive is None:
+            return True
+        try:
+            result = await self.archiver.archive_day(archive.contracts, today, now=now)
+        except Exception:
+            return await self._oi_archive_failed(archive)
+        available = await self._oi_archive_done(archive, result)
+        if result.written:
+            await self._after_oi_archive(today)
+        return available
+
+    async def _open_oi_archive(self, today: dt.date, now: dt.datetime) -> OIArchivePass | None:
+        """Začátek průchodu OI archivu dne; None = platný snímek, číst není co."""
         self._oi_day = today
-        # Platný denní archiv už existuje → případné selhání níže je jen
+        # Platný denní archiv už existuje → případné selhání čtení je jen
         # neúspěšná OBNOVA, ne ztráta OI (#494) — jede se dál na starším snímku
         has_snapshot = today in self.oi_repository.days(self.symbol)
         if has_snapshot and not self._oi_refresh_due(now):
             await self._run_fa_jobs(today)
-            return True
+            return None
         captured = self.oi_repository.captured_at(self.symbol, today)
         if captured is not None and captured < self.settings.oi_publication_utc(captured.date()):
             logger.info(
@@ -569,24 +617,113 @@ class InstrumentPipeline:
                 today,
                 captured.strftime("%H:%M"),
             )
-        contracts = self._archive_universe()
+        return OIArchivePass(
+            day=today,
+            started=now,
+            has_snapshot=has_snapshot,
+            contracts=tuple(self._archive_universe()),
+        )
+
+    async def advance_oi_archive(self, deadline: float, clock: Callable[[], float]) -> None:
+        """Dávky rozpracovaného OI archivu do `deadline` (čas smyčky, #1646).
+
+        Celý průchod ES (~1 400 kontraktů, 18 dávek) běžel v minutovém cyklu
+        ~100 s a minuta ES i NQ chyběla à 31 min od 12:30 UTC. Teď každý krok
+        průchodu — dávka i závěrečný zápis — začne, jen když se do zbytku
+        minuty vejde `batch_timeout_s`, a průchod pokračuje v dalších minutách.
+        Zápis a finalita až po celém průchodu; joby po archivu jdou na pozadí.
+        """
+        archive = self._oi_pass
+        if archive is None:
+            return
+        size = self.settings.batch_size
+        read = 0
+        while True:
+            if clock() + self.settings.batch_timeout_s > deadline:
+                if read:
+                    logger.info(
+                        "OI archiv %s %s: přečteno %d/%d kontraktů, pokračuje v další minutě",
+                        self.symbol,
+                        archive.day,
+                        archive.offset,
+                        len(archive.contracts),
+                    )
+                return
+            if archive.offset >= len(archive.contracts):
+                break
+            batch = archive.contracts[archive.offset : archive.offset + size]
+            records, missing = await self.archiver.fetch_batch(batch, archive.day)
+            archive.records.extend(records)
+            archive.missing.extend(missing)
+            archive.offset += len(batch)
+            read += len(batch)
+        self._oi_pass = None
         try:
-            result = await self.archiver.archive_day(contracts, today, now=now)
-        except Exception:
-            # Selhání archivace nesmí zabít pipeline (#215: MES CardinalityViolation
-            # shodil celý řetěz do cooldownu) — sběr běží dál s volume fallbackem,
-            # retry po OI_RETRY_CYCLES cyklech
-            logger.exception("OI archivace %s selhala — pokračuje se bez OI", self.symbol)
-            if has_snapshot:
-                return await self._report_refresh_failed(today, now)
-            await self._publish_oi_alert(
-                "oi_missing",
-                f"OI archivace {self.symbol} selhala — GEX/OI vrstvy zatím bez OI, další "
-                "pokus za 30 min (detail v logu enginu)",
-                today,
-                now,
+            result = await self.archiver.commit(
+                archive.records, archive.missing, archive.day, now=archive.started
             )
-            return False
+        except Exception:
+            self.oi_available = await self._oi_archive_failed(archive)
+            return
+        self.oi_available = await self._oi_archive_done(archive, result)
+        if result.written:
+            self._start_oi_jobs(archive.day)
+
+    def _start_oi_jobs(self, today: dt.date) -> None:
+        """Joby po průchodu z minutového cyklu na pozadí (#1646).
+
+        IBKR nečtou, takže se lines se sweepem nesčítají; FA validace s kalibrací
+        α ale trvala v den finality u ES 22 s (20. 10. 2026) a ke dvěma sweepům
+        by se do minuty nevešla vždy. Na pozadí je pouští i první archiv dne (#1208).
+        """
+        task = asyncio.create_task(self._after_oi_archive(today), name=f"oi-jobs-{self.symbol}")
+        task.add_done_callback(self._log_oi_jobs_result)
+        self._oi_jobs_task = task
+
+    def _log_oi_jobs_result(self, task: asyncio.Task[None]) -> None:
+        if task is self._oi_jobs_task:
+            self._oi_jobs_task = None
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Joby po OI archivu %s selhaly", self.symbol, exc_info=exc)
+
+    def drop_oi_archive(self, reason: str) -> None:
+        """Zahodí rozpracovaný průchod (nový UTC den, zavření trhu, stop, chyba)."""
+        archive = self._oi_pass
+        if archive is None:
+            return
+        self._oi_pass = None
+        logger.info(
+            "OI archiv %s %s: rozpracovaný průchod zahozen (%d/%d kontraktů) — %s",
+            self.symbol,
+            archive.day,
+            archive.offset,
+            len(archive.contracts),
+            reason,
+        )
+
+    async def _oi_archive_failed(self, archive: OIArchivePass) -> bool:
+        """Čtení nebo zápis průchodu selhal; volá se z obsluhy výjimky."""
+        # Selhání archivace nesmí zabít pipeline (#215: MES CardinalityViolation
+        # shodil celý řetěz do cooldownu) — sběr běží dál s volume fallbackem,
+        # retry po OI_RETRY_CYCLES cyklech
+        logger.exception("OI archivace %s selhala — pokračuje se bez OI", self.symbol)
+        if archive.has_snapshot:
+            return await self._report_refresh_failed(archive.day, archive.started)
+        await self._publish_oi_alert(
+            "oi_missing",
+            f"OI archivace {self.symbol} selhala — GEX/OI vrstvy zatím bez OI, další "
+            "pokus za 30 min (detail v logu enginu)",
+            archive.day,
+            archive.started,
+        )
+        return False
+
+    async def _oi_archive_done(self, archive: OIArchivePass, result: ArchiveResult) -> bool:
+        """Výsledek celého průchodu: log, upozornění a finalita (joby až po něm)."""
+        today, now, has_snapshot = archive.day, archive.started, archive.has_snapshot
         logger.info(
             "OI archiv %s %s: %d zapsáno, %d chybí",
             self.symbol,
@@ -628,10 +765,13 @@ class InstrumentPipeline:
                     coverage * 100,
                     self.settings.oi_final_min_coverage * 100,
                 )
+        return True
+
+    async def _after_oi_archive(self, today: dt.date) -> None:
+        """Joby nad (znovu)pořízeným archivem dne: FA a α, sebekontrola, Forward GEX."""
         await self._run_fa_jobs(today)
         await self._run_setup_selfcheck(today)
         await self._write_forward_field(today)
-        return True
 
     async def _write_forward_field(self, today: dt.date) -> None:
         """Forward GEX (#519): pole per budoucí den z denního snímku řetězce.
@@ -1075,6 +1215,10 @@ class InstrumentPipeline:
         market_closed = is_market_closed(now)
         if self._market_closed and not market_closed:
             self._on_market_open()
+        elif market_closed and not self._market_closed:
+            # Obnova se při zavřeném trhu nečte (#1307); po otevření jde nová hned.
+            # Čtení nového UTC dne otevřené v zavřeném trhu hranu nemá a doběhne
+            self.drop_oi_archive("trh se zavřel")
         self._market_closed = market_closed
         # Nový den (#494): finalita i dostupnost OI patřily včerejšku. Pipeline
         # s nedenní nejbližší expirací přežije půlnoc a bez resetu by se nový
@@ -1085,6 +1229,8 @@ class InstrumentPipeline:
             self.oi_available = False
             self.oi_final = False
             self._cycles_since_oi = OI_RETRY_CYCLES  # archivuj hned, ne až za 30 min
+            # Čtení po půlnoci UTC patří novému dni, ne rozpracovanému včerejšku
+            self.drop_oi_archive("nový UTC den")
         self._oi_day = today
         # Retry běží nejen když OI chybí, ale i dokud snímek není finální (#463):
         # předpublikační čísla jsou nenulová, takže se bez toho nikdy neobnoví.
@@ -1097,13 +1243,26 @@ class InstrumentPipeline:
         # runtime čte OI podle UTC dne, takže bez něj by víkendová mapa OI
         # neměla vůbec. Na hraně otevření natáhne čítač `_on_market_open`,
         # takže chybějící OI (nebo nefinální snímek po okně) se čte hned.
-        if not self.initial_archive_running() and (
-            not self.oi_available or self._oi_refresh_due(now)
+        # Cyklus průchod jen otevře; dávky čte `advance_oi_archives` po sweepech
+        # ve zbytku minuty (#1646) — celý průchod ES tu dřív stál ~100 s.
+        if (
+            self._oi_pass is None
+            and not self.initial_archive_running()
+            and (not self.oi_available or self._oi_refresh_due(now))
         ):
             self._cycles_since_oi += 1
             if self._cycles_since_oi >= OI_RETRY_CYCLES and (not market_closed or new_day):
                 self._cycles_since_oi = 0
-                self.oi_available = await self.try_archive_oi(today, now)
+                self._oi_pass = await self._open_oi_archive(today, now)
+                if self._oi_pass is None:
+                    self.oi_available = True
+                else:
+                    logger.info(
+                        "OI archiv %s %s: průchod %d kontraktů po dávkách mezi cykly",
+                        self.symbol,
+                        today,
+                        len(self._oi_pass.contracts),
+                    )
 
         spot = self._current_spot()
 
@@ -1637,6 +1796,9 @@ class InstrumentPipeline:
             self._gap_fill_task.cancel()
         if self._initial_oi_task is not None:
             self._initial_oi_task.cancel()
+        if self._oi_jobs_task is not None:
+            self._oi_jobs_task.cancel()
+        self.drop_oi_archive("pipeline končí")
         try:
             self.on_stop()
         except Exception:
@@ -1675,6 +1837,37 @@ async def gather_metrics(
             logger.exception("Cyklus %s selhal — pokračuji dalším instrumentem", pipeline.symbol)
             results.append((pipeline.symbol, None))
     return results
+
+
+async def advance_oi_archives(
+    pipelines: Sequence[InstrumentPipeline],
+    next_cycle: float,
+    *,
+    clock: Callable[[], float] | None = None,
+    timeout_s: float = CYCLE_TIMEOUT_S,
+) -> None:
+    """Rozpracované OI archivy ve zbytku minuty, až po sweepech všech pipeline (#1646).
+
+    Hlavní smyčka volá na konci iterace: dávka archivu tak nikdy neběží
+    souběžně se sweepem (100 lines, ADR-0001 bod 4; `batch_size` je jeden
+    strop pro obojí) a nezdrží cyklus další minuty. `next_cycle` je start
+    příští iterace v čase smyčky (`loop.time()`); dávky končí nejpozději
+    OI_ARCHIVE_RESERVE_S před ním. Visící await jedné pipeline hlídá
+    watchdog jako v `gather_metrics`, pád ani timeout nezastaví ostatní.
+    """
+    now = clock or asyncio.get_running_loop().time
+    deadline = next_cycle - OI_ARCHIVE_RESERVE_S
+    for pipeline in pipelines:
+        try:
+            await asyncio.wait_for(pipeline.advance_oi_archive(deadline, now), timeout=timeout_s)
+        except TimeoutError:
+            logger.error(
+                "OI archiv %s nedoběhl do %g s (visící IBKR await?)", pipeline.symbol, timeout_s
+            )
+            pipeline.drop_oi_archive("watchdog")
+        except Exception:
+            logger.exception("OI archiv %s po dávkách selhal", pipeline.symbol)
+            pipeline.drop_oi_archive("chyba")
 
 
 def aggregate_status(
