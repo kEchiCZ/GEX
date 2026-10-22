@@ -369,6 +369,48 @@ def test_build_minutes_pondelni_expirace_bere_patecni_vecer_a_nedeli(tmp_path: P
     assert skip.minutes == 1
 
 
+def test_option_flows_po_dnech_nese_posledni_objem_kontraktu_do_dalsiho_dne(
+    tmp_path: Path,
+) -> None:
+    """Partice snapshotů se čtou po dnech: přírůstek první minuty dne počítá
+    proti poslednímu objemu kontraktu z předchozí partice, i přes víkend."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    folder = tmp_path / "snapshots" / "ES" / "20261019"
+    friday, sunday = _at(16, 19, 59), _at(18, 22, 0)
+    _write(
+        folder / "2026-10-16.parquet",
+        pd.DataFrame(
+            {
+                "ts_min": [friday - MINUTE, friday],
+                "strike": [5000.0, 5000.0],
+                "right": ["C", "C"],
+                "volume": [10.0, 12.0],
+                "delta": [0.5, 0.5],
+            }
+        ),
+    )
+    _write(
+        folder / "2026-10-18.parquet",
+        pd.DataFrame(
+            {
+                "ts_min": [sunday, sunday, sunday + MINUTE],
+                "strike": [5000.0, 4900.0, 4900.0],
+                "right": ["C", "P", "P"],
+                "volume": [15.0, 7.0, 9.0],
+                "delta": [0.5, -0.25, -0.25],
+            }
+        ),
+    )
+    flows = module.option_flows("ES", "20261019").set_index("ts_min")
+    # Call 5000 v neděli: 15 − 12 z pátku; put 4900 se objevil poprvé → bez přírůstku
+    assert flows.loc[sunday, "call_flow"] == pytest.approx(3 * 0.5)
+    assert flows.loc[sunday, "put_flow"] == 0.0
+    assert flows.loc[sunday, "opt_vol"] == pytest.approx(3.0)
+    assert flows.loc[sunday + MINUTE, "put_flow"] == pytest.approx(2 * 0.25)
+    assert flows.loc[friday, "opt_vol"] == pytest.approx(2.0)
+
+
 def test_walkforward_vynecha_expiraci_bez_settle_podle_okamziku_ne_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

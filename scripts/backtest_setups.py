@@ -106,23 +106,30 @@ def option_flows(symbol: str, expiry: str) -> pd.DataFrame | None:
     minuty; tady je totéž jako `groupby(strike, right).shift()` nad uloženou
     maticí. Kontrakt, který se ve sweepu poprvé objeví, přírůstek nemá (NaN →
     zahodit) — shodné s `previous is None: continue` v produkci.
+
+    Partice se čtou po dnech (expirace má ~měsíc snapshotů, najednou přes
+    0,35 GB, #1464): do dalšího dne jde jen poslední řádek každého kontraktu.
     """
     files = sorted(glob.glob(f"{ROOT}/snapshots/{symbol}/{expiry}/*.parquet"))
-    if not files:
+    keys = ["strike", "right"]
+    carry: pd.DataFrame | None = None
+    parts: list[pd.DataFrame] = []
+    for path in files:
+        day = pd.read_parquet(path, columns=["ts_min", "strike", "right", "volume", "delta"])
+        if day.empty:
+            continue
+        day = day.assign(carried=False)
+        snap = day if carry is None else pd.concat([carry, day])
+        snap = snap.sort_values([*keys, "ts_min"])
+        previous = snap.groupby(keys, sort=False)["volume"].shift()
+        increment = (snap["volume"] - previous).where(lambda s: s > 0)  # ≤ 0 se přeskakuje
+        snap = snap.assign(inc=increment, weighted=increment * snap["delta"].abs())
+        own = snap[~snap["carried"]]
+        parts.append(own.groupby(["ts_min", "right"], sort=True)[["inc", "weighted"]].sum())
+        carry = snap.groupby(keys, sort=False).tail(1)[day.columns].assign(carried=True)
+    if not parts:
         return None
-    snap = pd.concat(
-        [
-            pd.read_parquet(f, columns=["ts_min", "strike", "right", "volume", "delta"])
-            for f in files
-        ]
-    )
-    if snap.empty:
-        return None
-    snap = snap.sort_values(["strike", "right", "ts_min"])
-    previous = snap.groupby(["strike", "right"], sort=False)["volume"].shift()
-    increment = (snap["volume"] - previous).where(lambda s: s > 0)  # ≤ 0 se přeskakuje
-    snap = snap.assign(inc=increment, weighted=increment * snap["delta"].abs())
-    grouped = snap.groupby(["ts_min", "right"], sort=True)[["inc", "weighted"]].sum()
+    grouped = pd.concat(parts).groupby(level=["ts_min", "right"], sort=True).sum()
     wide = grouped.unstack("right")
     return pd.DataFrame(
         {
