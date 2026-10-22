@@ -464,6 +464,13 @@ def test_walkforward_vynecha_expiraci_bez_settle_podle_okamziku_ne_data(
     assert run(_at(26, 20, 0))[0] == ["20261021", "20261022", "20261023", "20261026"]
     # 2. 11. už zimní čas i v USA: settle 21:00 UTC, běh ve 20:30 UTC je před ním
     assert "20261102" not in run(_at(2, 20, 30, month=11))[0]
+    # Hlavička reportu: vynechané minuty a expirace bez settle k času běhu
+    note = module.skip_note(
+        "ES", bt.WindowSkip(minutes=12, unsettled=["20261023"]), _at(22, 21, 45)
+    )
+    assert note.startswith("ES: mimo okno aktivního řetězu")
+    assert "vynecháno 12 minut" in note
+    assert "bez settle k 2026-10-22 21:45 UTC (1): 20261023" in note
 
 
 def _sessions(first: dt.date, count: int) -> list[dt.date]:
@@ -496,7 +503,9 @@ def test_report_d_konci_dnem_d_a_fold_se_v_reportu_d1_neprepocita(
     )
     alternative = SetupParams(cooldown_minutes=20)
 
-    def fake_replay(minutes: list[str], params: SetupParams, expiry: str, symbol: str) -> list:
+    def fake_replay(
+        minutes: list[str], params: SetupParams, expiry: str, symbol: str
+    ) -> list[dict[str, float]]:
         day = module.session_date(expiry)
         r = 1.0 + 0.1 * days.index(day) if params is alternative else 1.0
         if day == day_d1 and run_at[-1] < bt.expiry_end(symbol, expiry):
