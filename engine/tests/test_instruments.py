@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, insert
 from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, SOURCE_MIDPOINT, CumDeltaTracker
 from gexlens_engine.compute.facalibration import FA_MIN_DAYS, AlphaCalibrationPoint
 from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.compute.spot import SpotReading
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
@@ -2424,3 +2425,51 @@ async def test_watchdog_zahodi_visici_davku_oi_a_pusti_dalsi_pipeline(
     await advance_oi_archives([stuck, healthy], math.inf, clock=clock, timeout_s=0.05)
     assert stuck._oi_pass is None
     assert archiver.calls == [po_okne.date()]
+
+
+def test_v6_zivy_spot_ze_zdroju_se_starim(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#1600 (pod v6): verdikt a tendence hlasují jen z živé ceny; stará cena je
+    chybějící vstup s důvodem, GEX výpočet dál s nejčerstvější známou cenou.
+    Zavřený trh nevaruje (#1307), pod v5 se nic nemění."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    now = dt.datetime.now(dt.UTC)
+    readings = iter(
+        [
+            SpotReading(7601.25, now, "bar", True),
+            SpotReading(7601.25, now - dt.timedelta(seconds=240), "bar", False),
+            SpotReading(7601.25, now - dt.timedelta(seconds=300), "bar", False),
+            SpotReading(7602.0, now, "ibkr", True),
+        ]
+    )
+    pipeline.spot_reading = lambda: next(readings)
+    pipeline.spot_age_gate = True
+    caplog.set_level(logging.INFO, logger="gexlens_engine")
+
+    assert pipeline._live_spot(7600.0, market_closed=False) == (7601.25, None)
+    assert pipeline.spot == 7601.25
+    live, reason = pipeline._live_spot(7600.0, market_closed=False)
+    assert (
+        live is None
+        and reason is not None
+        and reason.startswith("spot: poslední cena 7601.25 (bar)")
+    )
+    assert pipeline.spot == 7601.25  # GEX výpočet s poslední známou cenou
+    assert pipeline._live_spot(7600.0, market_closed=False)[0] is None  # varuje jen jednou
+    assert pipeline._live_spot(7600.0, market_closed=False) == (7602.0, None)
+    warnings = [r for r in caplog.records if "žádný zdroj nemá živou cenu" in r.getMessage()]
+    assert len(warnings) == 1
+    assert any("živá cena zpět (ibkr)" in r.getMessage() for r in caplog.records)
+
+    # Zavřený trh: chybějící spot bez varování
+    caplog.clear()
+    pipeline.spot_reading = lambda: SpotReading(7602.0, now - dt.timedelta(hours=1), "ibkr", False)
+    assert pipeline._live_spot(7600.0, market_closed=True)[0] is None
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    # Pod v5 spot cyklu jako dosud
+    pipeline.spot_age_gate = False
+    assert pipeline._live_spot(7600.0, market_closed=False) == (7600.0, None)

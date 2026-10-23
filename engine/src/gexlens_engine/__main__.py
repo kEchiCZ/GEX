@@ -33,6 +33,7 @@ from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS, SetupParams
+from gexlens_engine.compute.spot import PriceAt, SpotReading, resolve_spot
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
 from gexlens_engine.discovery_cache import (
@@ -952,9 +953,18 @@ async def create_pipeline(
     # Bary podkladu: 5s realtime bary → 1min agregace
     minute_bars: list[Bar] = []
     aggregator = RealTimeBarAggregator(minute_bars.append)
+    # Zdroje spotu se stářím pro minutový cyklus pod v6 (#1600, `compute/spot`):
+    # poslední cena IBKR tickeru, close posledního 5s baru (čas = konec baru)
+    # a poslední čerstvá kotace tasty — vždy s okamžikem, ke kterému platí
+    ibkr_spot_at: PriceAt | None = None
+    bar_spot_at: PriceAt | None = None
+    tasty_spot_at: PriceAt | None = None
 
     def on_bar_update(bars: RealTimeBarList, has_new: bool) -> None:
+        nonlocal bar_spot_at
         latest = bars[-1]
+        started = latest.time if latest.time.tzinfo else latest.time.replace(tzinfo=dt.UTC)
+        bar_spot_at = PriceAt(latest.close, started + dt.timedelta(seconds=5))
         aggregator.add_5s_bar(
             Bar(
                 ts=latest.time,
@@ -1007,10 +1017,12 @@ async def create_pipeline(
         return fallback_price
 
     def on_spot_tick(ticker: Ticker) -> None:
-        nonlocal fallback_price
+        nonlocal fallback_price, ibkr_spot_at
         if stopped:
             return
         price = ticker.last if ticker.last == ticker.last else ticker.marketPrice()
+        if price == price:
+            ibkr_spot_at = PriceAt(price, dt.datetime.now(dt.UTC))
         if spot_fallback is not None:
             decision = spot_fallback.on_ibkr(price, loop.time())
             if decision.switched:
@@ -1030,11 +1042,13 @@ async def create_pipeline(
         Bez vlastní smyčky by se výpadek nepoznal: `on_spot_tick` se při
         mlčícím feedu prostě nevolá, takže rozhodnutí musí přijít odjinud.
         """
-        nonlocal fallback_price
+        nonlocal fallback_price, tasty_spot_at
         while not stopped and spot_fallback is not None and tasty_spot is not None:
             await asyncio.sleep(SPOT_FALLBACK_POLL_S)
             try:
                 price, fresh = tasty_spot(symbol)
+                if fresh and price is not None:
+                    tasty_spot_at = PriceAt(price, dt.datetime.now(dt.UTC))
                 decision = spot_fallback.resolve(
                     loop.time(),
                     tasty_price=price,
@@ -1404,6 +1418,12 @@ async def create_pipeline(
         if rt_bars is not None:
             ib.cancelRealTimeBars(rt_bars)
 
+    def spot_reading() -> SpotReading:
+        """Spot cyklu se stářím (#1600): IBKR → 5s bar → tasty, jinak chybí."""
+        return resolve_spot(
+            dt.datetime.now(dt.UTC), ibkr=ibkr_spot_at, bar=bar_spot_at, tasty=tasty_spot_at
+        )
+
     pipeline = InstrumentPipeline(
         symbol=symbol,
         settings=settings,
@@ -1421,6 +1441,7 @@ async def create_pipeline(
         spot=spot,
         spot_source=(lambda: spot_fallback.active_source if spot_fallback else "ibkr"),
         spot_override=spot_override,
+        spot_reading=spot_reading,
         bar_gap_fill=(
             (lambda since, until: bar_gap_fill(symbol, since, until))
             if bar_gap_fill is not None

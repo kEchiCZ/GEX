@@ -125,7 +125,8 @@ class TendencyInputs:
     """Minutové vstupy; None = složka bez dat (hlas se přeskočí, ne nuluje)."""
 
     ts_min: dt.datetime
-    spot: float
+    #: None = spot chybí (pod v6 starší než živý, #1600) — hlasy z ceny se přeskočí
+    spot: float | None
     flip: float | None = None
     call_wall: float | None = None
     put_wall: float | None = None
@@ -201,14 +202,17 @@ def _collect_votes(
         votes.append(ComponentVote(name=name, vote=vote, weight=weights[name], detail=detail))
 
     spot = inputs.spot
-    if inputs.flip is not None:
+    # Bez živé ceny (#1600, pod v6) se přeskočí hlasy z polohy ceny: flip, zdi,
+    # Max Pain, těžiště a rozchod; gamma/charm/vanna v místě ceny přijdou jako None
+    if spot is not None and inputs.flip is not None:
         add(
             "flip",
             _sign(spot - inputs.flip),
             f"cena {'nad' if spot > inputs.flip else 'pod' if spot < inputs.flip else 'na'} flipem {inputs.flip:.0f}",  # noqa: E501
         )
     if (
-        inputs.call_wall is not None
+        spot is not None
+        and inputs.call_wall is not None
         and inputs.put_wall is not None
         and inputs.call_wall > inputs.put_wall
     ):
@@ -231,13 +235,17 @@ def _collect_votes(
                 _clamp((inputs.put_wall_dom - inputs.call_wall_dom) / strongest),
                 f"dominance put {inputs.put_wall_dom:.0%} vs. call {inputs.call_wall_dom:.0%}",
             )
-    if inputs.max_pain is not None and _max_pain_window(inputs.minutes_to_close, version):
+    if (
+        spot is not None
+        and inputs.max_pain is not None
+        and _max_pain_window(inputs.minutes_to_close, version)
+    ):
         add(
             "max_pain",
             _sign(inputs.max_pain - spot),
             f"cena {'pod' if spot < inputs.max_pain else 'nad' if spot > inputs.max_pain else 'na'} Max Pain {inputs.max_pain:.0f}",  # noqa: E501
         )
-    if inputs.centroid is not None:
+    if spot is not None and inputs.centroid is not None:
         add(
             "centroid",
             _sign(inputs.centroid - spot),
@@ -246,7 +254,7 @@ def _collect_votes(
     if inputs.cum_delta_slope is not None:
         slope = inputs.cum_delta_slope
         add("cum_delta_slope", _sign(slope), f"Cum Δ {slope:+.0f} za okno")
-        if inputs.price_then is not None:
+        if spot is not None and inputs.price_then is not None:
             price_direction = _sign(spot - inputs.price_then)
             cum_direction = _sign(slope)
             # Rozchod: cena dole a Cum Δ nahoře = akumulace (long); zrcadlově short

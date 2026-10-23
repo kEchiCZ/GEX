@@ -11,8 +11,11 @@ zápisu. Automatický scénář přebírá verdikt téže minuty (rozhodnutí d1
 Neúplný výpočet (výpadek čtení API, chybí levels nebo tendence — třeba první
 minuta po restartu) uloží seznam chybějících vstupů do sloupce `missing`
 (rozhodnutí e1) a přepíše jen neúplný řádek: úplný verdikt z předchozí minuty
-zůstane. Bez platné ceny se minuta nezapíše vůbec — hlas overnight by srovnával
-mrtvou cenu. Jen dopředu, nic se nedopočítává zpětně.
+zůstane. Bez platné ceny (NaN, ≤ 0) se minuta nezapíše vůbec — hlas overnight
+by srovnával mrtvou cenu. Pod mechanikou v6 (#1600) pipeline předá místo staré
+ceny None: hlas overnight je „bez dat“ a řádek neúplný s důvodem a stářím spotu
+(`compute/spot`), takže ho první minuta s živou cenou přepíše. Jen dopředu, nic
+se nedopočítává zpětně.
 """
 
 import asyncio
@@ -54,16 +57,23 @@ class DayVerdictWriter:
     tendency_required: bool = True
 
     async def on_minute(
-        self, now: dt.datetime, spot: float, runtime: EngineRuntime
+        self,
+        now: dt.datetime,
+        spot: float | None,
+        runtime: EngineRuntime,
+        spot_missing: str | None = None,
     ) -> PreOpenVerdict | None:
-        """Verdikt téže minuty (i pro automatický scénář), None bez výpočtu nebo zápisu."""
+        """Verdikt téže minuty (i pro automatický scénář), None bez výpočtu nebo zápisu.
+
+        `spot` None = živá cena chybí (pod v6), `spot_missing` nese důvod do `missing`.
+        """
         session = trading_session_date(now)
         if not verdict_writable(session, now):
             return None  # víkend, svátek (#1309) nebo po openu (#1585)
         window_start = us_open_ts(session) - dt.timedelta(minutes=VERDICT_WINDOW_MINUTES)
         if now < window_start and now.minute % VERDICT_EARLY_EVERY_MINUTES:
             return None  # před oknem jen každých 5 min (~2,4 s čtení API na symbol)
-        if not math.isfinite(spot) or spot <= 0:
+        if spot is not None and (not math.isfinite(spot) or spot <= 0):
             logger.warning(
                 "%s: verdikt dne — bez platné ceny (%s), minuta %s se nezapíše",
                 self.symbol,
@@ -86,6 +96,8 @@ class DayVerdictWriter:
             return None
         verdict = day_verdict(verdict_input(ctx, spot, runtime))
         missing = list(ctx.failures)
+        if spot is None:
+            missing.append(spot_missing or "spot: chybí živá cena")
         if runtime.last_levels is None:
             missing.append("levels: engine je ještě nespočítal")
         if self.tendency_required and runtime.tendency_band is None:

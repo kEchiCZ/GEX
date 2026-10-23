@@ -3,6 +3,7 @@
 import datetime as dt
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -594,3 +595,61 @@ def test_tendence_flows_null_uprostred_seance_neprida_cely_kumulativ(
     assert flows(None) == (None, None)
     assert flows(1430.0) == after
     assert flows(1440.0) == (5.0, 0.0)
+
+
+def test_bez_zive_ceny_se_hlasy_z_polohy_ceny_preskoci() -> None:
+    """#1600 (pod v6): spot None — flip, zdi, Max Pain, těžiště a rozchod nehlasují,
+    hlasy bez ceny (dominance zdí, sklon CumΔ) ano."""
+    case = inputs(
+        spot=None,
+        flip=7400.0,
+        call_wall=7500.0,
+        put_wall=7300.0,
+        call_wall_dom=0.4,
+        put_wall_dom=0.6,
+        max_pain=7450.0,
+        centroid=7420.0,
+        cum_delta_slope=120.0,
+        price_then=7440.0,
+        minutes_to_close=30.0,
+    )
+    names = {vote.name for vote in _collect_votes(case, TENDENCY_RULES_V5)}
+    assert names == {"walls_dominance", "cum_delta_slope"}
+    with_spot = {
+        vote.name for vote in _collect_votes(replace(case, spot=7450.0), TENDENCY_RULES_V5)
+    }
+    assert {"flip", "walls_distance", "max_pain", "centroid", "divergence"} <= with_spot
+
+
+class _UntouchedRuntime:
+    """Runtime, na který se nesmí sáhnout — brána zavřeného trhu vrací dřív."""
+
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"runtime.{name} při zavřeném trhu")
+
+
+@pytest.mark.parametrize(
+    ("label", "ts"),
+    [
+        ("sobota", dt.datetime(2026, 10, 17, 15, 0, tzinfo=dt.UTC)),
+        ("denní pauza 16:00–17:00 CT", dt.datetime(2026, 10, 15, 21, 30, tzinfo=dt.UTC)),
+        ("neděle před otevřením", dt.datetime(2026, 10, 18, 21, 59, tzinfo=dt.UTC)),
+    ],
+)
+async def test_v5_zavreny_trh_nepocita_ani_nezapisuje(label: str, ts: dt.datetime) -> None:
+    """#1622: pravidla v5 (mechanika v6) při zavřeném trhu tendenci nepočítají."""
+    engine = _engine(prints=True)
+    await engine.on_minute(ts, 7450.0, cast(EngineRuntime, _UntouchedRuntime()))
+
+
+@pytest.mark.parametrize(
+    ("prints", "ts"),
+    [
+        (True, dt.datetime(2026, 10, 18, 22, 0, tzinfo=dt.UTC)),  # nedělní otevření, v5 počítá
+        (False, dt.datetime(2026, 10, 17, 15, 0, tzinfo=dt.UTC)),  # v4 beze změny i v sobotu
+    ],
+)
+async def test_otevreny_trh_nebo_v4_tendenci_pocita(prints: bool, ts: dt.datetime) -> None:
+    engine = _engine(prints=prints)
+    with pytest.raises(AssertionError, match="runtime"):
+        await engine.on_minute(ts, 7450.0, cast(EngineRuntime, _UntouchedRuntime()))
