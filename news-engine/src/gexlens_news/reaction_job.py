@@ -40,6 +40,7 @@ from gexlens_news.bars import BarsRepository, CachedBars
 from gexlens_news.reactions import (
     DAILY_WINDOW_DAYS,
     DEFAULT_WINDOWS,
+    DEFERRED_GAP_MINUTES,
     MIN_BASELINE_SESSIONS,
     MIN_MINUTE_SAMPLES,
     MINUTES_PER_TRADING_DAY,
@@ -51,7 +52,7 @@ from gexlens_news.reactions import (
     compute_reactions,
     contaminates,
     immature_closure_start,
-    market_open_at_or_after,
+    reaction_window_start,
 )
 
 logger = logging.getLogger(__name__)
@@ -291,9 +292,14 @@ class ReactionJob:
         # neuplynulo nejdelší okno, zprávy té uzavírky nejsou zralé. Vynechají se
         # úplně — jinak by se o víkendu pro stovky zpráv četly bary každý cyklus
         # a zabíraly limit dávky.
+        # Zpráva v posledních minutách před uzavírkou je podle barů taky odložená
+        # (první bar ≥ DEFERRED_GAP_MINUTES po ní) — řez proto o tolik dřív;
+        # neodložené zprávy tam mají okno useknuté uzavírkou, změří se později
+        # na týchž barech a vyjde totéž
         immature = immature_closure_start(now, max(self._windows))
         if immature is not None:
-            ready_before = min(ready_before, immature - dt.timedelta(microseconds=1))
+            cutoff = immature - dt.timedelta(minutes=DEFERRED_GAP_MINUTES)
+            ready_before = min(ready_before, cutoff - dt.timedelta(microseconds=1))
         measured = exists().where(news_reactions.c.event_id == news_events.c.id)
         stmt = (
             select(news_events.c.id, news_events.c.ts_event, news_events.c.category)
@@ -312,15 +318,18 @@ class ReactionJob:
             rows = conn.execute(stmt).fetchall()
         return [(int(row.id), _as_utc(row.ts_event), row.category) for row in rows]
 
-    def _contaminating(self, around: dt.datetime, category: str | None) -> list[dt.datetime]:
+    def _contaminating(
+        self, around: dt.datetime, category: str | None, start: dt.datetime | None = None
+    ) -> list[dt.datetime]:
         """Časy jiných významných eventů jiné kategorie, které můžou spadnout do oken.
 
-        Odložená zpráva (#1574) má okna od otevření po uzavírce — hledá se až do
-        otevření + nejdelší okno, jinak by významná zpráva těsně po otevření
-        kontaminaci unikla.
+        Hledá se v (zpráva, začátek oken + nejdelší okno + 1 min] — u odložené
+        zprávy (#1574) je začátek první obchodovaný bar po uzavírce, jinak by
+        významná zpráva těsně po otevření kontaminaci unikla. Tutéž mez bere
+        hodinový přepočet K1 (`contamination.Contaminators.around`).
         """
         span = dt.timedelta(minutes=max(self._windows) + 1)
-        until = market_open_at_or_after(around) + span
+        until = (start or around) + span
         stmt = select(news_events.c.ts_event, news_events.c.category).where(
             and_(
                 news_events.c.ts_event > around,
@@ -616,7 +625,6 @@ class ReactionJob:
         backfillu barů (`scripts/backfill_minute_reactions.py`, #1494).
         """
         source = bars if bars is not None else self._bars
-        others = self._contaminating(ts_event, category)
         rows: list[MinuteRow] = []
         # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
         closed_flags: list[bool] = []
@@ -629,6 +637,9 @@ class ReactionJob:
                 ts_event - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS),
                 window_end + dt.timedelta(days=CLOSURE_LOOKAHEAD_DAYS),
             )
+            # Kontaminace podle začátku oken symbolu (#1574) — u odložené zprávy od otevření
+            start = reaction_window_start(ts_event, sorted(symbol_bars, key=lambda bar: bar.ts))
+            others = self._contaminating(ts_event, category, start)
             reactions = compute_reactions(
                 ts_event,
                 symbol_bars,

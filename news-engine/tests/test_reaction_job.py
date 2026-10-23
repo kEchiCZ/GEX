@@ -690,3 +690,25 @@ def test_odlozena_zprava_se_nemeri_pred_uzavrenim_oken_po_otevreni(tmp_path: Pat
     assert es[60].ret_bp == pytest.approx((last - base) / base * 10_000)
     contaminated = {minutes: es[minutes].contaminated for minutes in (1, 5, 15, 60)}
     assert contaminated == {1: False, 5: False, 15: True, 60: True}
+    # Hodinový přepočet K1 počítá týmž rozsahem (ADR-0045 bod 7) — nic nevrátí zpět
+    k1 = ContaminationJob(engine, tmp_path / "data")
+    assert k1.run(open_ts + dt.timedelta(minutes=62)) == 0
+
+
+def test_neodlozena_zprava_pred_close_se_meri_i_behem_nezrale_pauzy(tmp_path: Path) -> None:
+    """#1574: řez nezralé uzavírky (−5 min) nezdrží zprávu, jejíž okno už skončilo
+    a která odložená není — út 20:50 UTC, měření ve 21:51 během denní pauzy."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    for symbol in ("ES", "NQ"):
+        write_open_bars(tmp_path / "data", symbol, dt.date(2026, 10, 20), start_price=7000.0)
+    event_id = add_event(
+        engine,
+        dt.datetime(2026, 10, 20, 20, 50, tzinfo=dt.UTC),
+        importance=3,
+        title="Út před close",
+    )
+    job = ReactionJob(engine, BarsRepository(tmp_path / "data"))
+    assert job.run(dt.datetime(2026, 10, 20, 21, 51, tzinfo=dt.UTC)) >= 8
+    windows = reaction_windows(engine, event_id)
+    assert windows and not any(window.deferred for _, window in windows)

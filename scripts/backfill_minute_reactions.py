@@ -20,7 +20,8 @@ události z doby před #1494).
 * Kandidát je pár (event, symbol), kde event už nějaký řádek reakcí má
   a symbol nemá minutovou fázi (`reaction_job.minute_gaps`).
 * Měří se všechny symboly, ale zapisují se jen ty bez minutové fáze.
-  Existující měření se nepřepisuje a nic se nemaže. `market_closed` se opraví
+  Existující měření se v tomto režimu nepřepisuje (to dělá jen `--truncated-deferred`
+  níž) a nic se nemaže. `market_closed` se opraví
   ze všech změřených symbolů jako v jobu (#339). Výjimka: deferred minutová
   fáze zapíše i `closure_open_ts`, který mohla nastavit denní fáze. Na týchž
   barech je to tatáž hodnota.
@@ -83,11 +84,20 @@ class Report:
     missing: Counter[tuple[str, str]] = field(default_factory=Counter)
     filled: Counter[tuple[str, str]] = field(default_factory=Counter)
     windows: int = 0
+    #: Režim `--truncated-deferred` (#1574): popisky „useknuté / přeměřeno“
+    truncated: bool = False
+    #: Odložené řádky bez `closure_open_ts` — useknutí u nich nejde poznat (#1574)
+    unknown_closure: int = 0
 
     def render(self, *, apply: bool) -> str:
-        verb = "doplněno" if apply else "doplnitelné"
+        if self.truncated:
+            verb = "přeměřeno" if apply else "přeměřitelné"
+            candidates = "useknutá odložená okna"
+        else:
+            verb = "doplněno" if apply else "doplnitelné"
+            candidates = "bez minutové fáze"
         lines = [
-            f"| měsíc | symbol | bez minutové fáze | {verb} | stále bez barů |",
+            f"| měsíc | symbol | {candidates} | {verb} | stále bez barů |",
             "|---|---|---|---|---|",
         ]
         for month, symbol in sorted(self.missing):
@@ -100,6 +110,11 @@ class Report:
             f"Celkem párů {total}, {verb} {done}, stále bez barů {total - done}; "
             f"oken {'zapsáno' if apply else 'k zápisu'} {self.windows}.",
         ]
+        if self.truncated:
+            lines.append(
+                f"Odložených řádků bez `closure_open_ts` (useknutí nejde poznat): "
+                f"{self.unknown_closure}."
+            )
         return "\n".join(lines)
 
 
@@ -120,7 +135,11 @@ def candidates(
 
 
 def truncated_deferred(
-    engine: Engine, *, symbols: Sequence[str] = SYMBOLS, max_window: int = max(DEFAULT_WINDOWS)
+    engine: Engine,
+    *,
+    symbols: Sequence[str] = SYMBOLS,
+    max_window: int = max(DEFAULT_WINDOWS),
+    report: Report | None = None,
 ) -> Iterator[MinuteGap]:
     """Odložené minutové reakce změřené před uzavřením okna (#1574), podle času eventu.
 
@@ -140,7 +159,6 @@ def truncated_deferred(
         .join(news_events, news_events.c.id == news_reactions.c.event_id)
         .where(
             news_reactions.c.deferred_min.is_(True),
-            news_reactions.c.closure_open_ts.is_not(None),
             news_reactions.c.computed_at_min.is_not(None),
             news_reactions.c.symbol.in_(list(symbols)),
         )
@@ -150,6 +168,10 @@ def truncated_deferred(
         rows = conn.execute(stmt).fetchall()
     events: dict[int, tuple[dt.datetime, str | None, set[str]]] = {}
     for row in rows:
+        if row.closure_open_ts is None:
+            if report is not None:
+                report.unknown_closure += 1
+            continue
         if _utc(row.computed_at_min) < _utc(row.closure_open_ts) + span:
             entry = events.setdefault(int(row.event_id), (_utc(row.ts_event), row.category, set()))
             entry[2].add(str(row.symbol))
@@ -176,9 +198,9 @@ def run(
     `truncated` = přeměření useknutých odložených reakcí (#1574) místo doplnění.
     """
     job = ReactionJob(engine, CachedBars(data_dir), symbols=symbols)
-    report = Report()
+    report = Report(truncated=truncated)
     gaps = (
-        truncated_deferred(engine, symbols=symbols)
+        truncated_deferred(engine, symbols=symbols, report=report)
         if truncated
         else candidates(engine, now, symbols=symbols, batch=batch)
     )

@@ -389,6 +389,12 @@ NEDELNI_OPEN = dt.datetime(2026, 10, 18, 22, 0, tzinfo=UTC)
             dt.datetime(2026, 11, 4, 23, 0, tzinfo=UTC),
             dt.datetime(2026, 11, 4, 22, 0, tzinfo=UTC),
         ),
+        # zkrácená seance pá 27. 11.: Globex do 12:15 CT (18:15 UTC), otevření ne 23:00 UTC
+        (
+            dt.datetime(2026, 11, 27, 19, 0, tzinfo=UTC),
+            dt.datetime(2026, 11, 29, 23, 0, tzinfo=UTC),
+            dt.datetime(2026, 11, 27, 18, 15, tzinfo=UTC),
+        ),
         # Thanksgiving 26. 11.: halt 12:00 CT (18:00 UTC) do 17:00 CT (23:00 UTC)
         (
             dt.datetime(2026, 11, 26, 19, 0, tzinfo=UTC),

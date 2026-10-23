@@ -198,6 +198,9 @@ def window_contaminated(
 _SCHEDULE_STEP = dt.timedelta(minutes=15)
 #: Pojistka hledání: nejdelší uzavírka (víkend se svátkem) je pod 4 dny
 _SCHEDULE_HORIZON = dt.timedelta(days=5)
+#: Rezerva po konci odloženého okna (#1574): poslední bar okna může být ještě
+#: provizorní kopie rozdělané minuty (ADR-0005), měří se až minutu po konci
+DEFERRED_SETTLE_MARGIN = dt.timedelta(minutes=1)
 
 
 def _quarter_floor(ts: dt.datetime) -> dt.datetime:
@@ -215,8 +218,10 @@ def market_open_at_or_after(ts: dt.datetime) -> dt.datetime:
         return ts
     probe = _quarter_floor(ts)
     limit = ts + _SCHEDULE_HORIZON
-    while is_market_closed(probe) and probe < limit:
+    while is_market_closed(probe):
         probe += _SCHEDULE_STEP
+        if probe > limit:
+            raise RuntimeError(f"Rozvrh CME: otevření po {ts.isoformat()} do 5 dní nenalezeno")
     return probe
 
 
@@ -226,8 +231,10 @@ def closure_start_at_or_before(ts: dt.datetime) -> dt.datetime | None:
         return None
     probe = _quarter_floor(ts)
     limit = ts - _SCHEDULE_HORIZON
-    while is_market_closed(probe - _SCHEDULE_STEP) and probe > limit:
+    while is_market_closed(probe - _SCHEDULE_STEP):
         probe -= _SCHEDULE_STEP
+        if probe < limit:
+            raise RuntimeError(f"Rozvrh CME: začátek uzavírky před {ts.isoformat()} nenalezen")
     return probe
 
 
@@ -246,6 +253,24 @@ def immature_closure_start(now: dt.datetime, max_window: int) -> dt.datetime | N
             return closure_start_at_or_before(probe)
         probe += _SCHEDULE_STEP
     return None
+
+
+def reaction_window_start(
+    event_ts: dt.datetime,
+    ordered: Sequence[Bar],
+    deferred_gap_minutes: int = DEFERRED_GAP_MINUTES,
+) -> dt.datetime | None:
+    """Začátek oken reakce: čas zprávy, u odložené první obchodovaný bar (#339).
+
+    `ordered` = bary seřazené podle času; None = po zprávě žádný bar. Sdílí ho
+    měření i hledání kontaminace (#1574): kontaminující eventy se hledají
+    v (zpráva, začátek + nejdelší okno + 1 min].
+    """
+    first_traded = _first_at_or_after(ordered, event_ts)
+    if first_traded is None:
+        return None
+    deferred = first_traded.ts - event_ts >= dt.timedelta(minutes=deferred_gap_minutes)
+    return first_traded.ts if deferred else event_ts
 
 
 def compute_reactions(
@@ -272,13 +297,14 @@ def compute_reactions(
     if base is None or first_traded is None or base.close <= 0:
         return []
 
-    gap = first_traded.ts - event_ts
-    deferred = gap >= dt.timedelta(minutes=deferred_gap_minutes)
     # Deferred: okna běží od prvního obchodovaného baru, ale základní cena
     # zůstává poslední před uzavřením → ret_bp zahrnuje gap na open
-    start = first_traded.ts if deferred else event_ts
-    if now is not None and windows and start + dt.timedelta(minutes=max(windows)) > now:
-        return []  # široký řádek se zapisuje se všemi okny najednou (#998)
+    start = reaction_window_start(event_ts, ordered, deferred_gap_minutes) or event_ts
+    deferred = start != event_ts
+    if now is not None and windows:
+        end = start + dt.timedelta(minutes=max(windows))
+        if end + (DEFERRED_SETTLE_MARGIN if deferred else dt.timedelta(0)) > now:
+            return []  # široký řádek se zapisuje se všemi okny najednou (#998)
 
     results: list[Reaction] = []
     for window in windows:
