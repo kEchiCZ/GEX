@@ -150,3 +150,11 @@ Rozhodnuto vlastníkem 20. 10. 2026 (epika #1385, Rozhodnuto, varianty C a B).
    `settle.us_open_ts(session_date)`. Jeho hlasy tak neviděly hodnocený pohyb. Od #1585
    a #1595 jiný řádek vzniknout nejde. Vypadnou staré zápisy Briefingu po openu (id 1, 2, 4,
    7, 11 z 9. 9.–2. 10. 2026). Nic se nemaže.
+
+## Dodatek 2026-10-23: verdikt bez živé ceny pod v6 (#1600)
+
+Pod mechanikou v6 (pravidla verdiktu 4) předá pipeline místo staré ceny None, když žádný zdroj
+spotu nemá živou cenu (`compute/spot`). Hlas overnight je pak „bez dat“, řádek neúplný s důvodem
+a stářím v `missing` (např. „spot: poslední cena 7855.00 (bar) stará 120 s“) a automatický
+scénář nevznikne, protože čeká na úplný verdikt. První minuta s živou cenou neúplný řádek přepíše.
+Pod v5 beze změny: neplatná cena (NaN, ≤ 0) se nezapíše. Detail v ADR-0057, doplněk 23. 10.

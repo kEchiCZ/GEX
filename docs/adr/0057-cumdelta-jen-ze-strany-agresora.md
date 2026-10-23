@@ -498,15 +498,18 @@ Spot minutového cyklu pod mechanikou v6. Vlastník v epice #1385 rozhodl 23. 10
     Z hlasů tendence 20 ze 155 minut RTH sedělo na barech ts−1 až ts−5 (#1623).
   - Verdikt dne odmítal jen NaN a cenu ≤ 0, zamrzlá cena tak prošla jako úplný výpočet (#1600).
 - **Spot se stářím** (`compute/spot.resolve_spot`, čistá funkce). Pořadí zdrojů:
-  1. IBKR ticker, živý feed (aktualizace ≤ 30 s, práh přepnutí #614);
+  1. IBKR `ticker.last` při živém feedu (tick ≤ 30 s, výchozí práh přepnutí #614). Mid
+     (`marketPrice()`) se nebere, je to symptom #1623;
   2. close posledního 5s baru IBKR (konec baru ≤ 60 s) — ticker mlčí, bary jdou;
-  3. čerstvá kotace tasty (≤ 30 s);
+  3. tasty mid, který zdroj hlásí jako čerstvý (kotace ≤ `tasty_spot_max_age_s`, poll ≤ 30 s,
+     dohromady nejvýš ~60 s; jen se zapnutým `GEXLENS_TASTY_SPOT_FALLBACK`);
   4. jinak spot **chybí**.
   `SpotReading.price` nese i tak nejčerstvější známou cenu. GEX výpočet, obálka striků a hlídač
-  barů s ní běží dál jako dosud, hlasovat z ní ale nesmí nikdo.
+  barů s ní běží dál (pod v6 tedy s IBKR nebo close baru místo tasty override), hlasovat z ní
+  ale nesmí nikdo.
 - **Spotřebitelé (jen pod v6):**
   - verdikt dne: chybějící spot = hlas overnight „bez dat“ a neúplný řádek s důvodem a stářím
-    (`missing`, např. „spot: poslední cena 7855 (bar) stará 120 s“). Neplatná cena v5 (NaN,
+    (`missing`, např. „spot: poslední cena 7855.00 (bar) stará 120 s“). Neplatná cena v5 (NaN,
     ≤ 0) se jako dosud nezapíše. Automatický scénář čeká na úplný verdikt, takže nad chybějícím
     spotem nevznikne;
   - tendence (pravidla v5): bez spotu se přeskočí hlasy z polohy ceny (flip, poloha mezi zdmi,
@@ -516,7 +519,11 @@ Spot minutového cyklu pod mechanikou v6. Vlastník v epice #1385 rozhodl 23. 10
     bez obchodu (charm rampa podle hodin) a řádky míchaly tabulku kalibrace vah;
   - setupy a paper spot nečtou už od #1346 a #1320 (jen bary), beze změny.
 - **Log:** přechod živá → chybějící cena při otevřeném trhu varuje jednou („žádný zdroj nemá
-  živou cenu“), návrat je na úrovni INFO. Při zavřeném trhu se nevaruje (#1307).
+  živou cenu“), návrat je na úrovni INFO. Při zavřeném trhu a 2 min po startu i po každém
+  otevření (`SPOT_WATCH_GRACE`, první ticky přijdou až po otevření) se nevaruje a stav se
+  nemění (#1307). Výpadek, který začal o víkendu, tak varuje po nedělním otevření, ne nikdy.
+- **Mimo rozsah:** T6 (`overnight_pct`) a stav mapy dostávají pod v6 dál nejčerstvější známou
+  cenu (`self.spot`), i starou. Týž vzor řeší nález #1657.
 - **Pod v5 beze změny (bod 11):** `instruments._current_spot` i zamrzlý `fallback_price`
   zůstávají, vzorky v5 i tendence v4 se nemění a `main` jde nasadit kdykoli.
 - **Verze:** pravidla verdiktu 4, tendence v5 a mechanika v6 přicházejí s bumpem, vlastní

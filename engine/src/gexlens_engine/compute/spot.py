@@ -9,16 +9,21 @@ drží poslední cenu i poté, co tasty přestane být čerstvá.
 
 Pořadí zdrojů (Rozhodnuto 23. 10. v #1385, rozsah A):
 
-1. **IBKR ticker** — živý feed (aktualizace nejvýš `IBKR_MAX_AGE`, shodně
-   s prahem přepnutí na tasty `tasty.spot_fallback.DEFAULT_STALE_AFTER_S`);
+1. **IBKR ticker** — `ticker.last` při živém feedu (tick nejvýš `IBKR_MAX_AGE`,
+   stejně jako výchozí práh přepnutí na tasty `tasty_spot_stale_after_s`, #614).
+   Mid (`marketPrice()`) se nebere — je to symptom #1623, ne cena obchodu;
 2. **close posledního 5s baru IBKR** — ticker mlčí, ale bary jdou
    (konec baru nejvýš `BAR_MAX_AGE`);
-3. **tasty** — čerstvá kotace (nejvýš `TASTY_MAX_AGE`);
+3. **tasty** — mid front futures, který zdroj hlásí jako čerstvý (kotace nejvýš
+   `tasty_spot_max_age_s`, výchozí 30 s); čas je okamžik pollu fallback smyčky,
+   takže kotace může být stará až `tasty_spot_max_age_s` + `TASTY_MAX_AGE`.
+   Přispívá jen se zapnutým `GEXLENS_TASTY_SPOT_FALLBACK`;
 4. jinak spot **chybí**: `SpotReading.live` je None a spotřebitelé ho berou jako
    chybějící vstup (viditelná mezera, ne zmrzlé číslo — SPEC 3.7).
 
 `SpotReading.price` nese i tak nejčerstvější známou cenu: GEX výpočet a obálka
-striků s ní běží dál jako dosud, hlasovat z ní ale nikdo nesmí. Platí pod
+striků s ní běží dál (pod v6 tedy s IBKR nebo close baru místo tasty override),
+hlasovat z ní ale nikdo nesmí. Platí pod
 mechanikou v6 (`SPOT_AGE_GATE`); v5 počítá dál `instruments._current_spot`.
 """
 
@@ -31,12 +36,15 @@ SpotSource = Literal["ibkr", "bar", "tasty"]
 
 #: Spot se stářím zapíná bump v6 (#1403) spolu s CumΔ z tisků (ADR-0057 bod 11)
 SPOT_AGE_GATE = CUMDELTA_PRINTS
-#: Feed IBKR je živý, když poslední aktualizace tickeru není starší (práh fallbacku #614)
+#: Feed IBKR je živý, když poslední tick s `last` není starší (výchozí práh fallbacku #614)
 IBKR_MAX_AGE = dt.timedelta(seconds=30)
 #: Close 5s baru platí, když bar skončil nejvýš před minutou (bary chodí à 5 s)
 BAR_MAX_AGE = dt.timedelta(seconds=60)
-#: Kotace tasty platí jako u IBKR nejvýš 30 s
+#: Poslední poll, ve kterém tasty hlásila čerstvou kotaci, nejvýš 30 s zpět
 TASTY_MAX_AGE = dt.timedelta(seconds=30)
+#: Po otevření trhu (a po startu) se chybějící spot chvíli nehlásí: první ticky
+#: přicházejí až po otevření a 17:00:00 by jinak varovalo každý den
+SPOT_WATCH_GRACE = dt.timedelta(minutes=2)
 
 
 class PriceAt(NamedTuple):
@@ -64,7 +72,13 @@ class SpotReading(NamedTuple):
         if self.price is None or self.ts is None:
             return "spot: žádná cena"
         age = int((now - self.ts).total_seconds())
-        return f"spot: poslední cena {self.price:g} ({self.source}) stará {age} s"
+        return f"spot: poslední cena {self.price:.2f} ({self.source}) stará {age} s"
+
+
+def bar_close_at(started: dt.datetime, close: float, seconds: int = 5) -> PriceAt:
+    """Close 5s baru IBKR jako cena ke konci baru (`RealTimeBar.time` je začátek)."""
+    aware = started if started.tzinfo is not None else started.replace(tzinfo=dt.UTC)
+    return PriceAt(close, aware + dt.timedelta(seconds=seconds))
 
 
 def _usable(candidate: PriceAt | None) -> bool:

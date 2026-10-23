@@ -36,7 +36,7 @@ from gexlens_engine.compute.setupstats import (
     degraded,
     format_report,
 )
-from gexlens_engine.compute.spot import SPOT_AGE_GATE, SpotReading
+from gexlens_engine.compute.spot import SPOT_AGE_GATE, SPOT_WATCH_GRACE, SpotReading
 from gexlens_engine.compute.volleaders import detect_concentration
 from gexlens_engine.config import Settings
 from gexlens_engine.emrespect import EmRespectCollector
@@ -439,8 +439,10 @@ class InstrumentPipeline:
     _oi_alerted_day: dt.date | None = field(default=None, repr=False)
     # Stav rozvrhu CME z minulého cyklu (#1307) — z něj hrana otevření trhu
     _market_closed: bool = field(default=False, repr=False)
-    # Poslední stav živosti spotu pod v6 — log jen na přechodu, ne každou minutu
+    # Poslední stav živosti spotu pod v6 — log jen na přechodu, ne každou minutu;
+    # hlídá se až `SPOT_WATCH_GRACE` po startu a po každém otevření trhu
     _spot_live: bool = field(default=True, repr=False)
+    _spot_watch_from: dt.datetime | None = field(default=None, repr=False)
     _minute_count: int = field(default=0, repr=False)
     _last_spot: float = field(default=float("nan"), repr=False)
     _backfill_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -1223,15 +1225,24 @@ class InstrumentPipeline:
             self.spot = market
         return self.spot
 
-    def _live_spot(self, spot: float, market_closed: bool) -> tuple[float | None, str | None]:
+    def _live_spot(
+        self, spot: float, market_closed: bool, now: dt.datetime
+    ) -> tuple[float | None, str | None]:
         """Cena, ze které smí hlasovat verdikt a tendence, a důvod, když chybí.
 
         Pod v5 (nebo bez napojeného zdroje) je to spot cyklu jako dosud. Pod v6
         (#1600) rozhoduje stáří zdrojů (`compute/spot.resolve_spot`): GEX výpočet
         a obálka dál běží s nejčerstvější známou cenou (`self.spot`), hlasy ne.
+        Při zavřeném trhu a `SPOT_WATCH_GRACE` po startu a otevření se chybějící
+        spot nehlásí a stav živosti se nemění (#1307): výpadek, který začal
+        o víkendu, varuje až po odkladu po nedělním otevření, ne nikdy.
         """
         if not self.spot_age_gate or self.spot_reading is None:
             return spot, None
+        if market_closed:
+            self._spot_watch_from = None  # odklad začne prvním cyklem otevřeného trhu
+        elif self._spot_watch_from is None:
+            self._spot_watch_from = now + SPOT_WATCH_GRACE
         reading = self.spot_reading()
         if reading.price is not None:
             self.spot = reading.price
@@ -1242,7 +1253,10 @@ class InstrumentPipeline:
             return reading.price, None
         reason = reading.describe(dt.datetime.now(dt.UTC))
         # Zavřený trh = žádná upozornění na chybějící data (AGENTS.md, #1307)
-        if self._spot_live and not market_closed:
+        watching = self._spot_watch_from is not None and now >= self._spot_watch_from
+        if not watching:
+            return None, reason
+        if self._spot_live:
             logger.warning(
                 "Spot %s: žádný zdroj nemá živou cenu (%s) — verdikt a tendence bez ceny",
                 self.symbol,
@@ -1309,7 +1323,7 @@ class InstrumentPipeline:
                     )
 
         spot = self._current_spot()
-        live_spot, spot_missing = self._live_spot(spot, market_closed)
+        live_spot, spot_missing = self._live_spot(spot, market_closed, now)
         spot = self.spot
 
         # Auto-rozšíření denní obálky (ADR-0002) — aktivní i sekundární řetěz (#442)

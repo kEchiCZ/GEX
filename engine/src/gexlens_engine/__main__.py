@@ -33,7 +33,7 @@ from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS, SetupParams
-from gexlens_engine.compute.spot import PriceAt, SpotReading, resolve_spot
+from gexlens_engine.compute.spot import PriceAt, SpotReading, bar_close_at, resolve_spot
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
 from gexlens_engine.discovery_cache import (
@@ -963,8 +963,7 @@ async def create_pipeline(
     def on_bar_update(bars: RealTimeBarList, has_new: bool) -> None:
         nonlocal bar_spot_at
         latest = bars[-1]
-        started = latest.time if latest.time.tzinfo else latest.time.replace(tzinfo=dt.UTC)
-        bar_spot_at = PriceAt(latest.close, started + dt.timedelta(seconds=5))
+        bar_spot_at = bar_close_at(latest.time, latest.close)
         aggregator.add_5s_bar(
             Bar(
                 ts=latest.time,
@@ -1021,8 +1020,9 @@ async def create_pipeline(
         if stopped:
             return
         price = ticker.last if ticker.last == ticker.last else ticker.marketPrice()
-        if price == price:
-            ibkr_spot_at = PriceAt(price, dt.datetime.now(dt.UTC))
+        # Spot se stářím (#1600) jen z ceny obchodu — mid je symptom #1623
+        if ticker.last == ticker.last:
+            ibkr_spot_at = PriceAt(ticker.last, dt.datetime.now(dt.UTC))
         if spot_fallback is not None:
             decision = spot_fallback.on_ibkr(price, loop.time())
             if decision.switched:

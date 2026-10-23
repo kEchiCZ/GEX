@@ -254,7 +254,7 @@ odpoledne bez grafu, zatímco ES založený minutu před výpadkem jel z tasty.
 | Vrstva | Do 14. 9. | Od 14. 9. |
 | --- | --- | --- |
 | Založení pipeline | výhradně IBKR sec-def (discovery front futures, `reqSecDefOptParams`, spot z IBKR tickeru); bez API socketu se nezakládá | **degradovaný start**: kontrakt a řetěz z `derived/discovery_cache.json` (poslední úspěšné discovery, ≤ 14 dní, neexpirovaný front kontrakt), úvodní spot z tasty; bez socketu prázdný ticker a IBKR subskripce až v `resubscribe` po reconnectu; alert `degraded_start` |
-| Spot v cyklu pipeline | IBKR ticker (za fallbacku zamrzlý → GEX a hlídač barů nad cenou z doby výpadku) | `spot_override` z tasty, dokud fallback spotu běží |
+| Spot v cyklu pipeline | IBKR ticker (za fallbacku zamrzlý → GEX a hlídač barů nad cenou z doby výpadku) | `spot_override` z tasty, dokud fallback spotu běží; pod mechanikou v6 spot se stářím IBKR `last` → close 5s baru → tasty, jinak chybí (ADR-0057 doplněk 23. 10., #1600) |
 | 1min bary podkladu | jen IBKR real-time bary; za výpadku svíčky stály | při stall každou minutu doplnění chybějících minut z dxFeed Candle (`source = tasty_candle`, UI úsek odliší); jedno pomocné DXLink spojení naráz |
 | Plán tasty chain subskripcí | z IBKR quote cache (prázdná u pipeline založené za výpadku → 0 tasty symbolů → 0 snapshotů) | z **kontraktů, které pipeline drží** + symboly z konfigurace i watchlistu bez pipeline |
 | Křížová kontrola | držené kontrakty bez IBKR kotace = „sledováno 0" → `insufficient`, fallback řetězu se po restartu nikdy nezapnul | takový kontrakt = mrtvá IBKR strana (`_DEAD_IBKR_QUOTE`) → při čerstvé tasty `ibkr_suspect` → fallback |

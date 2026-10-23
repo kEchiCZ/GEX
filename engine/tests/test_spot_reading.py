@@ -2,7 +2,7 @@
 
 import datetime as dt
 
-from gexlens_engine.compute.spot import PriceAt, SpotReading, resolve_spot
+from gexlens_engine.compute.spot import PriceAt, SpotReading, bar_close_at, resolve_spot
 
 NOW = dt.datetime(2026, 10, 7, 18, 55, 2, tzinfo=dt.UTC)
 
@@ -36,7 +36,7 @@ def test_vse_stare_spot_chybi_ale_nese_posledni_cenu() -> None:
     assert reading.fresh is False
     assert reading.live is None
     assert (reading.price, reading.source) == (7855.0, "bar")
-    assert reading.describe(NOW) == "spot: poslední cena 7855 (bar) stará 120 s"
+    assert reading.describe(NOW) == "spot: poslední cena 7855.00 (bar) stará 120 s"
 
 
 def test_hranice_stari_vcetne() -> None:
@@ -55,3 +55,11 @@ def test_zadny_zdroj() -> None:
     reading = resolve_spot(NOW, ibkr=None, bar=None, tasty=None)
     assert reading == SpotReading(None, None, None, False)
     assert reading.describe(NOW) == "spot: žádná cena"
+
+
+def test_close_5s_baru_plati_ke_konci_baru() -> None:
+    """`RealTimeBar.time` je začátek baru — cena platí k jeho konci; naivní čas = UTC."""
+    started = dt.datetime(2026, 10, 7, 18, 54, 55, tzinfo=dt.UTC)
+    assert bar_close_at(started, 7856.5) == PriceAt(7856.5, NOW - dt.timedelta(seconds=2))
+    naive = bar_close_at(started.replace(tzinfo=None), 7856.5)
+    assert naive.ts.tzinfo is not None and naive == bar_close_at(started, 7856.5)
