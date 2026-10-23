@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.storage.sentiment import (
     REACTION_DAILY_WINDOWS,
     ensure_sentiment_schema,
@@ -243,3 +244,57 @@ def test_baseline_is_taken_for_event_trading_day(tmp_path: Path, monkeypatch: An
         ("ES", DAY + dt.timedelta(days=1)),
         ("NQ", DAY + dt.timedelta(days=1)),
     ]
+
+
+def write_open_bars(data_dir: Path, symbol: str, day: dt.date, start_price: float) -> None:
+    """Bary dne jen v minutách, kdy podle rozvrhu CME obchod běží."""
+    directory = data_dir / "derived" / symbol / "bars"
+    directory.mkdir(parents=True, exist_ok=True)
+    start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
+    rows = []
+    for minute in range(24 * 60):
+        ts = start + dt.timedelta(minutes=minute)
+        if not is_market_closed(ts):
+            price = start_price + minute / 100
+            bar = {"open": price, "high": price, "low": price, "close": price, "volume": 1.0}
+            rows.append({"ts_min": ts, **bar})
+    pq.write_table(pa.Table.from_pylist(rows), directory / f"{day.isoformat()}.parquet")
+
+
+def test_truncated_deferred_premeri_useknute_okno_a_je_idempotentni(tmp_path: Path) -> None:
+    """#1574: odložená reakce změřená 2 min po nedělním otevření (okno 60 useknuté)
+    se přeměří celým oknem; druhý běh ji už nenajde. Celé okno se nepřeměřuje."""
+    engine = make_engine(tmp_path)
+    data = tmp_path / "data"
+    for symbol in ("ES", "NQ"):
+        write_open_bars(data, symbol, dt.date(2026, 10, 16), 7000.0)
+        write_open_bars(data, symbol, dt.date(2026, 10, 18), 7100.0)
+    open_ts = dt.datetime(2026, 10, 18, 22, 0, tzinfo=dt.UTC)
+    truncated = add_event(engine, dt.datetime(2026, 10, 16, 21, 4, tzinfo=dt.UTC), "Pá po close")
+    whole = add_event(engine, dt.datetime(2026, 10, 16, 21, 30, tzinfo=dt.UTC), "Pá později")
+    for symbol in ("ES", "NQ"):
+        common = {"deferred_min": True, "closure_open_ts": open_ts, "ret_60": 1.0}
+        add_reaction(
+            engine,
+            truncated,
+            symbol,
+            **common,
+            computed_at_min=open_ts + dt.timedelta(minutes=2),
+        )
+        add_reaction(
+            engine, whole, symbol, **common, computed_at_min=open_ts + dt.timedelta(hours=2)
+        )
+
+    gaps = list(script.truncated_deferred(engine))
+    assert [(gap.event_id, gap.missing) for gap in gaps] == [(truncated, frozenset({"ES", "NQ"}))]
+    dry = script.run(engine, data, apply=False, now=NOW, truncated=True)
+    assert sum(dry.filled.values()) == 2
+    assert reaction(engine, truncated, "ES")["ret_60"] == 1.0  # dry-run nic nezapíše
+
+    applied = script.run(engine, data, apply=True, now=NOW, truncated=True)
+    assert applied.windows > 0
+    row = reaction(engine, truncated, "ES")
+    base, last = 7000.0 + 1259 / 100, 7100.0 + 1379 / 100  # pá 20:59 a ne 22:59 UTC
+    assert row["ret_60"] == pytest.approx((last - base) / base * 10_000)
+    assert reaction(engine, whole, "ES")["ret_60"] == 1.0  # celé okno se nepřepisuje
+    assert list(script.truncated_deferred(engine)) == []
