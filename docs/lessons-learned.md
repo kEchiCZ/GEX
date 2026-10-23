@@ -302,6 +302,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-23 — odložená reakce zralá podle času zprávy, ne podle začátku svého okna (#1574).**
+  Okna odložené zprávy začínají prvním obchodovaným barem po uzavírce, ale úloha ji vybrala
+  jako zralou už v `ts_event + 60 min`. Pátek 21:04 tak byl „zralý“ hned po nedělním otevření
+  a `compute_reactions` vzal poslední bar, který v okně zrovna byl: 44 % odložených minutových
+  reakcí useknutých, natrvalo, protože doměřování existující hodnoty nepřepisuje.
+  → Zralost měření se posuzuje od začátku okna, který měření samo zvolí, ne od času vstupu.
+  Funkce, která okno počítá, dostane `now` a okno, které ještě neskončilo, nezměří. Výběr kandidátů
+  přitom nesmí nezralé případy znovu a znovu číst (víkend = stovky zpráv × čtení barů každý cyklus).
+  Rozvrh `marketclock` k tomu stačí, bary nejsou potřeba.
+
 - **2026-10-22 — reference přírůstku z maxima seance potřebuje vlastní reset na hranici seance, dřív ho nesl pokles (#1602).**
   `SetupEngine._flows` a `TendencyEngine._flows` držely referenci objemu přes 17:00 CT.
   - Proti poslední hodnotě to nevadilo: kumulativ IBKR začíná seanci od ~0, první nízké číslo
