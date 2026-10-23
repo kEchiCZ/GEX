@@ -52,9 +52,19 @@ $stream = [IO.File]::OpenRead($file)
 try { [void]$stream.Read($head, 0, $head.Length) } finally { $stream.Dispose() }
 $magic = [Text.Encoding]::ASCII.GetString($head)
 if ($magic -ne 'PGDMP') { Remove-Item $file -Force; throw "Záloha není platný pg_dump (hlavička '$magic')" }
+# Čitelnost celého obsahu (#1566): pg_restore --list přečte TOC dumpu; useknutý
+# nebo poškozený soubor tu selže, ne až při obnově. Přes cmd ze stejného důvodu
+# jako pg_dump — PowerShell by binární stdin převedl na text.
+$toc = cmd /c "docker exec -i $Container pg_restore --list < `"$file`" 2>&1"
+$tocCode = $LASTEXITCODE
+$entries = @($toc | Where-Object { $_ -and $_ -notmatch '^\s*;' }).Count
+if ($tocCode -ne 0 -or $entries -eq 0) {
+    Remove-Item $file -Force
+    throw "pg_restore --list nad dumpem selhal (kód $tocCode, položek $entries) — záloha smazána"
+}
 
 $size = (Get-Item $file).Length / 1MB
-Write-Host ("Hotovo: {0:N1} MB" -f $size) -ForegroundColor Green
+Write-Host ("Hotovo: {0:N1} MB, pg_restore --list: {1} položek" -f $size, $entries) -ForegroundColor Green
 
 # Rotace — starší zálohy nad limit smazat, ať složka neroste donekonečna
 $old = Get-ChildItem $resolved -Filter 'gexlens-*.dump' | Sort-Object LastWriteTime -Descending | Select-Object -Skip $Keep

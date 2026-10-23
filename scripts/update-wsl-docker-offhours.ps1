@@ -154,14 +154,8 @@ try {
         $dump = Get-ChildItem $BackupTarget -Filter 'gexlens-*.dump' | Where-Object { $_.LastWriteTime -ge $started.AddMinutes(-1) } |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if (-not $dump) { return "Docker Desktop $ddBefore → $available neaktualizován: čerstvý dump v $BackupTarget nenalezen." }
-        # pg_restore --list přes cmd: PowerShell by binární stdin převedl na text
-        $toc = cmd /c "docker exec -i gex-postgres-1 pg_restore --list < `"$($dump.FullName)`" 2>&1"
-        $tocCode = $LASTEXITCODE
-        $entries = @($toc | Where-Object { $_ -and $_ -notmatch '^\s*;' }).Count
-        if ($tocCode -ne 0 -or $entries -eq 0) {
-            return "Docker Desktop $ddBefore → $available neaktualizován: pg_restore --list nad $($dump.Name) selhal (kód $tocCode, položek $entries)."
-        }
-        Write-Step ("Záloha PG {0} ({1:N0} MB), pg_restore --list: {2} položek." -f $dump.Name, ($dump.Length / 1MB), $entries)
+        # Čitelnost (pg_restore --list) ověřil backup-postgres.ps1 — při selhání by vyhodil výjimku výše (#1566)
+        Write-Step ("Záloha PG {0} ({1:N0} MB) ověřena pg_restore --list." -f $dump.Name, ($dump.Length / 1MB))
 
         $countsBefore = Get-PgRowCounts
         if (-not $countsBefore) { return "Docker Desktop $ddBefore → $available neaktualizován: počty řádků PG nejde načíst." }
