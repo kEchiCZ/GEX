@@ -11,7 +11,7 @@ fade od hranice pásma a jak výjimečný je průraz. Ukládá se i podíl minut
 v negativní gammě: hypotéza z manuálu kap. 18 („průrazy se koncentrují
 do negativní gammy") se pak doloží přímo nad touto tabulkou (#876).
 
-Zdroje EM v pořadí: snapshoty 0DTE řetězu (mid kotace, retence 14 dní),
+Zdroje EM v pořadí: snapshoty 0DTE řetězu (mid kotace; od #762 se nemažou),
 fallback close prémie z věčného `oi_eod` (#519) — včerejší závěrečný
 straddle jako pre-open odhad. Zdroj se ukládá: obě čísla NEJSOU totéž
 a míchat je do jedné statistiky bez označení by kalibraci falšovalo.
@@ -78,6 +78,8 @@ class EmRespect:
     range_vs_em: float
     #: Podíl měřených minut se spotem pod flipem (negativní gamma); None = bez levels.
     negative_gamma_share: float | None
+    #: Z kolika minut (spot i flip) podíl vznikl (#1452); 0 = podíl None
+    negative_gamma_minutes: int | None = None
     version: int = EM_RESPECT_VERSION
 
     @property
@@ -108,6 +110,7 @@ def classify(
     low: float,
     close: float,
     negative_gamma_share: float | None,
+    negative_gamma_minutes: int | None = None,
 ) -> EmRespect | None:
     """Seance vůči pásmu; None při nesmyslném vstupu (EM ≤ 0 nebo prázdný rozsah).
 
@@ -128,19 +131,23 @@ def classify(
         touch_lower=low < reference.lower,
         range_vs_em=(high - low) / reference.em_points,
         negative_gamma_share=negative_gamma_share,
+        negative_gamma_minutes=negative_gamma_minutes,
     )
 
 
-def negative_share(
+def negative_gamma(
     spots: dict[dt.datetime, float], flips: dict[dt.datetime, float]
-) -> float | None:
-    """Podíl minut se spotem POD měřeným flipem; None bez společných minut.
+) -> tuple[float | None, int]:
+    """(podíl minut se spotem pod flipem, počet společných minut); bez společných minut (None, 0).
 
     Hrana (spot == flip) se počítá jako ne-negativní — konzistentně s flip
     zónou (#209), kde hranice není negativní režim.
+
+    Počet minut nese váhu podílu (#1452): seance s 5 minutami flipu nesmí mít
+    stejnou váhu jako seance s 1 300 minutami.
     """
     common = [ts for ts in spots if ts in flips]
     if not common:
-        return None
+        return None, 0
     below = sum(1 for ts in common if spots[ts] < flips[ts])
-    return below / len(common)
+    return below / len(common), len(common)
