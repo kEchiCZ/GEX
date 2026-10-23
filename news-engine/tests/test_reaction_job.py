@@ -227,7 +227,10 @@ def test_market_closed_se_opravi_podle_baru(tmp_path: Path) -> None:
     job = ReactionJob(engine, BarsRepository(tmp_path / "data"))
     event_id = add_event(engine, EVENT_TS, importance=1, title="Svátek headline")
 
-    job.run(NOW)
+    # Odložená okna běží od prvního baru dalšího dne (00:00 UTC): změří se až po
+    # jejich uzavření (#1574), ne v NOW téhož dne nad bary „z budoucnosti“
+    assert job.run(NOW) == 0
+    job.run(dt.datetime.combine(DAY + dt.timedelta(days=1), dt.time(2, 0), tzinfo=dt.UTC))
 
     with engine.connect() as conn:
         row = conn.execute(select(news_events).where(news_events.c.id == event_id)).fetchone()

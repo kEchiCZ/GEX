@@ -287,11 +287,12 @@ def test_truncated_deferred_premeri_useknute_okno_a_je_idempotentni(tmp_path: Pa
 
     gaps = list(script.truncated_deferred(engine))
     assert [(gap.event_id, gap.missing) for gap in gaps] == [(truncated, frozenset({"ES", "NQ"}))]
-    dry = script.run(engine, data, apply=False, now=NOW, truncated=True)
+    after = dt.datetime(2026, 10, 20, 12, 0, tzinfo=dt.UTC)  # okna dávno uzavřená
+    dry = script.run(engine, data, apply=False, now=after, truncated=True)
     assert sum(dry.filled.values()) == 2
     assert reaction(engine, truncated, "ES")["ret_60"] == 1.0  # dry-run nic nezapíše
 
-    applied = script.run(engine, data, apply=True, now=NOW, truncated=True)
+    applied = script.run(engine, data, apply=True, now=after, truncated=True)
     assert applied.windows > 0
     row = reaction(engine, truncated, "ES")
     base, last = 7000.0 + 1259 / 100, 7100.0 + 1379 / 100  # pá 20:59 a ne 22:59 UTC
