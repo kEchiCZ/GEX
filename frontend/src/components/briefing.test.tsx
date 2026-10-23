@@ -65,7 +65,12 @@ function mockApis(overrides: Record<string, unknown> = {}) {
     const path = String(url)
     const body = (data: unknown, status = 200) =>
       Promise.resolve({ ok: status < 300, status, json: () => Promise.resolve(data) })
-    if (path.includes('/bars/')) return body(overrides['bars'] ?? { bars: [] })
+    if (path.includes('/bars/')) {
+      // Bary podle seance (?date=) — „včerejšek“ PDC je jiná seance než dnešek (#1596)
+      const date = new URL(path, 'http://x').searchParams.get('date') ?? ''
+      const byDate = overrides['barsByDate'] as Record<string, unknown> | undefined
+      return body(byDate?.[date] ?? overrides['bars'] ?? { bars: [] })
+    }
     if (path.includes('/instruments/')) return body(overrides['days'] ?? { days: [] })
     if (path.includes('/levels/')) return body(overrides['levels'] ?? { levels: [] })
     if (path.includes('/oidelta/')) return body({ symbol: 'ES', expiry: '20260813', days: null })
@@ -380,4 +385,41 @@ test('Ranní checklist (#1241): útes minulé seance, slabá zeď, gap-and-hold'
   expect(screen.getByTestId('check-map').className).toContain('checklist-na')
   expect(wall.textContent).toContain('průraz')
   expect(screen.getByTestId('check-rules').textContent).toContain('50 $')
+})
+
+test('Včera a overnight (#1596): v pondělí páteční settle = RTH close, gap vůči němu', async () => {
+  freezeDate('2026-10-19T12:00:00Z') // pondělí před US openem (13:30 UTC)
+  const bar = (ts: string, high: number, low: number, close: number) => ({
+    ts_min: ts,
+    open: close,
+    high,
+    low,
+    close,
+    volume: 100,
+  })
+  mockApis({
+    barsByDate: {
+      '2026-10-16': {
+        bars: [
+          bar('2026-10-16T13:30:00Z', 6660, 6630, 6655),
+          bar('2026-10-16T19:59:00Z', 6672, 6668, 6670), // 15:59 ET — PDC
+          bar('2026-10-16T20:59:00Z', 6686, 6620, 6676), // 16:59 ET — konec Globexu
+        ],
+      },
+      '2026-10-19': { bars: [bar('2026-10-19T08:00:00Z', 6702, 6698, 6700)] },
+    },
+  })
+  render(<BriefingView />)
+  const settle = await screen.findByText('Včerejší settle (16.10.)')
+  await waitFor(() => expect(settle.nextElementSibling?.textContent).toBe('6670'))
+  expect(screen.getByText('Včerejší rozsah').nextElementSibling?.textContent).toBe('6620 – 6686')
+  // Gap +30 b proti RTH close 6670 = 0,45 %; proti poslední minutě Globexu 6676 by byl 0,36 %
+  await waitFor(() => expect(screen.getByText(/\(0\.45 %\)/)).toBeTruthy())
+  // Nedělní ani sobotní partice se nečte (#1596: v pondělí dřív PDC „—“)
+  const barDates = fetchMock.mock.calls
+    .map(([url]) => String(url))
+    .filter((url) => url.includes('/bars/'))
+    .map((url) => new URL(url, 'http://x').searchParams.get('date'))
+  expect(barDates).not.toContain('2026-10-18')
+  expect(barDates).not.toContain('2026-10-17')
 })

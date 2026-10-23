@@ -57,7 +57,7 @@ export function turnLevels(input: TurnLevelInput): TurnLevel[] {
     { price: levels?.centroid, label: 'Těžiště GEX', kind: 'gamma', note: 'magnet positioningu' },
     { price: reference?.prevHigh, label: 'PDH', kind: 'reference', note: 'včerejší high — sleduje ho zbytek trhu' }, // prettier-ignore
     { price: reference?.prevLow, label: 'PDL', kind: 'reference', note: 'včerejší low — sleduje ho zbytek trhu' }, // prettier-ignore
-    { price: reference?.prevClose, label: 'PDC', kind: 'reference', note: 'včerejší close — nad/pod = kdo drží den' }, // prettier-ignore
+    { price: reference?.prevClose, label: 'PDC', kind: 'reference', note: 'včerejší settle (RTH close) — nad/pod = kdo drží den' }, // prettier-ignore
     { price: reference?.onHigh, label: reference?.onRunning ? 'ONH (běží)' : 'ONH', kind: 'reference', note: 'overnight high — test po openu' }, // prettier-ignore
     { price: reference?.onLow, label: reference?.onRunning ? 'ONL (běží)' : 'ONL', kind: 'reference', note: 'overnight low — test po openu' }, // prettier-ignore
     { price: em ? em.anchor + em.em : null, label: '+EM', kind: 'em', note: 'horní hrana očekávaného pohybu' }, // prettier-ignore

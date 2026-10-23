@@ -6,11 +6,12 @@ PDH ≠ zeď v prázdnu.
 
 - **ONH/ONL** — overnight extrémy: od začátku seance do US openu. Po openu
   jsou zamčené; před openem průběžně rostou s daty.
-- **PDH/PDL/PDC** — extrémy a close předchozí uložené seance.
+- **PDH/PDL/PDC** — extrémy celé Globex seance a close k settle (RTH close)
+  předchozí obchodní seance; souhrn počítá `previousSessionRange` (#1596).
 - **VWAP** — kumulativní Σ(typická cena × objem) / Σ objem přes seanci,
   typická cena = (H+L+C)/3. Minuty bez objemu drží poslední hodnotu.
 */
-import type { BarRow } from '../api/briefing'
+import type { BarRow, RangeSummary } from '../api/briefing'
 
 export interface ReferenceLevels {
   onHigh: number | null
@@ -26,11 +27,12 @@ export interface ReferenceLevels {
 
 export function computeReferenceLevels(input: {
   todayBars: BarRow[]
-  prevDayBars: BarRow[]
+  /** Předchozí obchodní seance (`previousSessionRange`); null = bez dat. */
+  prevDay: RangeSummary | null
   usOpenMs: number
   nowMs: number
 }): ReferenceLevels {
-  const { todayBars, prevDayBars, usOpenMs, nowMs } = input
+  const { todayBars, prevDay, usOpenMs, nowMs } = input
 
   let onHigh: number | null = null
   let onLow: number | null = null
@@ -38,15 +40,6 @@ export function computeReferenceLevels(input: {
     if (Date.parse(bar.ts_min) >= usOpenMs) break
     onHigh = onHigh === null ? bar.high : Math.max(onHigh, bar.high)
     onLow = onLow === null ? bar.low : Math.min(onLow, bar.low)
-  }
-
-  let prevHigh: number | null = null
-  let prevLow: number | null = null
-  let prevClose: number | null = null
-  for (const bar of prevDayBars) {
-    prevHigh = prevHigh === null ? bar.high : Math.max(prevHigh, bar.high)
-    prevLow = prevLow === null ? bar.low : Math.min(prevLow, bar.low)
-    prevClose = bar.close
   }
 
   const vwap: Array<{ tsIso: string; value: number }> = []
@@ -63,9 +56,9 @@ export function computeReferenceLevels(input: {
     onHigh,
     onLow,
     onRunning: nowMs < usOpenMs,
-    prevHigh,
-    prevLow,
-    prevClose,
+    prevHigh: prevDay?.high ?? null,
+    prevLow: prevDay?.low ?? null,
+    prevClose: prevDay?.last ?? null,
     vwap,
   }
 }

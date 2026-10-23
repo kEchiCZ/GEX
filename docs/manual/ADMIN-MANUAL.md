@@ -367,7 +367,8 @@ dne, publikace OI (`_oi_published`), backfill EM respect, pokrytí hlubokých ba
 hranice `settle_ts` — po zkrácené seanci 13:00 ET, #1595), okno
 remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
 (`gexforward.trading_days_until_friday`) a ve frontendu EOM expirace
-(`expiry.ts`) a termín scénáře:
+(`expiry.ts`), termín scénáře a „včerejšek" Briefingu, grafu a deníku (`tz.previousTradingSessionIso`,
+PDC v `api/briefing.previousSessionRange` s hranicí `settleMs` — protějšek `_settle_close`, #1596):
 
 - **ΔOI** (`GET /oidelta`, `/chain`, `/replay` → `oi_prev`, T6): základem je
   poslední archivovaný **obchodní** den (`OIEodRepository.latest_trading_day_before`),
