@@ -17,9 +17,11 @@ from gexlens_news.reactions import (
     VolumeBaseline,
     build_excursion_baseline,
     build_volume_baseline,
+    closure_start_at_or_before,
     compute_daily_reactions,
     compute_reactions,
     excursion_series,
+    immature_closure_start,
     measure_excursion,
     minute_of_day_et,
     percentile_abs,
@@ -360,3 +362,95 @@ def test_baseline_denni_doby_v_et_a_prahy() -> None:
     # Pod minimem vzorků se nerozhoduje
     assert tod_thresholds(baseline, minute, min_samples=245) is None
     assert tod_thresholds({0: [Excursion(1.0, 1, 1.0)] * 300}, 1439) is not None  # přes půlnoc
+
+
+# ── Odložená reakce až po uzavření oken (#1574) ─────────────────────
+
+UTC = dt.UTC
+PATEK_PO_CLOSE = dt.datetime(2026, 10, 16, 21, 4, tzinfo=UTC)  # CDT: close 21:00 UTC
+NEDELNI_OPEN = dt.datetime(2026, 10, 18, 22, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("ts", "closure"),
+    [
+        # víkend: pá 16:00 CT
+        (PATEK_PO_CLOSE, dt.datetime(2026, 10, 16, 21, 0, tzinfo=UTC)),
+        # denní pauza út 16:00–17:00 CT (letní čas)
+        (
+            dt.datetime(2026, 10, 20, 21, 30, tzinfo=UTC),
+            dt.datetime(2026, 10, 20, 21, 0, tzinfo=UTC),
+        ),
+        # zimní čas: pauza 22:00–23:00 UTC
+        (dt.datetime(2026, 11, 4, 22, 10, tzinfo=UTC), dt.datetime(2026, 11, 4, 22, 0, tzinfo=UTC)),
+        # zkrácená seance pá 27. 11.: Globex do 12:15 CT (18:15 UTC)
+        (
+            dt.datetime(2026, 11, 27, 19, 0, tzinfo=UTC),
+            dt.datetime(2026, 11, 27, 18, 15, tzinfo=UTC),
+        ),
+        # Thanksgiving 26. 11.: halt 12:00 CT (18:00 UTC)
+        (
+            dt.datetime(2026, 11, 26, 19, 0, tzinfo=UTC),
+            dt.datetime(2026, 11, 26, 18, 0, tzinfo=UTC),
+        ),
+    ],
+)
+def test_zacatek_uzavirky_z_rozvrhu(ts: dt.datetime, closure: dt.datetime) -> None:
+    assert closure_start_at_or_before(ts) == closure
+
+
+def test_otevreny_trh_uzavirku_nema() -> None:
+    assert closure_start_at_or_before(EVENT) is None
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (NEDELNI_OPEN - dt.timedelta(hours=3), dt.datetime(2026, 10, 16, 21, 0, tzinfo=UTC)),
+        (NEDELNI_OPEN + dt.timedelta(minutes=2), dt.datetime(2026, 10, 16, 21, 0, tzinfo=UTC)),
+        (NEDELNI_OPEN + dt.timedelta(minutes=59), dt.datetime(2026, 10, 16, 21, 0, tzinfo=UTC)),
+        (NEDELNI_OPEN + dt.timedelta(minutes=61), None),
+        (
+            dt.datetime(2026, 10, 20, 22, 30, tzinfo=UTC),
+            dt.datetime(2026, 10, 20, 21, 0, tzinfo=UTC),
+        ),
+        (dt.datetime(2026, 10, 20, 23, 5, tzinfo=UTC), None),
+        (EVENT, None),
+    ],
+)
+def test_nezrala_uzavirka_do_uplynuti_nejdelsiho_okna_po_otevreni(
+    now: dt.datetime, expected: dt.datetime | None
+) -> None:
+    assert immature_closure_start(now, 60) == expected
+
+
+def test_odlozena_reakce_az_po_uzavreni_vsech_oken() -> None:
+    """#1574: zpráva v pátek po close, `now` neděle 22:02 → nic; 23:01 → plná okna."""
+    friday = bars(PATEK_PO_CLOSE - dt.timedelta(minutes=10), [7000.0] * 6)  # do 20:59
+    sunday = bars(NEDELNI_OPEN, [7070.0 + i for i in range(120)])
+    early = compute_reactions(
+        PATEK_PO_CLOSE, friday + sunday, now=NEDELNI_OPEN + dt.timedelta(minutes=2)
+    )
+    assert early == []
+    # Rezerva 1 min (ADR-0005): v open + 60 poslední bar okna může být provizorní
+    edge = compute_reactions(
+        PATEK_PO_CLOSE, friday + sunday, now=NEDELNI_OPEN + dt.timedelta(minutes=60)
+    )
+    assert edge == []
+    full = compute_reactions(
+        PATEK_PO_CLOSE, friday + sunday, now=NEDELNI_OPEN + dt.timedelta(minutes=61)
+    )
+    assert [r.window_min for r in full] == [1, 5, 15, 60]
+    assert all(r.deferred and r.closure_open == NEDELNI_OPEN for r in full)
+    # Okno 60 končí barem 22:59 (close 7129), ne posledním barem v době měření
+    assert full[-1].ret_bp == pytest.approx((7129.0 - 7000.0) / 7000.0 * 10_000)
+    # Bez `now` beze změny (skripty, testy dřív)
+    assert len(compute_reactions(PATEK_PO_CLOSE, friday + sunday)) == 4
+
+
+def test_neodlozena_zprava_now_nezdrzi() -> None:
+    """Zpráva za běžícího trhu: okna od času zprávy, `now` po nejdelším okně je měří hned."""
+    series = bars(EVENT - dt.timedelta(minutes=1), [7000.0 + i for i in range(70)])
+    reactions = compute_reactions(EVENT, series, now=EVENT + dt.timedelta(minutes=60))
+    assert [r.window_min for r in reactions] == [1, 5, 15, 60]
+    assert not any(r.deferred for r in reactions)

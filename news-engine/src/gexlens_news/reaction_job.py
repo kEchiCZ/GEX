@@ -40,6 +40,8 @@ from gexlens_news.bars import BarsRepository, CachedBars
 from gexlens_news.reactions import (
     DAILY_WINDOW_DAYS,
     DEFAULT_WINDOWS,
+    DEFERRED_GAP_MINUTES,
+    DEFERRED_SETTLE_MARGIN,
     MIN_BASELINE_SESSIONS,
     MIN_MINUTE_SAMPLES,
     MINUTES_PER_TRADING_DAY,
@@ -50,6 +52,7 @@ from gexlens_news.reactions import (
     compute_daily_reactions,
     compute_reactions,
     contaminates,
+    immature_closure_start,
 )
 
 logger = logging.getLogger(__name__)
@@ -285,6 +288,20 @@ class ReactionJob:
         `complete_minute` (denní fáze a hodinový průchod, #1494).
         """
         ready_before = now - dt.timedelta(minutes=max(self._windows))
+        # Odložená zpráva (#1574) měří okna od otevření po uzavírce: dokud od něj
+        # neuplynulo nejdelší okno, zprávy té uzavírky nejsou zralé. Vynechají se
+        # úplně — jinak by se o víkendu pro stovky zpráv četly bary každý cyklus
+        # a zabíraly limit dávky.
+        # Zpráva v posledních minutách před uzavírkou je podle barů taky odložená
+        # (první bar ≥ DEFERRED_GAP_MINUTES po ní) — řez proto o tolik dřív.
+        # Neodložené zprávy tam mají okno useknuté uzavírkou: ret, range i cont
+        # vyjdou později na týchž barech stejně, `vol_z` jen s baseline dne měření.
+        # Zralost s rezervou jako `compute_reactions` (DEFERRED_SETTLE_MARGIN)
+        margin = int(DEFERRED_SETTLE_MARGIN.total_seconds() // 60)
+        immature = immature_closure_start(now, max(self._windows) + margin)
+        if immature is not None:
+            cutoff = immature - dt.timedelta(minutes=DEFERRED_GAP_MINUTES)
+            ready_before = min(ready_before, cutoff - dt.timedelta(microseconds=1))
         measured = exists().where(news_reactions.c.event_id == news_events.c.id)
         stmt = (
             select(news_events.c.id, news_events.c.ts_event, news_events.c.category)
@@ -306,10 +323,11 @@ class ReactionJob:
     def _contaminating(self, around: dt.datetime, category: str | None) -> list[dt.datetime]:
         """Časy jiných významných eventů jiné kategorie, které můžou spadnout do oken."""
         span = dt.timedelta(minutes=max(self._windows) + 1)
+        until = around + span
         stmt = select(news_events.c.ts_event, news_events.c.category).where(
             and_(
                 news_events.c.ts_event > around,
-                news_events.c.ts_event <= around + span,
+                news_events.c.ts_event <= until,
                 news_events.c.importance >= CONTAMINATION_MIN_IMPORTANCE,
             )
         )
@@ -620,6 +638,7 @@ class ReactionJob:
                 windows=self._windows,
                 other_event_ts=others,
                 baseline=baselines[symbol],
+                now=now,
             )
             if not reactions:
                 continue
