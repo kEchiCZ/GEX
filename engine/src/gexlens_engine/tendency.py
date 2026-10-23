@@ -15,6 +15,7 @@ from pathlib import Path
 
 from gexlens_engine.compute.cumdelta import FLOW_WINDOW_MIN, flow_window_sum
 from gexlens_engine.compute.gexfield import gamma_at_price
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import settle_ts, trading_session_date
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS, max_pain_strike
 from gexlens_engine.compute.tendency import (
@@ -279,7 +280,7 @@ class TendencyEngine:
         return self._hysteresis
 
     def _slope_inputs(
-        self, now: dt.datetime, spot: float, flow: FlowRowLike | None
+        self, now: dt.datetime, spot: float | None, flow: FlowRowLike | None
     ) -> tuple[float | None, float | None]:
         """Sklon CumΔ za okno a cena před oknem (pro rozchod) podle verze pravidel.
 
@@ -302,7 +303,7 @@ class TendencyEngine:
                 if now - oldest[0] >= window:
                     cum_then = oldest[1]
                     price_then = oldest[2]
-            if cum_now is not None:
+            if cum_now is not None and spot is not None:
                 self._history.append((now, cum_now, spot))
             if cum_now is None or cum_then is None:
                 return None, price_then
@@ -318,11 +319,20 @@ class TendencyEngine:
         slope = flow_window_sum(self._flow_rows, now, minutes=SLOPE_LOOKBACK_MIN)
         boundary = now - window
         price_then = next((price for ts, price in self._price_history if ts == boundary), None)
-        if not self._price_history or self._price_history[-1][0] != now:
+        # Minuta bez živé ceny (#1600) v historii chybí — rozchod přes ni nehlasuje
+        if spot is not None and (not self._price_history or self._price_history[-1][0] != now):
             self._price_history.append((now, spot))
         return slope, price_then
 
-    async def on_minute(self, now: dt.datetime, spot: float, runtime: EngineRuntime) -> None:
+    async def on_minute(self, now: dt.datetime, spot: float | None, runtime: EngineRuntime) -> None:
+        """Tendence minuty; `spot` None = živá cena chybí (pod v6, #1600).
+
+        Pravidla v5 (se zlomem v6) při zavřeném trhu nepočítají ani nezapisují
+        (#1622): v sobotu se pásmo měnilo bez obchodu (charm rampa podle hodin)
+        a řádky míchaly tabulku kalibrace vah. v4 beze změny.
+        """
+        if self.version >= TENDENCY_RULES_V5 and is_market_closed(now):
+            return
         levels = runtime.last_gex_levels
         flow = runtime.last_flow
         self._refresh_max_pain(runtime.expiry, now.date())
@@ -330,7 +340,7 @@ class TendencyEngine:
         sent_value, sent_then = self._sentiment(now)
         cum_slope, price_then = self._slope_inputs(now, spot, flow)
 
-        atm_iv = self._atm_iv(runtime, spot)
+        atm_iv = self._atm_iv(runtime, spot) if spot is not None else None
         iv_then: float | None = None
         if self._iv_history:
             iv_oldest = self._iv_history[0]
@@ -369,9 +379,13 @@ class TendencyEngine:
             put_flow=put_flow,
             sent_value=sent_value,
             sent_value_then=sent_then,
-            gamma_at_price=gamma_at_price(profile, spot) if profile else None,
-            charm_at_price=gamma_at_price(charm_profile, spot) if charm_profile else None,
-            vanna_at_price=gamma_at_price(vanna_profile, spot) if vanna_profile else None,
+            gamma_at_price=gamma_at_price(profile, spot) if profile and spot is not None else None,
+            charm_at_price=(
+                gamma_at_price(charm_profile, spot) if charm_profile and spot is not None else None
+            ),
+            vanna_at_price=(
+                gamma_at_price(vanna_profile, spot) if vanna_profile and spot is not None else None
+            ),
             minutes_to_close=self._minutes_to_close(now),
             iv_now=atm_iv,
             iv_then=iv_then,

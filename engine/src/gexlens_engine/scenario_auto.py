@@ -91,8 +91,9 @@ class PreOpenVerdict:
 
     verdict: DayVerdict
     context: VerdictContext
-    #: Cena, se kterou verdikt hlasoval (overnight) — vstup scénáře
-    spot: float
+    #: Cena, se kterou verdikt hlasoval (overnight) — vstup scénáře; None = živá
+    #: cena chyběla (pod v6, #1600), verdikt je pak neúplný a scénář nevznikne
+    spot: float | None
     #: Chybějící vstupy (#1595 e1): selhaná čtení API, levels a tendence z runtime
     missing: tuple[str, ...]
 
@@ -267,7 +268,7 @@ def _number(value: Any) -> float | None:
         return None
 
 
-def verdict_input(ctx: VerdictContext, spot: float, runtime: EngineRuntime) -> VerdictInput:
+def verdict_input(ctx: VerdictContext, spot: float | None, runtime: EngineRuntime) -> VerdictInput:
     """Vstup hlasování z kontextu API a stavu runtime téže minuty (#1173 A, #1595)."""
     levels = runtime.last_levels
     return VerdictInput(
@@ -312,7 +313,7 @@ class ScenarioGenerator:
         if pre_open is None:
             return  # zapisovač tuto minutu nepočítal (bez ceny, cyklus až po openu)
         verdict, ctx, spot = pre_open.verdict, pre_open.context, pre_open.spot
-        if not pre_open.complete:
+        if not pre_open.complete or spot is None:
             # Výpadek čtení API nebo restart bez tendence: scénář počká na úplný verdikt
             last_minute = now >= open_ts - dt.timedelta(minutes=1)
             logger.log(
