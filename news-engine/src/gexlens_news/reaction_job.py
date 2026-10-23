@@ -50,6 +50,8 @@ from gexlens_news.reactions import (
     compute_daily_reactions,
     compute_reactions,
     contaminates,
+    immature_closure_start,
+    market_open_at_or_after,
 )
 
 logger = logging.getLogger(__name__)
@@ -285,6 +287,13 @@ class ReactionJob:
         `complete_minute` (denní fáze a hodinový průchod, #1494).
         """
         ready_before = now - dt.timedelta(minutes=max(self._windows))
+        # Odložená zpráva (#1574) měří okna od otevření po uzavírce: dokud od něj
+        # neuplynulo nejdelší okno, zprávy té uzavírky nejsou zralé. Vynechají se
+        # úplně — jinak by se o víkendu pro stovky zpráv četly bary každý cyklus
+        # a zabíraly limit dávky.
+        immature = immature_closure_start(now, max(self._windows))
+        if immature is not None:
+            ready_before = min(ready_before, immature - dt.timedelta(microseconds=1))
         measured = exists().where(news_reactions.c.event_id == news_events.c.id)
         stmt = (
             select(news_events.c.id, news_events.c.ts_event, news_events.c.category)
@@ -304,12 +313,18 @@ class ReactionJob:
         return [(int(row.id), _as_utc(row.ts_event), row.category) for row in rows]
 
     def _contaminating(self, around: dt.datetime, category: str | None) -> list[dt.datetime]:
-        """Časy jiných významných eventů jiné kategorie, které můžou spadnout do oken."""
+        """Časy jiných významných eventů jiné kategorie, které můžou spadnout do oken.
+
+        Odložená zpráva (#1574) má okna od otevření po uzavírce — hledá se až do
+        otevření + nejdelší okno, jinak by významná zpráva těsně po otevření
+        kontaminaci unikla.
+        """
         span = dt.timedelta(minutes=max(self._windows) + 1)
+        until = market_open_at_or_after(around) + span
         stmt = select(news_events.c.ts_event, news_events.c.category).where(
             and_(
                 news_events.c.ts_event > around,
-                news_events.c.ts_event <= around + span,
+                news_events.c.ts_event <= until,
                 news_events.c.importance >= CONTAMINATION_MIN_IMPORTANCE,
             )
         )
@@ -620,6 +635,7 @@ class ReactionJob:
                 windows=self._windows,
                 other_event_ts=others,
                 baseline=baselines[symbol],
+                now=now,
             )
             if not reactions:
                 continue

@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.storage.sentiment import (
     ReactionWindow,
     ensure_sentiment_schema,
@@ -621,3 +622,68 @@ def test_prepocet_kontaminace_nebere_reakce_starsi_sedmi_dnu(tmp_path: Path) -> 
     later = EVENT_TS + CONTAMINATION_REFRESH_LOOKBACK + dt.timedelta(minutes=1)
     assert ContaminationJob(engine, tmp_path / "data").run(later) == 0
     assert es_contamination(engine, event_id)[60] is False
+
+
+# ── Odložená reakce až po uzavření oken (#1574) ─────────────────────
+
+
+def write_open_bars(data_dir: Path, symbol: str, day: dt.date, *, start_price: float) -> None:
+    """Bary dne jen v minutách, kdy podle rozvrhu CME obchod běží (UTC partice)."""
+    directory = data_dir / "derived" / symbol / "bars"
+    directory.mkdir(parents=True, exist_ok=True)
+    start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
+    rows = []
+    for minute in range(24 * 60):
+        ts = start + dt.timedelta(minutes=minute)
+        if is_market_closed(ts):
+            continue
+        price = start_price + minute / 100
+        rows.append(
+            {
+                "ts_min": ts,
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "volume": 1.0,
+            }
+        )
+    pq.write_table(pa.Table.from_pylist(rows), directory / f"{day.isoformat()}.parquet")
+
+
+def test_odlozena_zprava_se_nemeri_pred_uzavrenim_oken_po_otevreni(tmp_path: Path) -> None:
+    """#1574: pátek 21:04 UTC po close. V neděli 22:02 (2 min po otevření) se nevybere
+    ani nezapíše nic; po 23:00 dostane plná okna od otevření. Kontaminace se hledá
+    i po otevření — významná zpráva jiné kategorie v 22:10 kazí okna 15 a 60."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    for symbol in ("ES", "NQ"):
+        write_open_bars(tmp_path / "data", symbol, dt.date(2026, 10, 16), start_price=7000.0)
+        write_open_bars(tmp_path / "data", symbol, dt.date(2026, 10, 18), start_price=7100.0)
+    event_ts = dt.datetime(2026, 10, 16, 21, 4, tzinfo=dt.UTC)
+    event_id = add_event(engine, event_ts, importance=3, title="Páteční zpráva", category="FED")
+    add_event(
+        engine,
+        dt.datetime(2026, 10, 18, 22, 10, tzinfo=dt.UTC),
+        importance=3,
+        title="Nedělní zpráva po otevření",
+        category="GEOPOLITICS",
+    )
+    job = ReactionJob(engine, BarsRepository(tmp_path / "data"))
+    open_ts = dt.datetime(2026, 10, 18, 22, 0, tzinfo=dt.UTC)
+
+    early = open_ts + dt.timedelta(minutes=2)
+    assert all(row[0] != event_id for row in job._pending_events(early, 200))
+    assert job.run(early) == 0
+    assert reaction_windows(engine, event_id) == []
+
+    assert job.run(open_ts + dt.timedelta(minutes=61)) >= 8
+    windows = reaction_windows(engine, event_id)
+    assert sorted({window.window_min for _, window in windows}) == [1, 5, 15, 60]
+    assert all(window.deferred for _, window in windows)
+    es = {window.window_min: window for symbol, window in windows if symbol == "ES"}
+    # Okno 60 od otevření: poslední bar 22:59 (minuta dne 1379), ne bar v době měření
+    base, last = 7000.0 + 1259 / 100, 7100.0 + 1379 / 100  # pá 20:59 a ne 22:59 UTC
+    assert es[60].ret_bp == pytest.approx((last - base) / base * 10_000)
+    contaminated = {minutes: es[minutes].contaminated for minutes in (1, 5, 15, 60)}
+    assert contaminated == {1: False, 5: False, 15: True, 60: True}
