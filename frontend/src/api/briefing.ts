@@ -266,13 +266,6 @@ export async function fetchCliffPrevious(symbol: string): Promise<CliffPrevious 
   return data.rows[0] ?? null
 }
 
-export async function fetchStoredDays(symbol: string): Promise<string[]> {
-  const data = await getJson<{ days: Array<{ date: string }> }>(`/instruments/${symbol}/days`, {
-    days: [],
-  })
-  return data.days.map((day) => day.date)
-}
-
 /** Řádek /volregime — volatilitní režim seance (ADR-0028, #713). */
 export interface VolRegimeRow {
   session_date: string
@@ -559,23 +552,14 @@ export function latestLevels(rows: LevelsRow[]): LevelsRow | null {
   return rows.length > 0 ? rows[rows.length - 1] : null
 }
 
-/** Poslední uložený OBCHODNÍ den před `dateIso` — „včerejšek" pro PDH/PDL/PDC (#1596).
-
-Seznam dnů nese i sobotu a neděli (partice podle UTC dne) a svátky NYSE; ty US
-close nemají, takže je přeskočí jediný predikát obchodního dne `isTradingSessionIso`
-(AGENTS.md) — v pondělí pátek, po svátku den před ním. Chybí-li partice předchozí
-seance, vrátí starší obchodní den; karta ho ukazuje s datem. */
-export function previousSessionDay(days: string[], dateIso: string): string | null {
-  const before = days.filter((day) => day < dateIso && isTradingSessionIso(day)).sort()
-  return before.length > 0 ? before[before.length - 1] : null
-}
-
-/** PDH/PDL/PDC obchodní seance `dayIso` z jejích 1m barů (#1596).
+/** PDH/PDL/PDC obchodní seance `dayIso` z jejích 1m barů (#1596); den vybírá
+`previousTradingSessionIso` (v pondělí pátek, po svátku NYSE den před ním).
 
 Extrémy z celé Globex seance; `last` = PDC: close posledního baru US RTH před
 settle (16:00 ET, zkrácená seance 13:00 ET), ne poslední minuta Globexu — protějšek
 engine `scenario_auto._settle_close` (#1241 bod 5), z něj hlasuje verdikt dne.
-Bez baru v RTH (výpadek dat) null: chybějící settle je mezera, ne cena overnightu. */
+Bez baru v RTH (výpadek dat, chybějící partice) null i pro rozsah: neúplná seance
+je mezera, ne cena overnightu ani starší settle. */
 export function previousSessionRange(bars: BarRow[], dayIso: string): RangeSummary | null {
   const openMs = usOpenMs(dayIso)
   const closeMs = settleMs(dayIso)

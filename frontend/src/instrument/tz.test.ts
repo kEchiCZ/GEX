@@ -3,6 +3,7 @@ import { expect, test } from 'vitest'
 import {
   isTradingSessionIso,
   nextTradingSessionIso,
+  previousTradingSessionIso,
   sessionBoundsUtc,
   sessionDateIso,
   zonedTimeUtc,
@@ -94,4 +95,14 @@ test('isTradingSessionIso / nextTradingSessionIso: víkend nemá seanci (#1309)'
   expect(nextTradingSessionIso('2026-09-24')).toBe('2026-09-24')
   // Nedělní večer už patří pondělní seanci — bez posunu
   expect(nextTradingSessionIso(sessionDateIso(Date.UTC(2026, 8, 27, 22, 0)))).toBe('2026-09-28')
+})
+
+test('previousTradingSessionIso: „včerejšek“ PDC — v pondělí pátek, po svátku den před ním (#1596)', () => {
+  expect(previousTradingSessionIso('2026-10-20')).toBe('2026-10-19') // úterý → pondělí
+  expect(previousTradingSessionIso('2026-10-19')).toBe('2026-10-16') // pondělí → pátek
+  expect(previousTradingSessionIso('2026-10-18')).toBe('2026-10-16') // neděle → pátek
+  expect(previousTradingSessionIso('2026-10-17')).toBe('2026-10-16') // sobota → pátek
+  expect(previousTradingSessionIso('2026-01-20')).toBe('2026-01-16') // po MLK → pátek
+  expect(previousTradingSessionIso('2026-11-27')).toBe('2026-11-25') // po Thanksgiving → středa
+  expect(previousTradingSessionIso('2026-04-06')).toBe('2026-04-02') // po Velkém pátku → čtvrtek
 })

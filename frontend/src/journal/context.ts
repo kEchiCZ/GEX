@@ -19,22 +19,21 @@ import {
   fetchBars,
   fetchCliffToday,
   fetchLevelsSeries,
-  fetchStoredDays,
   gammaRegimeLabel,
-  previousSessionDay,
   previousSessionRange,
 } from '../api/briefing'
 import { fetchTendency } from '../api/tendency'
 import type { TendencyRow } from '../api/tendency'
 import type { JournalProfile } from '../api/journal'
 import { frontContractCode } from '../instrument/expiry'
+import { previousTradingSessionIso } from '../instrument/tz'
 import { pinnedContract } from '../instrument/ticker'
 import { isRollWeek, macroFromHeadline } from './futures'
 import { segmentForTs } from './segments'
 
 /** Verze schématu kontextu — roste, když se změní význam polí.
-2 (#1596): `prev_day` = předchozí obchodní seance (dřív i neděle) a `last` = close
-k settle, ne poslední minuta Globexu. */
+2 (#1596): `prev_day` = obchodní seance před dnem záznamu z kalendáře (dřív poslední
+uložený den, v pondělí neděle) a `last` = close k settle, ne poslední minuta Globexu. */
 export const CONTEXT_VERSION = 2
 
 export interface JournalContextLevel {
@@ -207,19 +206,17 @@ export async function loadJournalContext(input: {
   profile: JournalProfile
 }): Promise<JournalContext> {
   const dayIso = input.tsRef.slice(0, 10)
-  const [levels, bars, cliff, tendency, days, volRegime, macroEvent] = await Promise.all([
+  const prevDayIso = previousTradingSessionIso(dayIso)
+  const [levels, bars, cliff, tendency, prevDayBars, volRegime, macroEvent] = await Promise.all([
     input.expiry ? fetchLevelsSeries(input.symbol, input.expiry, dayIso) : Promise.resolve([]),
     fetchBars(input.symbol, dayIso),
     fetchCliffToday(input.symbol),
     fetchTendency(input.symbol, dayIso),
-    fetchStoredDays(input.symbol),
+    fetchBars(input.symbol, prevDayIso),
     fetchVolRegime(input.symbol, dayIso),
     fetchMacroEvent(dayIso),
   ])
-  const prevDayIso = previousSessionDay(days, dayIso)
-  const prevDay = prevDayIso
-    ? previousSessionRange(await fetchBars(input.symbol, prevDayIso), prevDayIso)
-    : null
+  const prevDay = previousSessionRange(prevDayBars, prevDayIso)
   return composeContext({
     symbol: input.symbol,
     expiry: input.expiry,

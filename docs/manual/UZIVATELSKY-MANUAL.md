@@ -1128,7 +1128,7 @@ běží **odpočet do US openu** (9:30 New York, DST-korektně).
 | **Trend** (v1.16, #1089) | Trend podkladu **shora dolů**: týden, den, 4h, 1h, 15m — per timeframe struktura trhu (HH/HL = rostoucí, LH/LL = klesající) a EMA20/EMA50; ● = struktura i EMA souhlasí, ○ = jen jedna z nich. Nad tabulkou čtení pro den: vyšší TF (týden, den) určuje směr, nižší načasování — souhlas = obchodovat ve směru, nesoulad = nižší TF korigují, čekat na návrat. Počty svíček W 80, D 120, 4h/1h/15m 120 — táž tabulka jako verdikt dne v enginu (#1595); hlasy trendu v uloženém verdiktu jsou ale stav před openem, karta je živá. Málo svíček = „málo dat", nic se nedosazuje. Metoda v ADR-0035. |
 | **Režim a úrovně** | Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště |
 | **Volatilita** | Volatilitní režim dne, expected move a jak často EM drží — viz níže |
-| **Včera a overnight** | Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena. „Včera" je **předchozí obchodní seance** (v pondělí pátek, po svátku NYSE den před ním; datum v závorce). „Včerejší settle" = PDC: close poslední minuty před settle 16:00 ET (zkrácená seance 13:00 ET), stejně jako u verdiktu dne; rozsah = extrémy celé Globex seance. Chybí-li v seanci minuty RTH (výpadek dat), je tu „—", ne poslední cena overnightu (#1596). Totéž PDC bere gap v Ranním checklistu, PDH/PDL/PDC v Úrovních obratu a v grafu i kontext záznamu v deníku. |
+| **Včera a overnight** | Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena. „Včera" je **předchozí obchodní seance** (v pondělí pátek, po svátku NYSE den před ním; datum v závorce). „Včerejší settle" = PDC: close poslední minuty před settle 16:00 ET (zkrácená seance 13:00 ET), stejně jako u verdiktu dne; rozsah = extrémy celé Globex seance. Chybí-li v seanci minuty RTH (výpadek dat, chybějící partice), je u settle i rozsahu „—", ne poslední cena overnightu ani starší seance (#1596). Tutéž seanci berou gap v Ranním checklistu, PDH/PDL/PDC v Úrovních obratu, PDH/PDL v grafu i kontext záznamu v deníku. |
 | **Gamma dnes a přes týden** | Chip „dnes odpadá X % gammy" (kap. 14) + Forward GEX útesy dalších dnů týdne |
 | **Makro kalendář dne** | Dnešní plánované eventy (významné napřed, ❗ = importance ≥ 3) |
 | **ΔOI přes noc** | Změna call/put OI vs. předchozí archivovaný **obchodní** den + top strike movers. V pondělí proti pátku, o víkendu pátek proti čtvrtku (do #1309 se pondělí srovnávalo s nedělí, jejíž archiv nese už pondělní čísla → ΔOI ≈ 0). Počítají se jen striky, které nesou oba archivy — strike mimo včerejší obálku není „nové OI", ale neměřený; součty OI jsou celé |
@@ -1252,7 +1252,7 @@ tendence hlásila short a v RTH nevznikl jediný long setup na NQ.
   Globexu. Do #1595 to platilo jen pro automatický scénář v enginu — verdikt v Briefingu
   bral dál poslední Globex minutu a v pondělí hlasoval „bez dat"; od seance 19. 10. 2026
   verdikt počítá jen engine. Od #1596 berou stejné PDC i karta Včera a overnight,
-  gap v Ranním checklistu, PDH/PDL/PDC v Úrovních obratu a v grafu a kontext deníku
+  gap v Ranním checklistu, PDH/PDL/PDC v Úrovních obratu, PDH/PDL v grafu a kontext deníku
   (dřív předchozí uložený den — v pondělí neděli — a jeho poslední Globex minutu).
 
 **Ranní checklist (kartu najdeš v Briefingu nahoře)**
@@ -2465,7 +2465,7 @@ podkladu**, ne absolutní čísla.
 | **Dynamický flip** | Modelová verze flipu: nula Dyn GEX křivky (BS model, jemnější mřížka). S naměřeným flipem tvoří **flip zónu** (kap. 18). |
 | **Dyn GEX (vrstva)** | Modelované pole NetGEX pro hypotetické ceny přes pásmo a čas — „jakou gammu potká cena na úrovni X v čase T". Zelená tlumí, červená zesiluje. |
 | **Settle** | Vypořádání/konec životnosti expirace — denní ES/NQ opce 20:00 UTC (22:00 SELČ). Pak jejich gamma z trhu zmizí. |
-| **PDC** (previous day close) | Včerejší close = **RTH close předchozí obchodní seance**: close poslední minuty před settle 16:00 ET (zkrácená seance 13:00 ET), v pondělí pátek — ne poslední minuta Globexu. Z něj hlasuje overnight ve verdiktu dne a je to úroveň PDC v cílech automatického scénáře (#1241, #1595), v kartě Včera a overnight, v gapu Ranního checklistu, v Úrovních obratu, v grafu a v kontextu deníku (#1596). |
+| **PDC** (previous day close) | Včerejší close = **RTH close předchozí obchodní seance**: close poslední minuty před settle 16:00 ET (zkrácená seance 13:00 ET), v pondělí pátek — ne poslední minuta Globexu. Z něj hlasuje overnight ve verdiktu dne a je to úroveň PDC v cílech automatického scénáře (#1241, #1595), v kartě Včera a overnight, v gapu Ranního checklistu, v Úrovních obratu a v kontextu deníku (#1596; graf kreslí jen PDH/PDL). |
 | **Gamma crunch** | Růst ATM gammy s blížící se expirací — zajišťovací toky mají večer největší sílu (pin, nebo akcelerace). |
 | **Δ-vážení** | Pruhy profilu × delta opce = kolik futures dealer reálně drží. Večer polarizuje (OTM→0, ITM→1), proto strana pruhů „mizí". |
 | **Call wall / Put wall** | Strike s největší koncentrací NetGEX nad/pod spotem. Pravděpodobnostní úroveň, ne bariéra — tržní význam má jen při dostatečné dominanci vůči zbytku profilu (viz cenovka zdi s %); úrovně se během dne přelévají, u 0DTE výrazně. |

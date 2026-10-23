@@ -7,7 +7,6 @@ import {
   fetchStoredVerdict,
   gammaRegimeLabel,
   latestLevels,
-  previousSessionDay,
   previousSessionRange,
   settleMs,
   usOpenMs,
@@ -225,35 +224,6 @@ describe('fetchStoredVerdict (#1595)', () => {
 describe('CANDLE_LIMITS', () => {
   it('táž tabulka jako engine scenario_auto.CANDLE_LIMITS (#1595)', () => {
     expect(CANDLE_LIMITS).toEqual({ W: 80, D: 120, '240': 120, '60': 120, '15': 120 })
-  })
-})
-
-describe('previousSessionDay', () => {
-  it('poslední uložený obchodní den před datem', () => {
-    expect(previousSessionDay(['2026-08-10', '2026-08-11', '2026-08-13'], '2026-08-13')).toBe(
-      '2026-08-11',
-    )
-  })
-
-  it('v pondělí pátek, ne nedělní ani sobotní partice (#1596)', () => {
-    const days = ['2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19']
-    expect(previousSessionDay(days, '2026-10-19')).toBe('2026-10-16')
-  })
-
-  it('o víkendu pátek — sobota i neděle seanci nemají', () => {
-    expect(previousSessionDay(['2026-10-16', '2026-10-17'], '2026-10-18')).toBe('2026-10-16')
-  })
-
-  it('po svátku NYSE den před ním: po MLK pátek, po Thanksgiving středa', () => {
-    const mlk = ['2026-01-16', '2026-01-17', '2026-01-18', '2026-01-19', '2026-01-20']
-    expect(previousSessionDay(mlk, '2026-01-20')).toBe('2026-01-16')
-    const thanksgiving = ['2026-11-25', '2026-11-26', '2026-11-27']
-    expect(previousSessionDay(thanksgiving, '2026-11-27')).toBe('2026-11-25')
-  })
-
-  it('bez staršího obchodního dne → null', () => {
-    expect(previousSessionDay(['2026-08-13'], '2026-08-13')).toBeNull()
-    expect(previousSessionDay(['2026-10-17', '2026-10-18'], '2026-10-19')).toBeNull()
   })
 })
 
