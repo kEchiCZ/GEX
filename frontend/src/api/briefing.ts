@@ -10,7 +10,7 @@ zonedTimeUtc (#511).
 import { API_BASE } from '../config'
 import type { NewsExpectation, TurnLevel, TypicalReaction, VerdictKind, VerdictVote } from '../instrument/daysummary' // prettier-ignore
 import { VERDICT_LABELS, pragueTime, verdictSummary } from '../instrument/daysummary'
-import { isUsMarketHoliday } from '../instrument/holidays'
+import { isEarlyClose, isUsMarketHoliday } from '../instrument/holidays'
 import { TIMEFRAMES } from '../instrument/trend'
 import type { Candle, TimeframeKey, TrendReport } from '../instrument/trend'
 import { isTradingSessionIso, zonedTimeUtc } from '../instrument/tz'
@@ -443,6 +443,13 @@ export function usOpenMs(dateIso: string): number {
   return zonedTimeUtc('America/New_York', year, month, day, 9, 30)
 }
 
+/** Settle US seance daného dne v epoch ms: 16:00 New York, zkrácená seance 13:00
+(#1308) — protějšek engine `settle.settle_ts`, mění se spolu (#1596). */
+export function settleMs(dateIso: string): number {
+  const [year, month, day] = dateIso.split('-').map(Number)
+  return zonedTimeUtc('America/New_York', year, month, day, isEarlyClose(dateIso) ? 13 : 16, 0)
+}
+
 /** Od kolika minut před US openem engine přepočítává verdikt každou minutu —
 zrcadlo enginu `verdict_writer.VERDICT_WINDOW_MINUTES` (#1595), mění se spolu. */
 export const VERDICT_EVERY_MINUTE_BEFORE_OPEN = 15
@@ -552,10 +559,34 @@ export function latestLevels(rows: LevelsRow[]): LevelsRow | null {
   return rows.length > 0 ? rows[rows.length - 1] : null
 }
 
-/** Poslední uložený den PŘED `dateIso` — včerejší seance pro settle/PDH/PDL. */
-export function previousStoredDay(days: string[], dateIso: string): string | null {
-  const before = days.filter((day) => day < dateIso).sort()
+/** Poslední uložený OBCHODNÍ den před `dateIso` — „včerejšek" pro PDH/PDL/PDC (#1596).
+
+Seznam dnů nese i sobotu a neděli (partice podle UTC dne) a svátky NYSE; ty US
+close nemají, takže je přeskočí jediný predikát obchodního dne `isTradingSessionIso`
+(AGENTS.md) — v pondělí pátek, po svátku den před ním. Chybí-li partice předchozí
+seance, vrátí starší obchodní den; karta ho ukazuje s datem. */
+export function previousSessionDay(days: string[], dateIso: string): string | null {
+  const before = days.filter((day) => day < dateIso && isTradingSessionIso(day)).sort()
   return before.length > 0 ? before[before.length - 1] : null
+}
+
+/** PDH/PDL/PDC obchodní seance `dayIso` z jejích 1m barů (#1596).
+
+Extrémy z celé Globex seance; `last` = PDC: close posledního baru US RTH před
+settle (16:00 ET, zkrácená seance 13:00 ET), ne poslední minuta Globexu — protějšek
+engine `scenario_auto._settle_close` (#1241 bod 5), z něj hlasuje verdikt dne.
+Bez baru v RTH (výpadek dat) null: chybějící settle je mezera, ne cena overnightu. */
+export function previousSessionRange(bars: BarRow[], dayIso: string): RangeSummary | null {
+  const openMs = usOpenMs(dayIso)
+  const closeMs = settleMs(dayIso)
+  let settle: BarRow | null = null
+  for (const bar of bars) {
+    const ts = Date.parse(bar.ts_min)
+    if (ts >= openMs && ts < closeMs) settle = bar
+  }
+  const range = barsRange(bars)
+  if (range === null || settle === null) return null
+  return { ...range, last: settle.close, lastTs: settle.ts_min }
 }
 
 /** Režim gammy pro briefing: znaménko total_gex + poloha spotu vůči flipu. */

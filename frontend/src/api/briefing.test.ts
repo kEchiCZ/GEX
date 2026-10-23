@@ -7,7 +7,9 @@ import {
   fetchStoredVerdict,
   gammaRegimeLabel,
   latestLevels,
-  previousStoredDay,
+  previousSessionDay,
+  previousSessionRange,
+  settleMs,
   usOpenMs,
   verdictCard,
 } from './briefing'
@@ -51,6 +53,17 @@ describe('usOpenMs', () => {
 
   it('9:30 New York = 14:30 UTC v zimě (EST)', () => {
     expect(new Date(usOpenMs('2026-01-15')).toISOString()).toBe('2026-01-15T14:30:00.000Z')
+  })
+})
+
+describe('settleMs', () => {
+  it('16:00 New York = 20:00 UTC v létě, 21:00 UTC v zimě', () => {
+    expect(new Date(settleMs('2026-10-16')).toISOString()).toBe('2026-10-16T20:00:00.000Z')
+    expect(new Date(settleMs('2026-01-16')).toISOString()).toBe('2026-01-16T21:00:00.000Z')
+  })
+
+  it('zkrácená seance po Thanksgiving: 13:00 New York = 18:00 UTC (#1308)', () => {
+    expect(new Date(settleMs('2026-11-27')).toISOString()).toBe('2026-11-27T18:00:00.000Z')
   })
 })
 
@@ -215,15 +228,66 @@ describe('CANDLE_LIMITS', () => {
   })
 })
 
-describe('previousStoredDay', () => {
-  it('poslední uložený den před datem', () => {
-    expect(previousStoredDay(['2026-08-10', '2026-08-11', '2026-08-13'], '2026-08-13')).toBe(
+describe('previousSessionDay', () => {
+  it('poslední uložený obchodní den před datem', () => {
+    expect(previousSessionDay(['2026-08-10', '2026-08-11', '2026-08-13'], '2026-08-13')).toBe(
       '2026-08-11',
     )
   })
 
-  it('bez staršího dne → null', () => {
-    expect(previousStoredDay(['2026-08-13'], '2026-08-13')).toBeNull()
+  it('v pondělí pátek, ne nedělní ani sobotní partice (#1596)', () => {
+    const days = ['2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19']
+    expect(previousSessionDay(days, '2026-10-19')).toBe('2026-10-16')
+  })
+
+  it('o víkendu pátek — sobota i neděle seanci nemají', () => {
+    expect(previousSessionDay(['2026-10-16', '2026-10-17'], '2026-10-18')).toBe('2026-10-16')
+  })
+
+  it('po svátku NYSE den před ním: po MLK pátek, po Thanksgiving středa', () => {
+    const mlk = ['2026-01-16', '2026-01-17', '2026-01-18', '2026-01-19', '2026-01-20']
+    expect(previousSessionDay(mlk, '2026-01-20')).toBe('2026-01-16')
+    const thanksgiving = ['2026-11-25', '2026-11-26', '2026-11-27']
+    expect(previousSessionDay(thanksgiving, '2026-11-27')).toBe('2026-11-25')
+  })
+
+  it('bez staršího obchodního dne → null', () => {
+    expect(previousSessionDay(['2026-08-13'], '2026-08-13')).toBeNull()
+    expect(previousSessionDay(['2026-10-17', '2026-10-18'], '2026-10-19')).toBeNull()
+  })
+})
+
+describe('previousSessionRange', () => {
+  it('PDC = close posledního baru RTH před settle, ne poslední minuta Globexu (#1596)', () => {
+    // Pá 16. 10. 2026 (EDT): RTH 13:30–20:00 UTC, Globex do 21:00 UTC
+    const bars = [
+      bar('2026-10-15T22:00:00Z', 6650, 6640, 6645), // overnight
+      bar('2026-10-16T13:30:00Z', 6660, 6630, 6655),
+      bar('2026-10-16T19:59:00Z', 6672, 6668, 6670), // 15:59 ET — poslední bar RTH
+      bar('2026-10-16T20:00:00Z', 6690, 6670, 6688), // 16:00 ET — po settle
+      bar('2026-10-16T20:59:00Z', 6686, 6620, 6676), // 16:59 ET — konec Globexu
+    ]
+    expect(previousSessionRange(bars, '2026-10-16')).toEqual({
+      high: 6690,
+      low: 6620,
+      last: 6670,
+      lastTs: '2026-10-16T19:59:00Z',
+    })
+  })
+
+  it('zkrácená seance: settle 13:00 ET, bar 13:14 ET už do ní nepatří', () => {
+    // Pá 27. 11. 2026 (EST): settle 18:00 UTC
+    const bars = [
+      bar('2026-11-27T17:59:00Z', 6800, 6790, 6795),
+      bar('2026-11-27T18:14:00Z', 6810, 6795, 6805),
+    ]
+    expect(previousSessionRange(bars, '2026-11-27')?.last).toBe(6795)
+  })
+
+  it('bez baru v RTH (výpadek dat) → null, ne cena overnightu', () => {
+    const bars = [bar('2026-10-15T22:00:00Z', 6650, 6640, 6645)]
+    expect(previousSessionRange(bars, '2026-10-16')).toBeNull()
+    expect(previousSessionRange([], '2026-10-16')).toBeNull()
   })
 })
 

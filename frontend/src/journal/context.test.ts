@@ -32,7 +32,7 @@ const BASE = {
   tsRef: '2026-08-14T14:30:00+00:00',
   bars: [bar(28, 6800), bar(30, 6810), bar(32, 6830)],
   levels: [levels(28, 6790, 100), levels(30, 6805, -50), levels(32, 6820, -80)],
-  prevDayBars: [bar(10, 6700, 6720, 6690)],
+  prevDay: { high: 6720, low: 6690, last: 6700, lastTs: '2026-08-13T19:59:00+00:00' },
   cliff: { session_date: '2026-08-14', cliff_share: 0.15, is_opex: false },
   tendency: [] as TendencyRow[],
   profile: 'futures' as const,

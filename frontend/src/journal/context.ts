@@ -21,7 +21,8 @@ import {
   fetchLevelsSeries,
   fetchStoredDays,
   gammaRegimeLabel,
-  previousStoredDay,
+  previousSessionDay,
+  previousSessionRange,
 } from '../api/briefing'
 import { fetchTendency } from '../api/tendency'
 import type { TendencyRow } from '../api/tendency'
@@ -31,8 +32,10 @@ import { pinnedContract } from '../instrument/ticker'
 import { isRollWeek, macroFromHeadline } from './futures'
 import { segmentForTs } from './segments'
 
-/** Verze schématu kontextu — roste, když se změní význam polí. */
-export const CONTEXT_VERSION = 1
+/** Verze schématu kontextu — roste, když se změní význam polí.
+2 (#1596): `prev_day` = předchozí obchodní seance (dřív i neděle) a `last` = close
+k settle, ne poslední minuta Globexu. */
+export const CONTEXT_VERSION = 2
 
 export interface JournalContextLevel {
   name: string
@@ -80,7 +83,8 @@ export interface ContextInputs {
   tsRef: string
   levels: LevelsRow[]
   bars: BarRow[]
-  prevDayBars: BarRow[]
+  /** Předchozí obchodní seance (`previousSessionRange`); null = bez dat. */
+  prevDay: RangeSummary | null
   cliff: CliffToday | null
   tendency: TendencyRow[]
   /** Profil řídí dělení seance; smb pole se pro ES nepočítají. */
@@ -168,7 +172,7 @@ export function composeContext(input: ContextInputs): JournalContext {
     // Rozsah seance jen DO okamžiku záznamu — pozdější extrémy jsem tehdy
     // nemohl vidět a v retrospektivě by tvořily falešnou jistotu.
     session: Number.isFinite(targetMs) ? barsRange(input.bars, targetMs) : null,
-    prev_day: barsRange(input.prevDayBars),
+    prev_day: input.prevDay,
     cliff_share: input.cliff?.cliff_share ?? null,
     is_opex: input.cliff?.is_opex ?? null,
     tendency_score: tendencyRow?.score ?? null,
@@ -212,15 +216,17 @@ export async function loadJournalContext(input: {
     fetchVolRegime(input.symbol, dayIso),
     fetchMacroEvent(dayIso),
   ])
-  const prevDay = previousStoredDay(days, dayIso)
-  const prevDayBars = prevDay ? await fetchBars(input.symbol, prevDay) : []
+  const prevDayIso = previousSessionDay(days, dayIso)
+  const prevDay = prevDayIso
+    ? previousSessionRange(await fetchBars(input.symbol, prevDayIso), prevDayIso)
+    : null
   return composeContext({
     symbol: input.symbol,
     expiry: input.expiry,
     tsRef: input.tsRef,
     levels,
     bars,
-    prevDayBars,
+    prevDay,
     cliff,
     tendency,
     profile: input.profile,

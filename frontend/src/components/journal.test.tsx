@@ -4,6 +4,7 @@ import { beforeEach, expect, test, vi } from 'vitest'
 import { JournalView } from './JournalView'
 import { journalToMarkdown } from '../api/journal'
 import type { JournalEntry } from '../api/journal'
+import { CONTEXT_VERSION } from '../journal/context'
 
 const useAppStateMock = vi.fn()
 vi.mock('../state/AppState', () => ({
@@ -362,7 +363,7 @@ test('snímek kontextu odejde se záznamem a chybějící zdroj nedosadí nulu (
         tendency_band: string | null
       }
     }
-    expect(body.context.version).toBe(1)
+    expect(body.context.version).toBe(CONTEXT_VERSION)
     expect(body.context.flip).toBe(6805)
     expect(body.context.spot).toBe(6810)
     expect(body.context.dist_to_flip).toBeCloseTo(5)

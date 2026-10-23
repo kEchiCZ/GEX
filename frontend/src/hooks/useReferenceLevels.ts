@@ -1,11 +1,17 @@
 /** Referenční úrovně (#678): fetch barů dnešní + předchozí seance à 60 s.
 
 Jen když je vrstva zapnutá (Traders mode + intraday) — jinak se nefetchuje
-nic. Bary jdou z lehkého GET /bars (#674), předchozí seance z uloženého
-seznamu dnů (previousStoredDay).
+nic. Bary jdou z lehkého GET /bars (#674), předchozí obchodní seance z uloženého
+seznamu dnů (previousSessionDay, #1596).
 */
 import { useEffect, useState } from 'react'
-import { fetchBars, fetchStoredDays, previousStoredDay, usOpenMs } from '../api/briefing'
+import {
+  fetchBars,
+  fetchStoredDays,
+  previousSessionDay,
+  previousSessionRange,
+  usOpenMs,
+} from '../api/briefing'
 import { computeReferenceLevels } from '../instrument/referencelevels'
 import type { ReferenceLevels } from '../instrument/referencelevels'
 
@@ -29,14 +35,16 @@ export function useReferenceLevels(
         fetchBars(symbol, dateIso),
         fetchStoredDays(symbol),
       ])
-      const previous = previousStoredDay(days, dateIso)
-      const prevDayBars = previous ? await fetchBars(symbol, previous) : []
+      const previous = previousSessionDay(days, dateIso)
+      const prevDay = previous
+        ? previousSessionRange(await fetchBars(symbol, previous), previous)
+        : null
       if (cancelled) return
       setLoaded({
         key,
         levels: computeReferenceLevels({
           todayBars,
-          prevDayBars,
+          prevDay,
           usOpenMs: usOpenMs(dateIso),
           nowMs: Date.now(),
         }),

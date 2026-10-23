@@ -30,7 +30,8 @@ import {
   premiumReading,
   premiumTooltip,
   latestLevels,
-  previousStoredDay,
+  previousSessionDay,
+  previousSessionRange,
   usOpenMs,
   verdictCard,
 } from '../api/briefing'
@@ -232,10 +233,10 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
 
   const [bars, setBars] = useState<RangeSummary | null>(null)
   const [overnight, setOvernight] = useState<RangeSummary | null>(null)
+  // Předchozí obchodní seance: PDH/PDL a PDC = close k settle (#1596)
   const [prevDay, setPrevDay] = useState<RangeSummary | null>(null)
-  // Surové bary pro referenční úrovně shrnutí (#1090): PDH/PDL/PDC, ONH/ONL
+  // Surové bary pro referenční úrovně shrnutí (#1090): ONH/ONL, VWAP
   const [todayBars, setTodayBars] = useState<BarRow[]>([])
-  const [prevBars, setPrevBars] = useState<BarRow[]>([])
   const [tendencyBand, setTendencyBand] = useState<string | null>(null)
   const [typical, setTypical] = useState<TypicalReaction[]>([])
   const [prevDate, setPrevDate] = useState<string | null>(null)
@@ -267,11 +268,11 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       setTodayBars(rows)
     })
     void fetchStoredDays(symbol).then(async (days) => {
-      const previous = previousStoredDay(days, dateIso)
+      const previous = previousSessionDay(days, dateIso)
       setPrevDate(previous)
-      const previousBars = previous ? await fetchBars(symbol, previous) : []
-      setPrevDay(previous ? barsRange(previousBars) : null)
-      setPrevBars(previousBars)
+      setPrevDay(
+        previous ? previousSessionRange(await fetchBars(symbol, previous), previous) : null,
+      )
     })
     // Tendence (#350) a typická reakce zpráv (#1090) pro ranní checklist a zprávy dne
     void fetchTendency(symbol).then((rows) =>
@@ -376,10 +377,10 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   // Shrnutí dne (#1090, ADR-0035): úrovně obratu, zprávy s reakcí, uložený verdikt enginu
   const reference = useMemo(
     () =>
-      todayBars.length > 0 || prevBars.length > 0
-        ? computeReferenceLevels({ todayBars, prevDayBars: prevBars, usOpenMs: usOpenMs(dateIso), nowMs: now }) // prettier-ignore
+      todayBars.length > 0 || prevDay !== null
+        ? computeReferenceLevels({ todayBars, prevDay, usOpenMs: usOpenMs(dateIso), nowMs: now }) // prettier-ignore
         : null,
-    [todayBars, prevBars, dateIso, now],
+    [todayBars, prevDay, dateIso, now],
   )
   const dailyEma20 = trend?.byTimeframe.find((row) => row.tf === 'D')?.ema?.ema20 ?? null
   const levelsForTurn = useMemo(

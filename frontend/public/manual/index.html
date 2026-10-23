@@ -1222,7 +1222,7 @@ než opce ráno naceňovaly). Hranice čti spolu se zdmi — zeď těsně za EM
 hranicí je silná konfluence.</li>
 <li><strong>Referenční úrovně</strong> — tlumené tečkované linie <strong>ONH/ONL</strong> (overnight
 high/low do US openu; před openem s příponou „běží&quot;), <strong>PDH/PDL</strong> (extrémy
-předchozí seance) a <strong>VWAP</strong> (objemem vážený průměr dne jako křivka).
+předchozí obchodní seance — v pondělí pátku, po svátku dne před ním) a <strong>VWAP</strong> (objemem vážený průměr dne jako křivka).
 Smysl vrstvy: konfluence — zeď sedící na PDH je jiná informace než zeď
 v prázdnu, protože PDH sleduje i zbytek trhu.</li>
 <li><strong>Chip relativní síly ES vs. NQ</strong> v hlavičce — normalizovaný spread od US
@@ -1285,7 +1285,7 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 </tr>
 <tr>
 <td><strong>Včera a overnight</strong></td>
-<td>Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena. „Včerejší settle&quot; je zatím close poslední minuty Globexu předchozího uloženého dne (v pondělí neděle, tedy „—&quot;), ne close k settle jako PDC verdiktu dne — oprava #1596</td>
+<td>Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena. „Včera&quot; je <strong>předchozí obchodní seance</strong> (v pondělí pátek, po svátku NYSE den před ním; datum v závorce). „Včerejší settle&quot; = PDC: close poslední minuty před settle 16:00 ET (zkrácená seance 13:00 ET), stejně jako u verdiktu dne; rozsah = extrémy celé Globex seance. Chybí-li v seanci minuty RTH (výpadek dat), je tu „—&quot;, ne poslední cena overnightu (#1596). Totéž PDC bere gap v Ranním checklistu, PDH/PDL/PDC v Úrovních obratu a v grafu i kontext záznamu v deníku.</td>
 </tr>
 <tr>
 <td><strong>Gamma dnes a přes týden</strong></td>
@@ -1444,9 +1444,9 @@ nehlasuje (#1584).</li>
 (close k 16:00 ET, po zkrácené seanci k 13:00 ET), ne poslední minuta nedělního
 Globexu. Do #1595 to platilo jen pro automatický scénář v enginu — verdikt v Briefingu
 bral dál poslední Globex minutu a v pondělí hlasoval „bez dat&quot;; od seance 19. 10. 2026
-verdikt počítá jen engine. Karta Včera a overnight, gap v Ranním checklistu
-a PDH/PDL/PDC v Úrovních obratu i v grafu berou zatím předchozí uložený den
-(v pondělí neděli) a jeho poslední Globex minutu (#1596).</li>
+verdikt počítá jen engine. Od #1596 berou stejné PDC i karta Včera a overnight,
+gap v Ranním checklistu, PDH/PDL/PDC v Úrovních obratu a v grafu a kontext deníku
+(dřív předchozí uložený den — v pondělí neděli — a jeho poslední Globex minutu).</li>
 </ul>
 <p><strong>Ranní checklist (kartu najdeš v Briefingu nahoře)</strong></p>
 <ol>
@@ -3044,7 +3044,7 @@ podkladu</strong>, ne absolutní čísla.</p>
 </tr>
 <tr>
 <td><strong>PDC</strong> (previous day close)</td>
-<td>Včerejší close = <strong>RTH close předchozí obchodní seance</strong>: close poslední minuty před settle 16:00 ET (zkrácená seance 13:00 ET), v pondělí pátek — ne poslední minuta Globexu. Z něj hlasuje overnight ve verdiktu dne a je to úroveň PDC v cílech automatického scénáře (#1241, #1595); karty Briefingu a graf zatím berou poslední Globex minutu (#1596).</td>
+<td>Včerejší close = <strong>RTH close předchozí obchodní seance</strong>: close poslední minuty před settle 16:00 ET (zkrácená seance 13:00 ET), v pondělí pátek — ne poslední minuta Globexu. Z něj hlasuje overnight ve verdiktu dne a je to úroveň PDC v cílech automatického scénáře (#1241, #1595), v kartě Včera a overnight, v gapu Ranního checklistu, v Úrovních obratu, v grafu a v kontextu deníku (#1596).</td>
 </tr>
 <tr>
 <td><strong>Gamma crunch</strong></td>
