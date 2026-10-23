@@ -894,7 +894,12 @@ spojení s IBKR, nebo Gateway vyhozená souběhem s mobilem — API port odmít�
   14 dní, front kontrakt expiroval nebo nemá dnešní expiraci → pipeline pak
   čeká na IBKR (čistá instalace, roll během výpadku).
 - **Cyklus pipeline bere spot z tasty** (`spot_override`), takže GEX ani hlídač
-  barů nepočítají nad cenou z doby výpadku.
+  barů nepočítají nad cenou z doby výpadku. Pod mechanikou v6 (#1600, ADR-0057 doplněk
+  23. 10.) má spot cyklu stáří (`compute/spot.resolve_spot`): IBKR ticker (≤ 30 s) → close
+  posledního 5s baru (≤ 60 s) → čerstvá tasty (≤ 30 s). Když není živý žádný zdroj, verdikt
+  dne je neúplný (`missing`: „spot: poslední cena … stará N s“), automatický scénář nevznikne
+  a tendence nehlasuje z polohy ceny. Log `Spot ES: žádný zdroj nemá živou cenu` (jen při
+  otevřeném trhu) / `živá cena zpět`. Pod v5 platí override jako dosud.
 - **Svíčky podkladu**: při stall (3 min bez real-time barů při živém spotu)
   engine každou minutu doplní chybějící minuty z dxFeed Candle
   (`source = tasty_candle`, banner „doplněno" v UI); jedno pomocné DXLink
