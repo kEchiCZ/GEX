@@ -52,9 +52,21 @@ $stream = [IO.File]::OpenRead($file)
 try { [void]$stream.Read($head, 0, $head.Length) } finally { $stream.Dispose() }
 $magic = [Text.Encoding]::ASCII.GetString($head)
 if ($magic -ne 'PGDMP') { Remove-Item $file -Force; throw "Záloha není platný pg_dump (hlavička '$magic')" }
+# Obnovitelnost celého souboru (#1566): pg_restore přečte dump do /dev/null včetně
+# dat — `--list` čte jen hlavičku a TOC, useknutá data by prošla. Bez připojení
+# k DB, jen CPU kontejneru (~1 min). Přes cmd ze stejného důvodu jako pg_dump —
+# PowerShell by binární stdin převedl na text. Selhání nemusí být vada souboru
+# (restart kontejneru), proto se dump nemaže, jen vypadne z rotace jako .invalid.
+$check = cmd /c "docker exec -i $Container pg_restore --file=/dev/null < `"$file`" 2>&1"
+$checkCode = $LASTEXITCODE
+if ($checkCode -ne 0) {
+    $invalid = "$file.invalid"
+    Move-Item $file $invalid -Force
+    throw "pg_restore nad dumpem selhal (kód ${checkCode}: $((@($check) | Select-Object -Last 2) -join ' ')) — soubor přejmenován na $invalid"
+}
 
 $size = (Get-Item $file).Length / 1MB
-Write-Host ("Hotovo: {0:N1} MB" -f $size) -ForegroundColor Green
+Write-Host ("Hotovo: {0:N1} MB, pg_restore přečetl celý dump" -f $size) -ForegroundColor Green
 
 # Rotace — starší zálohy nad limit smazat, ať složka neroste donekonečna
 $old = Get-ChildItem $resolved -Filter 'gexlens-*.dump' | Sort-Object LastWriteTime -Descending | Select-Object -Skip $Keep
