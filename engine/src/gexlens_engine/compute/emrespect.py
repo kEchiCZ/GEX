@@ -11,7 +11,7 @@ fade od hranice pásma a jak výjimečný je průraz. Ukládá se i podíl minut
 v negativní gammě: hypotéza z manuálu kap. 18 („průrazy se koncentrují
 do negativní gammy") se pak doloží přímo nad touto tabulkou (#876).
 
-Zdroje EM v pořadí: snapshoty 0DTE řetězu (mid kotace, retence 14 dní),
+Zdroje EM v pořadí: snapshoty 0DTE řetězu (mid kotace; od #762 se nemažou),
 fallback close prémie z věčného `oi_eod` (#519) — včerejší závěrečný
 straddle jako pre-open odhad. Zdroj se ukládá: obě čísla NEJSOU totéž
 a míchat je do jedné statistiky bez označení by kalibraci falšovalo.
@@ -138,7 +138,10 @@ def classify(
 def negative_gamma(
     spots: dict[dt.datetime, float], flips: dict[dt.datetime, float]
 ) -> tuple[float | None, int]:
-    """(podíl minut se spotem pod flipem, počet společných minut) — viz `negative_share`.
+    """(podíl minut se spotem pod flipem, počet společných minut); bez společných minut (None, 0).
+
+    Hrana (spot == flip) se počítá jako ne-negativní — konzistentně s flip
+    zónou (#209), kde hranice není negativní režim.
 
     Počet minut nese váhu podílu (#1452): seance s 5 minutami flipu nesmí mít
     stejnou váhu jako seance s 1 300 minutami.
@@ -148,14 +151,3 @@ def negative_gamma(
         return None, 0
     below = sum(1 for ts in common if spots[ts] < flips[ts])
     return below / len(common), len(common)
-
-
-def negative_share(
-    spots: dict[dt.datetime, float], flips: dict[dt.datetime, float]
-) -> float | None:
-    """Podíl minut se spotem POD měřeným flipem; None bez společných minut.
-
-    Hrana (spot == flip) se počítá jako ne-negativní — konzistentně s flip
-    zónou (#209), kde hranice není negativní režim.
-    """
-    return negative_gamma(spots, flips)[0]

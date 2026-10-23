@@ -18,7 +18,6 @@ from gexlens_engine.compute.emrespect import (
     StraddleQuote,
     classify,
     negative_gamma,
-    negative_share,
     straddle_em,
 )
 from gexlens_engine.compute.settle import ET_TZ, session_time_utc
@@ -126,8 +125,9 @@ def test_negative_share_hrana_neni_negativni() -> None:
     ts = [US_OPEN + dt.timedelta(minutes=i) for i in range(4)]
     spots = {ts[0]: 7590.0, ts[1]: 7600.0, ts[2]: 7610.0, ts[3]: 7580.0}
     flips = {ts[0]: 7600.0, ts[1]: 7600.0, ts[2]: 7600.0}  # ts[3] bez flipu
-    assert negative_share(spots, flips) == pytest.approx(1 / 3)
-    assert negative_share(spots, {}) is None
+    share, minutes = negative_gamma(spots, flips)
+    assert share == pytest.approx(1 / 3) and minutes == 3
+    assert negative_gamma(spots, {}) == (None, 0)
 
 
 # ── Kolektor nad tmp parquet + sqlite ────────────────────────────────
@@ -189,7 +189,7 @@ def make_db(tmp_path: Path) -> Engine:
 def test_load_flips_bere_levels_pod_expiraci_a_svatek_nejblizsi_pozdejsi(tmp_path: Path) -> None:
     """#1050: levels jsou v derived/{sym}/{expirace}/levels; bez 0DTE (svátek) další expirace."""
     seed_session_files(tmp_path)
-    assert len(load_flips(tmp_path, "ES", SESSION)) == 3
+    assert len(load_flips(tmp_path, "ES", SESSION) or {}) == 3
     # Seance bez vlastní expirace (svátek): levels leží pod nejbližší pozdější
     holiday = SESSION - dt.timedelta(days=1)
     holiday_open = session_time_utc(holiday, 9, 30, ET_TZ)
@@ -403,3 +403,31 @@ async def test_backfill_prepocita_radky_bez_poctu_minut_jen_jednou(tmp_path: Pat
     row = next(r for r in repository.list_for("ES") if r["session_date"] == SESSION.isoformat())
     assert row["negative_gamma_share"] is None and row["negative_gamma_minutes"] == 0
     assert repository.dates_without_gamma("ES") == set()
+
+
+def test_load_flips_shoda_minut_vyhraje_drivejsi_expirace(tmp_path: Path) -> None:
+    """#1452: dva řetězy se stejným počtem minut seance — bere se dřívější expirace."""
+    root = tmp_path / "derived" / "NQ"
+    minutes = [US_OPEN + dt.timedelta(minutes=i) for i in range(2)]
+    for offset, flip in ((1, 24100.0), (2, 24500.0)):
+        expiry = (SESSION + dt.timedelta(days=offset)).strftime("%Y%m%d")
+        write_parquet(
+            root / expiry / "levels" / f"{SESSION.isoformat()}.parquet",
+            {"ts_min": minutes, "flip": [flip, flip]},
+        )
+    assert load_flips(tmp_path, "NQ", SESSION) == dict.fromkeys(minutes, 24100.0)
+
+
+def test_necitelna_particie_seanci_nechava_nevyhodnocenou(tmp_path: Path) -> None:
+    """#1452: nečitelná levels partice → podíl i počet minut NULL (backfill ji zkusí
+    znovu), ne flip sekundárního řetězu a ne „0 minut“ jako konečné měření."""
+    db = make_db(tmp_path)
+    seed_session_files(tmp_path)
+    broken = (
+        tmp_path / "derived" / "ES" / SESSION.strftime("%Y%m%d") / "levels"
+    ) / f"{SESSION.isoformat()}.parquet"
+    broken.write_bytes(b"neni parquet")
+    assert load_flips(tmp_path, "ES", SESSION) is None
+    record = compute_session(tmp_path, db, "ES", SESSION)
+    assert record is not None
+    assert record.negative_gamma_share is None and record.negative_gamma_minutes is None

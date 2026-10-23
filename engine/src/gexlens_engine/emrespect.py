@@ -3,13 +3,13 @@
 Po settle seance klasifikuje den vůči pásmu expected move; při prvním běhu
 doplní dostupnou historii. Zdroje per seance:
 
-* **EM**: snapshoty 0DTE řetězu (mid v první minutě US seance, retence
-  14 dní), fallback close prémie ATM straddlu z věčného `oi_eod` (#519 —
+* **EM**: snapshoty 0DTE řetězu (mid v první minutě US seance; od #762 se
+  nemažou), fallback close prémie ATM straddlu z věčného `oi_eod` (#519 —
   včerejší závěr jako pre-open odhad, od 13. 8.). Starší seance bez obou
   zdrojů se poctivě vynechají — žádný default (zásada ADR-0028).
 * **Průběh dne**: bary do settle (věčný archiv).
 * **Gamma kontext (#876)**: podíl minut se spotem pod měřeným flipem
-  z levels partic (retence 14 dní → u starších NULL).
+  z levels aktivního řetězu a počet těch minut (#1452).
 """
 
 import asyncio
@@ -101,16 +101,20 @@ def load_session_bars(data_dir: Path, symbol: str, session: dt.date) -> _Session
 
 def _session_levels(
     files: list[Path], session: dt.date, boundary: dt.datetime
-) -> tuple[int, dict[dt.datetime, float]]:
-    """(počet minut levels v seanci do settle, flip per minuta) z partic jedné expirace."""
+) -> tuple[int, dict[dt.datetime, float]] | None:
+    """(počet minut levels v seanci do settle, flip per minuta) z partic jedné expirace.
+
+    None = některá partice je nečitelná: počet minut nejde porovnat a výběr
+    aktivního řetězu by mohl vyhrát sekundární řetěz.
+    """
     minutes: set[dt.datetime] = set()
     flips: dict[dt.datetime, float] = {}
     for path in files:
         try:
             table = pq.read_table(path, columns=["ts_min", "flip"])
         except Exception:
-            logger.exception("Levels partice %s nečitelná — přeskočena", path)
-            continue
+            logger.exception("Levels partice %s nečitelná — seance zatím bez podílu gammy", path)
+            return None
         for record in table.to_pylist():
             ts = record["ts_min"]
             if ts is None or trading_session_date(ts) != session or ts > boundary:
@@ -121,8 +125,11 @@ def _session_levels(
     return len(minutes), flips
 
 
-def load_flips(data_dir: Path, symbol: str, session: dt.date) -> dict[dt.datetime, float]:
+def load_flips(data_dir: Path, symbol: str, session: dt.date) -> dict[dt.datetime, float] | None:
     """Měřený flip per minuta seance (do settle) z levels aktivního řetězu; prázdné = levels nejsou.
+
+    None = některá partice kandidáta je nečitelná — seance je nevyhodnocená
+    (podíl i počet minut NULL) a backfill ji zkusí znovu.
 
     Levels nemají vlastní strom jako bary — žijí pod expirací řetězu, který
     engine v seanci sledoval (SPEC 5.1, stejně jako gexfield/oiwalls; cesta
@@ -153,7 +160,10 @@ def load_flips(data_dir: Path, symbol: str, session: dt.date) -> dict[dt.datetim
         files = _session_files(root / expiry / "levels", session)
         if not files:
             continue
-        minutes, flips = _session_levels(files, session, boundary)
+        levels = _session_levels(files, session, boundary)
+        if levels is None:
+            return None
+        minutes, flips = levels
         if minutes > best_minutes:  # shoda → dřívější expirace (pořadí iterace)
             best_minutes, best = minutes, flips
     return best
@@ -260,7 +270,8 @@ def compute_session(data_dir: Path, db: Engine, symbol: str, session: dt.date) -
         reference = close_prem_reference(db, symbol, session)
     if reference is None:
         return None
-    share, minutes = negative_gamma(bars.spots, load_flips(data_dir, symbol, session))
+    flips = load_flips(data_dir, symbol, session)
+    share, minutes = negative_gamma(bars.spots, flips) if flips is not None else (None, None)
     return classify(
         session_date=session,
         symbol=symbol,
@@ -281,7 +292,7 @@ class EmRespectCollector:
     repository: EmRespectRepository
     db: Engine
     data_dir: Path
-    #: Kolik seancí zpět zkusit při backfillu (snapshoty 14 dní + oi_eod od 13. 8.)
+    #: Kolik seancí zpět zkusit při backfillu (chybějící seance a řádky bez počtu minut)
     backfill_days: int = 45
 
     _evaluated_for: dt.date | None = field(default=None, init=False)
@@ -344,7 +355,7 @@ class EmRespectCollector:
             self.repository.upsert(record, now)
         if written or refilled:
             logger.info(
-                "%s: EM respect backfill — %d nových seancí, %d doplněných podílů gammy",
+                "%s: EM respect backfill — %d nových seancí, %d přepočtených řádků (#1452)",
                 self.symbol,
                 written,
                 refilled,
