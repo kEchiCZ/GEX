@@ -28,6 +28,7 @@ Spuštění (z kořene repa, `data` = produkční adresář; URL DB jen z promě
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import os
 import re
@@ -820,6 +821,58 @@ def report_markdown(results: Mapping[str, Sequence[DayPoint]], generated: dt.dat
     return "\n".join(lines)
 
 
+SIDES_COLUMNS = (
+    "symbol",
+    "day",
+    "next_day",
+    "expiry",
+    "role",
+    "spot",
+    "strike",
+    "right",
+    "oi_before",
+    "doi",
+    "net_20",
+    "net_21",
+    "net_22",
+    "buy",
+    "sell",
+    "volume_last",
+    "volume_max",
+)
+
+
+def write_sides_csv(path: Path, results: Mapping[str, Sequence[DayPoint]]) -> None:
+    """Strany všech bodů pro audit a příklady v rozboru (jedna řádka = strana bodu D)."""
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(SIDES_COLUMNS)
+        for points in results.values():
+            for p in points:
+                for s in p.sides:
+                    writer.writerow(
+                        [
+                            p.symbol,
+                            p.day.isoformat(),
+                            p.next_day.isoformat(),
+                            p.expiry,
+                            p.role,
+                            p.spot,
+                            s.strike,
+                            s.right,
+                            s.oi_before,
+                            s.doi,
+                            s.net.get(20),
+                            s.net.get(21),
+                            s.net.get(22),
+                            s.buy,
+                            s.sell,
+                            s.volume_last,
+                            s.volume_max,
+                        ]
+                    )
+
+
 def read_only_engine(url: str) -> Engine:
     """Engine DB, na PostgreSQL v read-only transakcích (skript nikdy nezapisuje)."""
     if url.startswith("postgresql"):
@@ -862,9 +915,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"fa-ratio-1612-{generated:%Y%m%d-%H%M}.md"
     path.write_text(report_markdown(results, generated), encoding="utf-8")
+    sides_path = out_dir / f"fa-ratio-1612-{generated:%Y%m%d-%H%M}-strany.csv"
+    write_sides_csv(sides_path, results)
     for symbol, points in results.items():
         print(f"{symbol}: bodů D {sum(1 for p in points if p.role == 'D+1')}")
     print(f"Report {path}")
+    print(f"Strany {sides_path}")
     return 0
 
 

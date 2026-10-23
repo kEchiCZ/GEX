@@ -266,3 +266,8 @@ def test_report_nesmi_do_data(tmp_path: Path) -> None:
         .read_text("utf-8")
         .startswith("# Poměry")
     )
+    sides = next((tmp_path / "out").glob("fa-ratio-1612-*-strany.csv")).read_text("utf-8")
+    lines = sides.splitlines()
+    assert lines[0].startswith("symbol,day,next_day,expiry,role")
+    assert len(lines) == 1 + 5  # pět stran změřených v obou dnech
+    assert lines[1].startswith(f"NQ,{PREV.isoformat()},{TODAY.isoformat()},{EXPIRY},D+1")
