@@ -656,8 +656,9 @@ def write_open_bars(data_dir: Path, symbol: str, day: dt.date, *, start_price: f
 
 def test_odlozena_zprava_se_nemeri_pred_uzavrenim_oken_po_otevreni(tmp_path: Path) -> None:
     """#1574: pátek 21:04 UTC po close. V neděli 22:02 (2 min po otevření) se nevybere
-    ani nezapíše nic; po 23:00 dostane plná okna od otevření. Kontaminace se hledá
-    i po otevření — významná zpráva jiné kategorie v 22:10 kazí okna 15 a 60."""
+    ani nezapíše nic; po 23:01 dostane plná okna od otevření. Rozsah kontaminace je
+    beze změny (zpráva + 61 min): zpráva v neděli 22:10 okna nekazí — rozsah pro
+    odložené zprávy rozhodne vlastník zvlášť (#1659)."""
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
     ensure_sentiment_schema(engine)
     for symbol in ("ES", "NQ"):
@@ -688,9 +689,8 @@ def test_odlozena_zprava_se_nemeri_pred_uzavrenim_oken_po_otevreni(tmp_path: Pat
     # Okno 60 od otevření: poslední bar 22:59 (minuta dne 1379), ne bar v době měření
     base, last = 7000.0 + 1259 / 100, 7100.0 + 1379 / 100  # pá 20:59 a ne 22:59 UTC
     assert es[60].ret_bp == pytest.approx((last - base) / base * 10_000)
-    contaminated = {minutes: es[minutes].contaminated for minutes in (1, 5, 15, 60)}
-    assert contaminated == {1: False, 5: False, 15: True, 60: True}
-    # Hodinový přepočet K1 počítá týmž rozsahem (ADR-0045 bod 7) — nic nevrátí zpět
+    assert not any(es[minutes].contaminated for minutes in (1, 5, 15, 60))
+    # Hodinový přepočet K1 počítá týmž rozsahem (ADR-0045 bod 7) — nic nezmění
     k1 = ContaminationJob(engine, tmp_path / "data")
     assert k1.run(open_ts + dt.timedelta(minutes=62)) == 0
 
@@ -712,3 +712,22 @@ def test_neodlozena_zprava_pred_close_se_meri_i_behem_nezrale_pauzy(tmp_path: Pa
     assert job.run(dt.datetime(2026, 10, 20, 21, 51, tzinfo=dt.UTC)) >= 8
     windows = reaction_windows(engine, event_id)
     assert windows and not any(window.deferred for _, window in windows)
+
+
+def test_zprava_tesne_pred_close_se_vybere_az_po_zralosti_jako_odlozena(tmp_path: Path) -> None:
+    """#1574: pá 20:59:30 UTC — první bar je až po otevření, takže je odložená. Řez
+    nezralé uzavírky (−5 min) ji v neděli 22:30 nevybere, po 23:01 se změří."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    for symbol in ("ES", "NQ"):
+        write_open_bars(tmp_path / "data", symbol, dt.date(2026, 10, 16), start_price=7000.0)
+        write_open_bars(tmp_path / "data", symbol, dt.date(2026, 10, 18), start_price=7100.0)
+    event_id = add_event(
+        engine, dt.datetime(2026, 10, 16, 20, 59, 30, tzinfo=dt.UTC), importance=3, title="Pá 20:59"
+    )
+    job = ReactionJob(engine, BarsRepository(tmp_path / "data"))
+    sunday = dt.datetime(2026, 10, 18, 22, 30, tzinfo=dt.UTC)
+    assert all(row[0] != event_id for row in job._pending_events(sunday, 200))
+    assert job.run(dt.datetime(2026, 10, 18, 23, 1, tzinfo=dt.UTC)) >= 8
+    windows = reaction_windows(engine, event_id)
+    assert windows and all(window.deferred for _, window in windows)

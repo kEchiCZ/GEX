@@ -22,7 +22,6 @@ from gexlens_news.reactions import (
     compute_reactions,
     excursion_series,
     immature_closure_start,
-    market_open_at_or_after,
     measure_excursion,
     minute_of_day_et,
     percentile_abs,
@@ -373,45 +372,34 @@ NEDELNI_OPEN = dt.datetime(2026, 10, 18, 22, 0, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
-    ("ts", "open_at", "closure"),
+    ("ts", "closure"),
     [
-        # víkend: pá 16:00 CT → ne 17:00 CT
-        (PATEK_PO_CLOSE, NEDELNI_OPEN, dt.datetime(2026, 10, 16, 21, 0, tzinfo=UTC)),
+        # víkend: pá 16:00 CT
+        (PATEK_PO_CLOSE, dt.datetime(2026, 10, 16, 21, 0, tzinfo=UTC)),
         # denní pauza út 16:00–17:00 CT (letní čas)
         (
             dt.datetime(2026, 10, 20, 21, 30, tzinfo=UTC),
-            dt.datetime(2026, 10, 20, 22, 0, tzinfo=UTC),
             dt.datetime(2026, 10, 20, 21, 0, tzinfo=UTC),
         ),
         # zimní čas: pauza 22:00–23:00 UTC
-        (
-            dt.datetime(2026, 11, 4, 22, 10, tzinfo=UTC),
-            dt.datetime(2026, 11, 4, 23, 0, tzinfo=UTC),
-            dt.datetime(2026, 11, 4, 22, 0, tzinfo=UTC),
-        ),
-        # zkrácená seance pá 27. 11.: Globex do 12:15 CT (18:15 UTC), otevření ne 23:00 UTC
+        (dt.datetime(2026, 11, 4, 22, 10, tzinfo=UTC), dt.datetime(2026, 11, 4, 22, 0, tzinfo=UTC)),
+        # zkrácená seance pá 27. 11.: Globex do 12:15 CT (18:15 UTC)
         (
             dt.datetime(2026, 11, 27, 19, 0, tzinfo=UTC),
-            dt.datetime(2026, 11, 29, 23, 0, tzinfo=UTC),
             dt.datetime(2026, 11, 27, 18, 15, tzinfo=UTC),
         ),
-        # Thanksgiving 26. 11.: halt 12:00 CT (18:00 UTC) do 17:00 CT (23:00 UTC)
+        # Thanksgiving 26. 11.: halt 12:00 CT (18:00 UTC)
         (
             dt.datetime(2026, 11, 26, 19, 0, tzinfo=UTC),
-            dt.datetime(2026, 11, 26, 23, 0, tzinfo=UTC),
             dt.datetime(2026, 11, 26, 18, 0, tzinfo=UTC),
         ),
     ],
 )
-def test_hranice_uzavirky_z_rozvrhu(
-    ts: dt.datetime, open_at: dt.datetime, closure: dt.datetime
-) -> None:
-    assert market_open_at_or_after(ts) == open_at
+def test_zacatek_uzavirky_z_rozvrhu(ts: dt.datetime, closure: dt.datetime) -> None:
     assert closure_start_at_or_before(ts) == closure
 
 
-def test_otevreny_trh_hranice_nema() -> None:
-    assert market_open_at_or_after(EVENT) == EVENT
+def test_otevreny_trh_uzavirku_nema() -> None:
     assert closure_start_at_or_before(EVENT) is None
 
 
@@ -444,6 +432,11 @@ def test_odlozena_reakce_az_po_uzavreni_vsech_oken() -> None:
         PATEK_PO_CLOSE, friday + sunday, now=NEDELNI_OPEN + dt.timedelta(minutes=2)
     )
     assert early == []
+    # Rezerva 1 min (ADR-0005): v open + 60 poslední bar okna může být provizorní
+    edge = compute_reactions(
+        PATEK_PO_CLOSE, friday + sunday, now=NEDELNI_OPEN + dt.timedelta(minutes=60)
+    )
+    assert edge == []
     full = compute_reactions(
         PATEK_PO_CLOSE, friday + sunday, now=NEDELNI_OPEN + dt.timedelta(minutes=61)
     )

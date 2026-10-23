@@ -20,10 +20,9 @@ Dvě fáze nad produkční PG (dialektově neutrální — v testech SQLite):
    pravidlem K1 (`reactions.contaminates`, `window_contaminated`) nad
    klasifikací po fázi 1 — kontaminuje jen jiný event s importance ≥ 2 a jinou
    kategorií, ve stejném rozsahu jako `ReactionJob._contaminating`
-   (do začátku oken + 61 min). U deferred reakcí začíná okno prvním obchodovaným
+   (61 min po zprávě). U deferred reakcí začíná okno prvním obchodovaným
    barem — ten se čte z archivu barů (`data/derived/{ES,NQ}/bars`, jen sloupec
-   `ts_min`) a od #1574 se od něj počítá i rozsah kontaminace. Denní okna
-   kontaminaci nemají (vždy False), nemění se. Funkce
+   `ts_min`). Denní okna kontaminaci nemají (vždy False), nemění se. Funkce
    jsou v `gexlens_news.contamination` a sdílí je hodinový přepočet posledních
    7 dní v news-engine (#1522); skript je potřeba pro starší historii.
 

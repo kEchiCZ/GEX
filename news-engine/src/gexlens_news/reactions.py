@@ -207,24 +207,6 @@ def _quarter_floor(ts: dt.datetime) -> dt.datetime:
     return ts.replace(minute=ts.minute - ts.minute % 15, second=0, microsecond=0)
 
 
-def market_open_at_or_after(ts: dt.datetime) -> dt.datetime:
-    """Okamžik ≥ `ts`, kdy podle rozvrhu CME obchod běží (#1574).
-
-    Při otevřeném trhu `ts` samo, jinak konec uzavírky (otevření). Odložená
-    zpráva měří okna od prvního obchodovaného baru; z rozvrhu se tak bez barů
-    pozná, kdy bude mít okna uzavřená.
-    """
-    if not is_market_closed(ts):
-        return ts
-    probe = _quarter_floor(ts)
-    limit = ts + _SCHEDULE_HORIZON
-    while is_market_closed(probe):
-        probe += _SCHEDULE_STEP
-        if probe > limit:
-            raise RuntimeError(f"Rozvrh CME: otevření po {ts.isoformat()} do 5 dní nenalezeno")
-    return probe
-
-
 def closure_start_at_or_before(ts: dt.datetime) -> dt.datetime | None:
     """Začátek uzavírky, která trvá v `ts`; None = trh v `ts` běží (#1574)."""
     if not is_market_closed(ts):
@@ -262,9 +244,7 @@ def reaction_window_start(
 ) -> dt.datetime | None:
     """Začátek oken reakce: čas zprávy, u odložené první obchodovaný bar (#339).
 
-    `ordered` = bary seřazené podle času; None = po zprávě žádný bar. Sdílí ho
-    měření i hledání kontaminace (#1574): kontaminující eventy se hledají
-    v (zpráva, začátek + nejdelší okno + 1 min].
+    `ordered` = bary seřazené podle času; None = po zprávě žádný bar.
     """
     first_traded = _first_at_or_after(ordered, event_ts)
     if first_traded is None:

@@ -30,8 +30,7 @@ from gexlens_news.reactions import DEFAULT_WINDOWS, contaminates, window_contami
 
 logger = logging.getLogger(__name__)
 
-#: Rozsah kontaminujících eventů po začátku oken (u odložené zprávy první bar po
-#: uzavírce, #1574) — jako `ReactionJob._contaminating`
+#: Rozsah kontaminujících eventů po zprávě — jako `ReactionJob._contaminating`
 CONTAMINATION_SPAN = dt.timedelta(minutes=max(DEFAULT_WINDOWS) + 1)
 #: Hodinový přepočet (#1522 D): drift K1 je vidět nejvýš hodinu
 CONTAMINATION_REFRESH_EVERY = dt.timedelta(hours=1)
@@ -98,16 +97,10 @@ class Contaminators:
         )
         return cls([ts for ts, _ in items], [category for _, category in items])
 
-    def around(
-        self, ts: dt.datetime, category: str | None, start: dt.datetime | None = None
-    ) -> list[dt.datetime]:
-        """Kontaminující eventy v (ts, začátek oken + 61 min] — jako `ReactionJob._contaminating`.
-
-        `start` = začátek oken reakce (odložená zpráva: první bar po uzavírce,
-        #1574); bez něj čas zprávy.
-        """
+    def around(self, ts: dt.datetime, category: str | None) -> list[dt.datetime]:
+        """Kontaminující eventy v (ts, ts + 61 min] — jako `ReactionJob._contaminating`."""
         lo = bisect.bisect_right(self.times, ts)
-        hi = bisect.bisect_right(self.times, (start or ts) + CONTAMINATION_SPAN)
+        hi = bisect.bisect_right(self.times, ts + CONTAMINATION_SPAN)
         return [
             self.times[index]
             for index in range(lo, hi)
@@ -147,7 +140,7 @@ def recompute_contamination(
             if first_bar is None:
                 continue
             start = first_bar
-        others = contaminators.around(ts_event, category, start)
+        others = contaminators.around(ts_event, category)
         old = {window: row._mapping[f"cont_{window}"] for window in windows}
         new = {
             window: (
