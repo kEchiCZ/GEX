@@ -20,7 +20,9 @@ from sqlalchemy import (
     String,
     Table,
     func,
+    inspect,
     select,
+    text,
     update,
 )
 from sqlalchemy.engine import Engine
@@ -49,9 +51,16 @@ em_respect_table = Table(
     Column("range_vs_em", Float, nullable=False),
     # Podíl minut v negativní gammě (#876); NULL = levels pro seanci nejsou
     Column("negative_gamma_share", Float, nullable=True),
+    # Z kolika minut (spot i flip aktivního řetězu) podíl vznikl (#1452);
+    # NULL = řádek z doby před #1452, ještě nepřepočtený
+    Column("negative_gamma_minutes", Integer, nullable=True),
     Column("version", Integer, nullable=False),
     Column("computed_at", DateTime(timezone=True), nullable=False),
 )
+
+
+#: Sloupce přidané po založení tabulky — `ensure_schema` je doplní ALTERem
+ADDED_COLUMNS = {"negative_gamma_minutes": "INTEGER"}
 
 
 class EmRespectRepository:
@@ -61,7 +70,16 @@ class EmRespectRepository:
         self._engine = engine
 
     def ensure_schema(self) -> None:
+        """Schéma + aditivní sloupce (vzor `briefing_verdicts_store`, ADR bez alembicu)."""
         em_respect_metadata.create_all(self._engine)
+        table = em_respect_table.name
+        columns = {col["name"] for col in inspect(self._engine).get_columns(table)}
+        added = {name: sql for name, sql in ADDED_COLUMNS.items() if name not in columns}
+        if not added:
+            return
+        with self._engine.begin() as conn:
+            for name, sql_type in added.items():
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
     def existing_dates(self, symbol: str) -> set[dt.date]:
         stmt = select(em_respect_table.c.session_date).where(em_respect_table.c.symbol == symbol)
@@ -69,10 +87,15 @@ class EmRespectRepository:
             return {row.session_date for row in conn.execute(stmt)}
 
     def dates_without_gamma(self, symbol: str) -> set[dt.date]:
-        """Seance bez podílu negativní gammy — kandidáti na doplnění při backfillu (#1050)."""
+        """Seance bez počtu minut podílu negativní gammy — kandidáti na přepočet (#1452).
+
+        Řádky před #1452 (i ty s NULL podílem z doby #1050) počet nemají; po
+        přepočtu ho nesou vždy (0 = levels aktivního řetězu bez flipu), takže
+        se znovu nevybírají — jeden přepočet, ne při každém startu.
+        """
         stmt = select(em_respect_table.c.session_date).where(
             em_respect_table.c.symbol == symbol,
-            em_respect_table.c.negative_gamma_share.is_(None),
+            em_respect_table.c.negative_gamma_minutes.is_(None),
         )
         with self._engine.connect() as conn:
             return {row.session_date for row in conn.execute(stmt)}
@@ -94,6 +117,7 @@ class EmRespectRepository:
             "touch_lower": record.touch_lower,
             "range_vs_em": record.range_vs_em,
             "negative_gamma_share": record.negative_gamma_share,
+            "negative_gamma_minutes": record.negative_gamma_minutes,
             "version": record.version,
             "computed_at": computed_at,
         }

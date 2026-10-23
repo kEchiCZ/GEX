@@ -8,7 +8,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from sqlalchemy import create_engine, insert
+from sqlalchemy import create_engine, insert, inspect, text
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.emrespect import (
@@ -17,6 +17,7 @@ from gexlens_engine.compute.emrespect import (
     EmReference,
     StraddleQuote,
     classify,
+    negative_gamma,
     negative_share,
     straddle_em,
 )
@@ -215,8 +216,9 @@ async def test_backfill_doplni_chybejici_podil_gammy(tmp_path: Path) -> None:
     repository = EmRespectRepository(db)
     stale = compute_session(tmp_path, db, "ES", SESSION)
     assert stale is not None
+    # Řádek před #1452: NULL podíl (stará cesta #1050) a bez počtu minut
     repository.upsert(
-        dataclasses.replace(stale, negative_gamma_share=None),
+        dataclasses.replace(stale, negative_gamma_share=None, negative_gamma_minutes=None),
         session_time_utc(SESSION, 16, 10, ET_TZ),
     )
     assert repository.dates_without_gamma("ES") == {SESSION}
@@ -228,6 +230,7 @@ async def test_backfill_doplni_chybejici_podil_gammy(tmp_path: Path) -> None:
     assert repository.dates_without_gamma("ES") == set()
     row = next(r for r in repository.list_for("ES") if r["session_date"] == SESSION.isoformat())
     assert row["negative_gamma_share"] == pytest.approx(1 / 3)
+    assert row["negative_gamma_minutes"] == 3
 
 
 def test_compute_session_ze_snapshotu(tmp_path: Path) -> None:
@@ -321,3 +324,82 @@ async def test_collector_zapise_po_settle_a_backfill_je_idempotentni(tmp_path: P
     # Druhé volání nic nepřidá (jeden pokus per seance)
     await collector.on_minute(after_settle + dt.timedelta(minutes=5))
     assert len(repository.list_for("ES")) == 1
+
+
+# ── Aktivní řetěz a počet minut podílu (#1452) ───────────────────────
+
+
+def test_negative_gamma_nese_pocet_minut() -> None:
+    minute = dt.timedelta(minutes=1)
+    spots = {US_OPEN: 7600.0, US_OPEN + minute: 7590.0, US_OPEN + 2 * minute: 7610.0}
+    flips = {US_OPEN: 7605.0, US_OPEN + minute: 7605.0}
+    assert negative_gamma(spots, flips) == (1.0, 2)
+    assert negative_gamma(spots, {}) == (None, 0)
+
+
+def test_load_flips_bere_aktivni_retez_ne_prvni_expiraci_se_souborem(tmp_path: Path) -> None:
+    """#1452 (NQ 17. 9. 2026): expirace seance má jen partici předchozího dne bez minut
+    seance; aktivní řetěz (každá minuta) je další expirace; sekundární řetěz (řidší
+    vzorkování) se nebere, i když flip má."""
+    root = tmp_path / "derived" / "NQ"
+    previous = SESSION - dt.timedelta(days=1)
+    minutes = [US_OPEN + dt.timedelta(minutes=i) for i in range(3)]
+    write_parquet(
+        root / SESSION.strftime("%Y%m%d") / "levels" / f"{previous.isoformat()}.parquet",
+        {"ts_min": [session_time_utc(previous, 10, 0, ET_TZ)], "flip": [24000.0]},
+    )
+    active = (SESSION + dt.timedelta(days=1)).strftime("%Y%m%d")
+    write_parquet(
+        root / active / "levels" / f"{SESSION.isoformat()}.parquet",
+        {"ts_min": minutes, "flip": [24100.0, 24100.0, 24100.0]},
+    )
+    secondary = (SESSION + dt.timedelta(days=2)).strftime("%Y%m%d")
+    write_parquet(
+        root / secondary / "levels" / f"{SESSION.isoformat()}.parquet",
+        {"ts_min": minutes[:1], "flip": [24500.0]},
+    )
+    assert load_flips(tmp_path, "NQ", SESSION) == dict.fromkeys(minutes, 24100.0)
+    # Aktivní řetěz bez flipu (mimo pásmo striků) = prázdno, ne flip sekundárního
+    write_parquet(
+        root / active / "levels" / f"{SESSION.isoformat()}.parquet",
+        {"ts_min": minutes, "flip": [None, None, None]},
+    )
+    assert load_flips(tmp_path, "NQ", SESSION) == {}
+
+
+def test_ensure_schema_doplni_sloupec_pocet_minut(tmp_path: Path) -> None:
+    """Aditivní migrace (#1452): tabulka z doby před sloupcem dostane ALTER, data zůstanou."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'old.sqlite'}")
+    with db.begin() as conn:
+        conn.execute(text("CREATE TABLE em_respect (session_date DATE, symbol VARCHAR(16))"))
+        conn.execute(text("INSERT INTO em_respect VALUES ('2026-08-25', 'ES')"))
+    EmRespectRepository(db).ensure_schema()
+    EmRespectRepository(db).ensure_schema()  # idempotentní
+    columns = {col["name"] for col in inspect(db).get_columns("em_respect")}
+    assert "negative_gamma_minutes" in columns
+    with db.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM em_respect")).scalar() == 1
+
+
+async def test_backfill_prepocita_radky_bez_poctu_minut_jen_jednou(tmp_path: Path) -> None:
+    """#1452: řádek bez počtu minut se přepočítá; s počtem 0 (levels bez flipu) už ne."""
+    db = make_db(tmp_path)
+    seed_session_files(tmp_path)
+    levels_dir = tmp_path / "derived" / "ES" / SESSION.strftime("%Y%m%d") / "levels"
+    flips_path = levels_dir / f"{SESSION.isoformat()}.parquet"
+    minutes = [US_OPEN + dt.timedelta(minutes=i) for i in range(3)]
+    write_parquet(flips_path, {"ts_min": minutes, "flip": [None, None, None]})
+    repository = EmRespectRepository(db)
+    stale = compute_session(tmp_path, db, "ES", SESSION)
+    assert stale is not None and stale.negative_gamma_minutes == 0
+    repository.upsert(
+        dataclasses.replace(stale, negative_gamma_minutes=None),
+        session_time_utc(SESSION, 16, 10, ET_TZ),
+    )
+    collector = EmRespectCollector(
+        symbol="ES", repository=repository, db=db, data_dir=tmp_path, backfill_days=3
+    )
+    await collector.on_minute(session_time_utc(SESSION + dt.timedelta(days=1), 9, 0, ET_TZ))
+    row = next(r for r in repository.list_for("ES") if r["session_date"] == SESSION.isoformat())
+    assert row["negative_gamma_share"] is None and row["negative_gamma_minutes"] == 0
+    assert repository.dates_without_gamma("ES") == set()

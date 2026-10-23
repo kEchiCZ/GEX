@@ -29,7 +29,7 @@ from gexlens_engine.compute.emrespect import (
     EmRespect,
     StraddleQuote,
     classify,
-    negative_share,
+    negative_gamma,
     straddle_em,
 )
 from gexlens_engine.compute.settle import (
@@ -99,38 +99,13 @@ def load_session_bars(data_dir: Path, symbol: str, session: dt.date) -> _Session
     return _SessionBars(high=high, low=low, close=close, spots=spots)
 
 
-def _levels_files(data_dir: Path, symbol: str, session: dt.date) -> list[Path]:
-    """Levels partice seance: `derived/{sym}/{expirace}/levels/{den}.parquet`.
-
-    Levels nemají vlastní strom jako bary — žijí pod expirací řetězu, který
-    engine v seanci sledoval (SPEC 5.1, stejně jako gexfield/oiwalls): 0DTE
-    řetěz dne, a když ten den expirace není (svátek — 7. 9. 2026 bez 20260907),
-    nejbližší pozdější. Původní cesta `derived/{sym}/levels/` neexistovala
-    nikde, takže podíl negativní gammy byl od #872 vždy NULL (#1050).
-    """
-    root = data_dir / "derived" / symbol
-    if not root.is_dir():
-        return []
-    session_key = session.strftime("%Y%m%d")
-    expiries = sorted(
-        entry.name
-        for entry in root.iterdir()
-        if entry.is_dir() and len(entry.name) == 8 and entry.name.isdigit()
-    )
-    for expiry in expiries:
-        if expiry < session_key:
-            continue
-        files = _session_files(root / expiry / "levels", session)
-        if files:
-            return files
-    return []
-
-
-def load_flips(data_dir: Path, symbol: str, session: dt.date) -> dict[dt.datetime, float]:
-    """Měřený flip per minuta seance (do settle); prázdné = levels nejsou."""
-    boundary = settle_ts(session)
+def _session_levels(
+    files: list[Path], session: dt.date, boundary: dt.datetime
+) -> tuple[int, dict[dt.datetime, float]]:
+    """(počet minut levels v seanci do settle, flip per minuta) z partic jedné expirace."""
+    minutes: set[dt.datetime] = set()
     flips: dict[dt.datetime, float] = {}
-    for path in _levels_files(data_dir, symbol, session):
+    for path in files:
         try:
             table = pq.read_table(path, columns=["ts_min", "flip"])
         except Exception:
@@ -138,11 +113,50 @@ def load_flips(data_dir: Path, symbol: str, session: dt.date) -> dict[dt.datetim
             continue
         for record in table.to_pylist():
             ts = record["ts_min"]
-            flip = record["flip"]
-            if ts is None or flip is None or trading_session_date(ts) != session or ts > boundary:
+            if ts is None or trading_session_date(ts) != session or ts > boundary:
                 continue
-            flips[ts] = float(flip)
-    return flips
+            minutes.add(ts)
+            if record["flip"] is not None:
+                flips[ts] = float(record["flip"])
+    return len(minutes), flips
+
+
+def load_flips(data_dir: Path, symbol: str, session: dt.date) -> dict[dt.datetime, float]:
+    """Měřený flip per minuta seance (do settle) z levels aktivního řetězu; prázdné = levels nejsou.
+
+    Levels nemají vlastní strom jako bary — žijí pod expirací řetězu, který
+    engine v seanci sledoval (SPEC 5.1, stejně jako gexfield/oiwalls; cesta
+    `derived/{sym}/levels/` neexistovala nikde a podíl byl do #1050 vždy NULL).
+    Aktivní řetěz seance = expirace ≥ seance s nejvíc minutami levels v seanci
+    do settle (#1452): sekundární řetěz se vzorkuje každou 3. minutu a expirace
+    jen s particí předchozího dne minuty seance nemá vůbec (NQ 17. 9. 2026:
+    `20260917/levels/2026-09-16.parquet`). Dřív vyhrála první expirace s jakýmkoli
+    souborem a NQ 17. 9. dostalo NULL místo 1 286 minut flipu. Bez 0DTE (svátek)
+    vyhraje nejbližší pozdější. Flip jiného než aktivního řetězu se nebere — je
+    to gamma jiné expirace.
+    """
+    root = data_dir / "derived" / symbol
+    if not root.is_dir():
+        return {}
+    boundary = settle_ts(session)
+    session_key = session.strftime("%Y%m%d")
+    expiries = sorted(
+        entry.name
+        for entry in root.iterdir()
+        if entry.is_dir() and len(entry.name) == 8 and entry.name.isdigit()
+    )
+    best_minutes = 0
+    best: dict[dt.datetime, float] = {}
+    for expiry in expiries:
+        if expiry < session_key:
+            continue
+        files = _session_files(root / expiry / "levels", session)
+        if not files:
+            continue
+        minutes, flips = _session_levels(files, session, boundary)
+        if minutes > best_minutes:  # shoda → dřívější expirace (pořadí iterace)
+            best_minutes, best = minutes, flips
+    return best
 
 
 def straddle_reference(
@@ -246,7 +260,7 @@ def compute_session(data_dir: Path, db: Engine, symbol: str, session: dt.date) -
         reference = close_prem_reference(db, symbol, session)
     if reference is None:
         return None
-    share = negative_share(bars.spots, load_flips(data_dir, symbol, session))
+    share, minutes = negative_gamma(bars.spots, load_flips(data_dir, symbol, session))
     return classify(
         session_date=session,
         symbol=symbol,
@@ -255,6 +269,7 @@ def compute_session(data_dir: Path, db: Engine, symbol: str, session: dt.date) -
         low=bars.low,
         close=bars.close,
         negative_gamma_share=share,
+        negative_gamma_minutes=minutes,
     )
 
 
@@ -302,10 +317,12 @@ class EmRespectCollector:
         """Doplní chybějící seance a řádky bez podílu negativní gammy (#1050).
 
         Řádky z doby, kdy se levels hledaly ve špatné cestě, mají NULL podíl;
-        přepočet je upsert téže seance, EM a klasifikace vyjdou stejně.
-        Seance, pro které levels opravdu nejsou, zůstávají NULL a zkouší se
-        znovu při dalším startu — levels se nemažou (#762), takže je to
-        jen cena za start, ne trvalá díra.
+        přepočet je upsert téže seance, EM a klasifikace vyjdou stejně. Od #1452
+        se přepočítají řádky bez počtu minut podílu (všechny starší #1452 v okně
+        `backfill_days`): doplní počet i podíl z aktivního řetězu, kde ho dřív
+        vybraná expirace neměla (NQ 17. 9.). Po přepočtu počet nesou vždy, takže
+        další start je už nevybere. Seance, pro kterou levels aktivního řetězu
+        flip nemají, má podíl NULL s počtem 0 — to je měření, ne díra.
         """
         existing = self.repository.existing_dates(self.symbol)
         without_gamma = self.repository.dates_without_gamma(self.symbol)
@@ -321,8 +338,6 @@ class EmRespectCollector:
             if record is None:
                 continue
             if session in existing:
-                if record.negative_gamma_share is None:
-                    continue  # levels pořád nejsou — není co doplnit
                 refilled += 1
             else:
                 written += 1

@@ -302,6 +302,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-23 — výběr řetězu podle existence souboru, ne podle obsahu (#1452).**
+  `em_respect` bral levels z první expirace ≥ seance, která měla jakýkoli soubor dne D−1 nebo D.
+  NQ 17. 9. tak dostal `20260917/levels/2026-09-16.parquet` bez jediné minuty seance a podíl
+  negativní gammy vyšel NULL, ačkoli aktivní řetěz 20260918 měl flip ve všech 1 286 minutách.
+  Tělo issue navíc počítalo minuty flipu přes celou partici, ne v okně seance do settle, takže
+  dvě ze tří „nevysvětlených“ seancí byly ve skutečnosti správný NULL.
+  → Partice se vybírá podle toho, co obsahuje pro dotazované okno (minuty seance do settle),
+  ne podle toho, že existuje. Aktivní řetěz seance = ten s nejvíc minutami. Kontrola dat počítá
+  ve stejném okně jako kód, jinak hledá chybu, která neexistuje.
+
 - **2026-10-23 — odložená reakce zralá podle času zprávy, ne podle začátku svého okna (#1574).**
   Okna odložené zprávy začínají prvním obchodovaným barem po uzavírce, ale úloha ji vybrala
   jako zralou už v `ts_event + 60 min`. Pátek 21:04 tak byl „zralý“ hned po nedělním otevření
