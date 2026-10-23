@@ -19,7 +19,6 @@ import {
   fetchIvRankLatest,
   fetchLevelsSeries,
   fetchOiDelta,
-  fetchStoredDays,
   fetchStoredVerdict,
   fetchTypicalReactions,
   fetchVolRegimeLatest,
@@ -30,7 +29,7 @@ import {
   premiumReading,
   premiumTooltip,
   latestLevels,
-  previousStoredDay,
+  previousSessionRange,
   usOpenMs,
   verdictCard,
 } from '../api/briefing'
@@ -58,7 +57,7 @@ import type { Scenario } from '../api/scenarios'
 import { ScenarioCard } from './ScenarioCard'
 import { TIMEFRAME_LABELS, assessTrends, directionLabel } from '../instrument/trend'
 import type { Candle, TimeframeKey } from '../instrument/trend'
-import { sessionDateIso } from '../instrument/tz'
+import { previousTradingSessionIso, sessionDateIso } from '../instrument/tz'
 import { useAppState } from '../state/AppState'
 
 const REFRESH_MS = 60_000
@@ -229,16 +228,17 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedMove | null }) {
   const { symbol, selectedExpiry, setJournalDraft, setView, regimeInfo, status } = useAppState()
   const dateIso = sessionDateIso()
+  // „Včerejšek“ = předchozí obchodní seance z kalendáře (#1596)
+  const prevDate = useMemo(() => previousTradingSessionIso(dateIso), [dateIso])
 
   const [bars, setBars] = useState<RangeSummary | null>(null)
   const [overnight, setOvernight] = useState<RangeSummary | null>(null)
+  // Předchozí obchodní seance: PDH/PDL a PDC = close k settle (#1596)
   const [prevDay, setPrevDay] = useState<RangeSummary | null>(null)
-  // Surové bary pro referenční úrovně shrnutí (#1090): PDH/PDL/PDC, ONH/ONL
+  // Surové bary pro referenční úrovně shrnutí (#1090): ONH/ONL, VWAP
   const [todayBars, setTodayBars] = useState<BarRow[]>([])
-  const [prevBars, setPrevBars] = useState<BarRow[]>([])
   const [tendencyBand, setTendencyBand] = useState<string | null>(null)
   const [typical, setTypical] = useState<TypicalReaction[]>([])
-  const [prevDate, setPrevDate] = useState<string | null>(null)
   const [levels, setLevels] = useState<LevelsRow | null>(null)
   const [cliff, setCliff] = useState<CliffToday | null>(null)
   // Útes minulé seance (#1241): ranní checklist
@@ -266,13 +266,9 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       setOvernight(barsRange(rows, openMs))
       setTodayBars(rows)
     })
-    void fetchStoredDays(symbol).then(async (days) => {
-      const previous = previousStoredDay(days, dateIso)
-      setPrevDate(previous)
-      const previousBars = previous ? await fetchBars(symbol, previous) : []
-      setPrevDay(previous ? barsRange(previousBars) : null)
-      setPrevBars(previousBars)
-    })
+    void fetchBars(symbol, prevDate).then((rows) =>
+      setPrevDay(previousSessionRange(rows, prevDate)),
+    )
     // Tendence (#350) a typická reakce zpráv (#1090) pro ranní checklist a zprávy dne
     void fetchTendency(symbol).then((rows) =>
       setTendencyBand(rows.length > 0 ? rows[rows.length - 1].band : null),
@@ -302,7 +298,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     void Promise.all(
       SENTIMENT_SYMBOLS.map(async (sym) => [sym, await fetchSentimentState(sym)] as const),
     ).then((pairs) => setSentiments(pairs.map(([sym, info]) => [sym, info])))
-  }, [symbol, selectedExpiry, dateIso])
+  }, [symbol, selectedExpiry, dateIso, prevDate])
 
   useEffect(() => {
     reload()
@@ -376,10 +372,10 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   // Shrnutí dne (#1090, ADR-0035): úrovně obratu, zprávy s reakcí, uložený verdikt enginu
   const reference = useMemo(
     () =>
-      todayBars.length > 0 || prevBars.length > 0
-        ? computeReferenceLevels({ todayBars, prevDayBars: prevBars, usOpenMs: usOpenMs(dateIso), nowMs: now }) // prettier-ignore
+      todayBars.length > 0 || prevDay !== null
+        ? computeReferenceLevels({ todayBars, prevDay, usOpenMs: usOpenMs(dateIso), nowMs: now }) // prettier-ignore
         : null,
-    [todayBars, prevBars, dateIso, now],
+    [todayBars, prevDay, dateIso, now],
   )
   const dailyEma20 = trend?.byTimeframe.find((row) => row.tf === 'D')?.ema?.ema20 ?? null
   const levelsForTurn = useMemo(
@@ -709,7 +705,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
               <tr>
                 <td>
                   Včerejší settle
-                  {prevDate ? ` (${prevDate.slice(5).split('-').reverse().join('.')}.)` : ''}
+                  {` (${prevDate.slice(5).split('-').reverse().join('.')}.)`}
                 </td>
                 <td>{fmt(prevDay?.last)}</td>
               </tr>

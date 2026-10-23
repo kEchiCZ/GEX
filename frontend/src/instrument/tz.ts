@@ -94,6 +94,17 @@ export function nextTradingSessionIso(dateIso: string): string {
   return date.toISOString().slice(0, 10)
 }
 
+/** Poslední obchodní den < `dateIso` — „včerejšek" pro PDH/PDL/PDC (#1596): v pondělí
+pátek, po svátku NYSE den před ním. Z kalendáře, ne ze seznamu uložených dnů: chybí-li
+partice té seance, je to mezera, ne starší settle. */
+export function previousTradingSessionIso(dateIso: string): string {
+  const date = new Date(`${dateIso}T00:00:00Z`)
+  do {
+    date.setUTCDate(date.getUTCDate() - 1)
+  } while (!isTradingSessionIso(date.toISOString().slice(0, 10)))
+  return date.toISOString().slice(0, 10)
+}
+
 /** Hranice obchodního dne `dateIso` v epoch ms: [17:00 CT dne D−1, 17:00 CT dne D).
 
 Protějšek `sessionDateIso` (týž den = tatáž seance). Okno má 24 h (23 h obchodu

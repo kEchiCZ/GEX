@@ -15,15 +15,13 @@ describe('computeReferenceLevels', () => {
     bar('2026-08-13T10:00:00Z', 6425, 6405, 6420),
     bar('2026-08-13T14:00:00Z', 6460, 6415, 6455), // po openu — do ON nepatří
   ]
-  const prevDayBars = [
-    bar('2026-08-12T10:00:00Z', 6395, 6360, 6380),
-    bar('2026-08-12T15:00:00Z', 6405, 6370, 6402),
-  ]
+  // Souhrn předchozí obchodní seance z previousSessionRange (#1596)
+  const prevDay = { high: 6405, low: 6360, last: 6402, lastTs: '2026-08-12T19:59:00Z' }
 
-  it('ONH/ONL jen z barů před US openem, PD extrémy + close z celé seance', () => {
+  it('ONH/ONL jen z barů před US openem, PDH/PDL/PDC ze souhrnu předchozí seance', () => {
     const levels = computeReferenceLevels({
       todayBars,
-      prevDayBars,
+      prevDay,
       usOpenMs: OPEN_MS,
       nowMs: Date.parse('2026-08-13T14:30:00Z'),
     })
@@ -38,7 +36,7 @@ describe('computeReferenceLevels', () => {
   it('před openem je ON okno označené jako běžící', () => {
     const levels = computeReferenceLevels({
       todayBars: todayBars.slice(0, 2),
-      prevDayBars,
+      prevDay,
       usOpenMs: OPEN_MS,
       nowMs: Date.parse('2026-08-13T11:00:00Z'),
     })
@@ -52,7 +50,7 @@ describe('computeReferenceLevels', () => {
         bar('2026-08-13T10:00:00Z', 6410, 6390, 6400, 100), // typical 6400
         bar('2026-08-13T10:01:00Z', 6430, 6410, 6420, 300), // typical 6420
       ],
-      prevDayBars: [],
+      prevDay: null,
       usOpenMs: OPEN_MS,
       nowMs: Date.parse('2026-08-13T11:00:00Z'),
     })
