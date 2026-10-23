@@ -239,6 +239,33 @@ def test_bez_platne_ceny_se_minuta_nezapise(tmp_path: Path) -> None:
     assert _rows(writer) == [] and api.calls == []
 
 
+def test_v6_bez_zive_ceny_neuplny_radek_s_duvodem_a_scenar_nevznikne(tmp_path: Path) -> None:
+    """#1600 (pod v6): pipeline předá místo staré ceny None — hlas overnight „bez dat“,
+    řádek neúplný s důvodem a stářím spotu; první minuta s živou cenou ho přepíše."""
+    clock = _Clock(OPEN)
+    writer = _writer(tmp_path, _full_api(), clock)
+    now = OPEN - dt.timedelta(minutes=5)
+    clock.now = now + dt.timedelta(seconds=5)
+    reason = "spot: poslední cena 7590 (bar) stará 240 s"
+    stale = asyncio.run(writer.on_minute(now, None, _runtime(SESSION), reason))
+    assert stale is not None and not stale.complete and stale.spot is None
+    (row,) = _rows(writer)
+    assert row["missing"] == [reason]
+    overnight = next(vote for vote in row["votes"] if vote["name"] == "overnight")
+    assert overnight["vote"] == 0 and overnight["reason"] == "overnight vs. včerejší close bez dat"
+    # Scénář nad verdiktem bez živé ceny nevznikne (čeká na úplný verdikt)
+    scenarios = ScenariosRepository(writer.repository._engine)
+    scenarios.ensure_schema()
+    generator = ScenarioGenerator("ES", scenarios)
+    asyncio.run(generator.on_minute(now, stale, _runtime(SESSION)))
+    assert not scenarios.exists_auto("ES", SESSION)
+    # Živá cena další minutu: úplný verdikt přepíše neúplný řádek
+    live = _minute(writer, clock, now + dt.timedelta(minutes=1), 7590.0)
+    assert live is not None and live.complete
+    (row,) = _rows(writer)
+    assert row["missing"] == []
+
+
 class _HangingApi(FakeApi):
     """API, které neodpovídá (visící spojení) — čtení se nikdy nedokončí samo."""
 

@@ -312,6 +312,17 @@ chyb**, hlavně diagnostických a provozních.
   přitom nesmí nezralé případy znovu a znovu číst (víkend = stovky zpráv × čtení barů každý cyklus).
   Rozvrh `marketclock` k tomu stačí, bary nejsou potřeba.
 
+- **2026-10-23 — fallback držel poslední cenu tasty i po jejím zestárnutí a cyklus ji bral jako živou (#1600, #1623).**
+  `SpotFallback.resolve` vrací při nečerstvé tasty `price=None`, takže `fallback_price` v `__main__`
+  se neaktualizuje. `spot_override` ho pak vracel bez stáří a minutový cyklus neměl jak poznat,
+  že cena je minuty stará. ES 7. 10. 18:51–18:55 UTC stál spot na 7854,62 (mid), bar měl rozsah
+  7855,5–7857,0; verdikt dne odmítal jen NaN a nulu. Odhalila to rekonstrukce spotu z hlasu
+  `walls_distance` při revizi vah (#1113).
+  → Cena předávaná mezi vrstvami nese okamžik, ke kterému platí (`compute/spot.PriceAt`), a každý
+  spotřebitel rozhoduje o stáří sám. „Poslední známá hodnota“ bez času je zmrzlé číslo
+  (SPEC 3.7). Druhý živý zdroj téhož feedu (close 5s baru) má přednost před cizím zdrojem
+  (tasty mid). Oprava vstupu mechaniky jde pod příznak v6 (ADR-0057 bod 11).
+
 - **2026-10-22 — reference přírůstku z maxima seance potřebuje vlastní reset na hranici seance, dřív ho nesl pokles (#1602).**
   `SetupEngine._flows` a `TendencyEngine._flows` držely referenci objemu přes 17:00 CT.
   - Proti poslední hodnotě to nevadilo: kumulativ IBKR začíná seanci od ~0, první nízké číslo

@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, insert
 from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, SOURCE_MIDPOINT, CumDeltaTracker
 from gexlens_engine.compute.facalibration import FA_MIN_DAYS, AlphaCalibrationPoint
 from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.compute.spot import SpotReading
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
@@ -2424,3 +2425,79 @@ async def test_watchdog_zahodi_visici_davku_oi_a_pusti_dalsi_pipeline(
     await advance_oi_archives([stuck, healthy], math.inf, clock=clock, timeout_s=0.05)
     assert stuck._oi_pass is None
     assert archiver.calls == [po_okne.date()]
+
+
+def test_v6_zivy_spot_ze_zdroju_se_starim(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#1600 (pod v6): verdikt a tendence hlasují jen z živé ceny; stará cena je
+    chybějící vstup s důvodem, GEX výpočet dál s nejčerstvější známou cenou.
+    Varuje se jednou, až po odkladu od startu; pod v5 se nic nemění."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    tuesday = dt.datetime(2026, 10, 20, 15, 0, tzinfo=dt.UTC)  # otevřený trh
+    readings = iter(
+        [
+            SpotReading(7601.25, tuesday, "bar", True),
+            SpotReading(7601.25, tuesday - dt.timedelta(seconds=240), "bar", False),
+            SpotReading(7601.25, tuesday - dt.timedelta(seconds=300), "bar", False),
+            SpotReading(7601.25, tuesday - dt.timedelta(seconds=360), "bar", False),
+            SpotReading(7602.0, tuesday, "ibkr", True),
+        ]
+    )
+    pipeline.spot_reading = lambda: next(readings)
+    pipeline.spot_age_gate = True
+    caplog.set_level(logging.INFO, logger="gexlens_engine")
+    minute = dt.timedelta(minutes=1)
+
+    assert pipeline._live_spot(7600.0, False, tuesday) == (7601.25, None)
+    assert pipeline.spot == 7601.25
+    # V odkladu po startu chybí spot bez varování
+    live, reason = pipeline._live_spot(7600.0, False, tuesday + minute)
+    assert live is None and reason is not None
+    assert reason.startswith("spot: poslední cena 7601.25 (bar) stará")
+    assert pipeline.spot == 7601.25  # GEX výpočet s poslední známou cenou
+    assert pipeline._live_spot(7600.0, False, tuesday + 3 * minute)[0] is None  # varuje
+    assert pipeline._live_spot(7600.0, False, tuesday + 4 * minute)[0] is None  # už ne
+    assert pipeline._live_spot(7600.0, False, tuesday + 5 * minute) == (7602.0, None)
+    warnings = [r for r in caplog.records if "žádný zdroj nemá živou cenu" in r.getMessage()]
+    assert len(warnings) == 1
+    assert any("živá cena zpět (ibkr)" in r.getMessage() for r in caplog.records)
+
+    # Pod v5 spot cyklu jako dosud
+    pipeline.spot_age_gate = False
+    assert pipeline._live_spot(7600.0, False, tuesday) == (7600.0, None)
+
+
+@pytest.mark.parametrize(
+    ("label", "outage_from"),
+    [
+        ("víkend", dt.datetime(2026, 10, 18, 20, 0, tzinfo=dt.UTC)),
+        ("denní pauza", dt.datetime(2026, 10, 20, 21, 10, tzinfo=dt.UTC)),
+    ],
+)
+def test_v6_vypadek_spotu_ze_zavreneho_trhu_varuje_az_po_otevreni(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    caplog: pytest.LogCaptureFixture,
+    label: str,
+    outage_from: dt.datetime,
+) -> None:
+    """#1307 + #1600: při zavřeném trhu se chybějící spot nehlásí a stav se nemění,
+    v odkladu 2 min po otevření taky ne; trvá-li výpadek déle, varuje jednou."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    pipeline.spot_reading = lambda: SpotReading(7600.0, outage_from, "ibkr", False)
+    pipeline.spot_age_gate = True
+    caplog.set_level(logging.INFO, logger="gexlens_engine")
+    ts = outage_from
+    opened: dt.datetime | None = None
+    while opened is None or ts <= opened + dt.timedelta(minutes=5):
+        closed = is_market_closed(ts)
+        if opened is None and not closed:
+            opened = ts
+        assert pipeline._live_spot(7600.0, closed, ts)[0] is None, label
+        warned = [r for r in caplog.records if "žádný zdroj nemá živou cenu" in r.getMessage()]
+        expected = 0 if opened is None or ts < opened + dt.timedelta(minutes=2) else 1
+        assert len(warned) == expected, (label, ts)
+        ts += dt.timedelta(minutes=1)

@@ -36,6 +36,7 @@ from gexlens_engine.compute.setupstats import (
     degraded,
     format_report,
 )
+from gexlens_engine.compute.spot import SPOT_AGE_GATE, SPOT_WATCH_GRACE, SpotReading
 from gexlens_engine.compute.volleaders import detect_concentration
 from gexlens_engine.config import Settings
 from gexlens_engine.emrespect import EmRespectCollector
@@ -360,6 +361,11 @@ class InstrumentPipeline:
     # Cena z aktivního fallbacku (#614): během výpadku IBKR je ticker zamrzlý
     # a cyklus by počítal nad cenou z doby výpadku; None = fallback neběží
     spot_override: Callable[[], float | None] = lambda: None
+    # Spot se stářím (#1600, #1623; ADR-0057 doplněk 23. 10.): pod v6 hlasuje verdikt
+    # dne a tendence jen z živé ceny (IBKR → 5s bar → tasty, `compute/spot`), stará
+    # cena je chybějící vstup. None = zdroj nenapojený (testy) — chování v5
+    spot_reading: Callable[[], SpotReading] | None = None
+    spot_age_gate: bool = SPOT_AGE_GATE
     oi_available: bool = False
     # Snímek OI je definitivní (#463): pořízený po publikačním okně a potvrzený
     # druhým nezměněným čtením. Dokud ne, engine ho po okně obnovuje — jinak by
@@ -433,6 +439,10 @@ class InstrumentPipeline:
     _oi_alerted_day: dt.date | None = field(default=None, repr=False)
     # Stav rozvrhu CME z minulého cyklu (#1307) — z něj hrana otevření trhu
     _market_closed: bool = field(default=False, repr=False)
+    # Poslední stav živosti spotu pod v6 — log jen na přechodu, ne každou minutu;
+    # hlídá se až `SPOT_WATCH_GRACE` po startu a po každém otevření trhu
+    _spot_live: bool = field(default=True, repr=False)
+    _spot_watch_from: dt.datetime | None = field(default=None, repr=False)
     _minute_count: int = field(default=0, repr=False)
     _last_spot: float = field(default=float("nan"), repr=False)
     _backfill_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -1215,6 +1225,46 @@ class InstrumentPipeline:
             self.spot = market
         return self.spot
 
+    def _live_spot(
+        self, spot: float, market_closed: bool, now: dt.datetime
+    ) -> tuple[float | None, str | None]:
+        """Cena, ze které smí hlasovat verdikt a tendence, a důvod, když chybí.
+
+        Pod v5 (nebo bez napojeného zdroje) je to spot cyklu jako dosud. Pod v6
+        (#1600) rozhoduje stáří zdrojů (`compute/spot.resolve_spot`): GEX výpočet
+        a obálka dál běží s nejčerstvější známou cenou (`self.spot`), hlasy ne.
+        Při zavřeném trhu a `SPOT_WATCH_GRACE` po startu a otevření se chybějící
+        spot nehlásí a stav živosti se nemění (#1307): výpadek, který začal
+        o víkendu, varuje až po odkladu po nedělním otevření, ne nikdy.
+        """
+        if not self.spot_age_gate or self.spot_reading is None:
+            return spot, None
+        if market_closed:
+            self._spot_watch_from = None  # odklad začne prvním cyklem otevřeného trhu
+        elif self._spot_watch_from is None:
+            self._spot_watch_from = now + SPOT_WATCH_GRACE
+        reading = self.spot_reading()
+        if reading.price is not None:
+            self.spot = reading.price
+        if reading.fresh:
+            if not self._spot_live:
+                logger.info("Spot %s: živá cena zpět (%s)", self.symbol, reading.source)
+            self._spot_live = True
+            return reading.price, None
+        reason = reading.describe(dt.datetime.now(dt.UTC))
+        # Zavřený trh = žádná upozornění na chybějící data (AGENTS.md, #1307)
+        watching = self._spot_watch_from is not None and now >= self._spot_watch_from
+        if not watching:
+            return None, reason
+        if self._spot_live:
+            logger.warning(
+                "Spot %s: žádný zdroj nemá živou cenu (%s) — verdikt a tendence bez ceny",
+                self.symbol,
+                reason,
+            )
+        self._spot_live = False
+        return None, reason
+
     async def run_minute(self, now: dt.datetime) -> SweepMetrics:
         """Jeden minutový cyklus instrumentu: OI retry, expanze obálky, runtime cyklus."""
         # Očekávají se data? (#1307) Jeden predikát z rozvrhu CME (ADR-0023) pro
@@ -1273,6 +1323,8 @@ class InstrumentPipeline:
                     )
 
         spot = self._current_spot()
+        live_spot, spot_missing = self._live_spot(spot, market_closed, now)
+        spot = self.spot
 
         # Auto-rozšíření denní obálky (ADR-0002) — aktivní i sekundární řetěz (#442)
         await self._expand_secondary(spot, today)
@@ -1336,7 +1388,7 @@ class InstrumentPipeline:
         # Indikátor tendence (#350) — stejný kontrakt: pád nesmí shodit sběr
         if self.tendency_engine is not None:
             try:
-                await self.tendency_engine.on_minute(now, spot, self.runtime)
+                await self.tendency_engine.on_minute(now, live_spot, self.runtime)
             except Exception:
                 logger.exception("Indikátor tendence %s selhal — pokračuji", self.symbol)
         # Sběrač kandidátů T6 (#256) — sám se hlídá na jeden běh denně
@@ -1356,7 +1408,9 @@ class InstrumentPipeline:
         pre_open = None
         if self.verdict_writer is not None:
             try:
-                pre_open = await self.verdict_writer.on_minute(now, spot, self.runtime)
+                pre_open = await self.verdict_writer.on_minute(
+                    now, live_spot, self.runtime, spot_missing
+                )
             except Exception:
                 logger.exception("Verdikt dne %s selhal — pokračuji", self.symbol)
         # Automatický scénář dne (#1173 A) — jednou před US openem z verdiktu téže minuty

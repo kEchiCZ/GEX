@@ -511,7 +511,9 @@ PDC v `api/briefing.previousSessionRange` s hranicí `settleMs` — protějšek 
   seznam chybějících vstupů do `missing` (např. `["gamma útes: HTTP 500"]`) a přepíše jen
   neúplný řádek — úplný nikdy (#1595 e1). Engine, API a frontend se nasazují i vracejí
   společně (ADR-0035 dodatek bod 9).
-  Bez platné ceny (≤ 0, NaN) se minuta nezapíše; čtení vstupů z API má strop 20 s
+  Bez platné ceny (≤ 0, NaN) se minuta nezapíše. Pod mechanikou v6 (#1600) pipeline místo
+  staré ceny předá None: hlas overnight je „bez dat“, řádek neúplný (`missing`: „spot: poslední
+  cena … stará N s“) a automatický scénář nevznikne (oddíl „Degradovaný start a co ještě přebírá tasty“, ADR-0057 doplněk 23. 10.). Čtení vstupů z API má strop 20 s
   (`VERDICT_READ_TIMEOUT_S`, běžně ~2,4 s na symbol) — po něm se minuta nezapíše (log warning),
   aby visící API nezdrželo minutový cyklus sběru dat. Vstupy (PDC = RTH close, spot enginu,
   aktivní expirace, svíčky) a řez verze 3 podle data viz ADR-0035 dodatek.
@@ -894,7 +896,14 @@ spojení s IBKR, nebo Gateway vyhozená souběhem s mobilem — API port odmít�
   14 dní, front kontrakt expiroval nebo nemá dnešní expiraci → pipeline pak
   čeká na IBKR (čistá instalace, roll během výpadku).
 - **Cyklus pipeline bere spot z tasty** (`spot_override`), takže GEX ani hlídač
-  barů nepočítají nad cenou z doby výpadku.
+  barů nepočítají nad cenou z doby výpadku. Pod mechanikou v6 (#1600, ADR-0057 doplněk
+  23. 10.) má spot cyklu stáří (`compute/spot.resolve_spot`): IBKR `ticker.last` (tick ≤ 30 s,
+  mid ne) → close posledního 5s baru (≤ 60 s) → tasty mid hlášený jako čerstvý (poll ≤ 30 s,
+  jen s `GEXLENS_TASTY_SPOT_FALLBACK`). Když není živý žádný zdroj, verdikt dne je neúplný
+  (`missing`: „spot: poslední cena … stará N s“), automatický scénář nevznikne a tendence
+  nehlasuje z polohy ceny; GEX výpočet běží s nejčerstvější známou cenou. Log `Spot ES: žádný
+  zdroj nemá živou cenu` (jen při otevřeném trhu a ne v prvních 2 min po startu a otevření)
+  / `živá cena zpět`. Pod v5 platí override jako dosud.
 - **Svíčky podkladu**: při stall (3 min bez real-time barů při živém spotu)
   engine každou minutu doplní chybějící minuty z dxFeed Candle
   (`source = tasty_candle`, banner „doplněno" v UI); jedno pomocné DXLink
