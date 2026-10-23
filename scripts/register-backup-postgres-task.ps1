@@ -33,13 +33,13 @@ $argument = "--headless `"$pwsh`" -NoProfile -ExecutionPolicy Bypass -Command `"
 $action = New-ScheduledTaskAction -Execute (Join-Path $env:windir 'System32\conhost.exe') -Argument $argument -WorkingDirectory $repo
 # Místní čas, ne UTC (#1277/#1278)
 $trigger = New-LocalWeeklyTrigger -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday -At $At
-# 60 min: čekání na kompaktaci nebo aktualizaci (≤ 45) + dump s kontrolou (~2)
+# 60 min: čekání na kompaktaci nebo aktualizaci (≤ 30) + dump s kontrolou (limit 20, obvykle ~2)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 60) `
     -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-    -Principal $principal -Description 'GEXLens: noční záloha PostgreSQL s kontrolou pg_restore --list a rotací 14 dumpů (#1566)' -Force | Out-Null
+    -Principal $principal -Description 'GEXLens: noční záloha PostgreSQL s kontrolou celým čtením pg_restore a rotací 14 dumpů (#1566)' -Force | Out-Null
 $task = Get-ScheduledTask -TaskName $TaskName
 Write-Host "Registrováno: '$TaskName' — $($task.State); denně $At místního času; log $log"
 Write-Host "Zkouška: Start-ScheduledTask -TaskName '$TaskName'; pak Get-Content '$log' -Tail 5"

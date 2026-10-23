@@ -675,7 +675,7 @@ Pravidla:
 
 - **Produkce pouští výhradně `main`.** `start-prod.ps1 -Build` odmítne stavět z jiné větve nebo ze špinavého stromu (`-Force` = vědomé obejití). Bez `-Build` se jen startují dřív postavené image. Dev pouští libovolnou rozpracovanou větev.
 - **Image se staví v CI, ne doma (#1139, 13. 9. 2026):** po mergi do `main` workflow *Images* postaví `ghcr.io/kechicz/gex-python` (engine, api, news-engine) a `ghcr.io/kechicz/gex-frontend` (tagy `latest` + `sha-<7>`, label `org.opencontainers.image.revision`). Doma se image jen stahují (`docker compose pull`), lokální build zůstává nouzový (`deploy-engine-offhours.ps1 -Build`, `start-prod.ps1 -Build`). Balíčky jsou **veřejné** (repo je veřejné, veřejné balíčky jsou zdarma bez limitu; soukromé by narazily na 500 MB) — stažení nevyžaduje přihlášení. Jednorázově po prvním pushi: na stránce balíčku (GitHub → Packages → gex-python / gex-frontend → Package settings → Change visibility → Public). Do image jde jen to, co Dockerfile kopíruje; `.env*`, `data/`, `docs/` vylučuje `.dockerignore`.
-- **Nasazení po mergi:** `git checkout main && git pull`, pak `.\scripts\deploy-engine-offhours.ps1` (stáhne image, počká na revizi HEAD, restartuje v okně). Starší cesta `.\scripts\start-prod.ps1 -Build` staví lokálně. Před nasazením, které sahá na schéma DB, vždy `.\scripts\backup-postgres.ps1` — izolace dev to nenahrazuje, je to druhá vrstva. Výchozí cíl záloh je od #439 (26. 8.) `D:\Programy\GEX\zalohy-pg` (dumpy zabíraly 3,6 GB na systémovém C:), vlastní složka přes `-Target`. Každý dump skript ověří přes `pg_restore --list` (useknutý soubor smaže a skončí chybou); denně ho pouští úloha GEXLens backup-postgres (kap. 13.6, #1566).
+- **Nasazení po mergi:** `git checkout main && git pull`, pak `.\scripts\deploy-engine-offhours.ps1` (stáhne image, počká na revizi HEAD, restartuje v okně). Starší cesta `.\scripts\start-prod.ps1 -Build` staví lokálně. Před nasazením, které sahá na schéma DB, vždy `.\scripts\backup-postgres.ps1` — izolace dev to nenahrazuje, je to druhá vrstva. Výchozí cíl záloh je od #439 (26. 8.) `D:\Programy\GEX\zalohy-pg` (dumpy zabíraly 3,6 GB na systémovém C:), vlastní složka přes `-Target`. Každý dump skript ověří celým čtením `pg_restore --file=/dev/null` (~1 min CPU kontejneru); při selhání ho přejmenuje na `.invalid` (mimo rotaci) a skončí chybou. Denně ho pouští úloha GEXLens backup-postgres (kap. 13.6, #1566).
 - Dev frontend nese v sidebaru oranžový badge **DEV** (build arg `VITE_GEXLENS_ENV`), ať se okna prohlížeče nespletou.
 - Dev stack je jednorázový: rozbitý dev = `docker compose -f compose.dev.yml down -v`, smazat `data-dev/`, `seed-dev.ps1` znovu.
 - Dev engine má výchozí `clientId 2` (`GEXLENS_DEV_IBKR_CLIENT_ID`), aby se v TWS nepotkal s produkční jedničkou.
@@ -1251,7 +1251,7 @@ data/logs/engine-<YYYYMMDD-HHMM>.log 2>&1`; jinak důkazy o předchozím běhu z
 mají absolutní cesty ke složce repa, k `pwsh.exe` a k logům. Skripty navíc obsahují napevno některé cesty
 tohoto PC (krok 2 postupu). Proto se úlohy musí **znovu zaregistrovat**, když se aplikace přenese na jiný PC,
 když se přesune složka repa nebo po reinstalaci Windows. Na Linux serveru (#1094) se nahrazují jinak
-(poslední sloupec tabulky). Stav k 15. 10. 2026 (`Get-ScheduledTask -TaskName 'GEXLens*'`):
+(poslední sloupec tabulky). Stav k 15. 10. 2026 (`Get-ScheduledTask -TaskName 'GEXLens*'`), backup-postgres od #1566 (23. 10.):
 
 | Úloha | K čemu | Rozvrh (místní čas) | Registrace | Log | Linux server (#1094) |
 |---|---|---|---|---|---|
@@ -1260,7 +1260,7 @@ když se přesune složka repa nebo po reinstalaci Windows. Na Linux serveru (#1
 | GEXLens compact-vhdx | kompaktace VHDX Docker Desktopu nad prahem (VHDX ≥ 40 GB a ≥ 10 GB k vrácení; #1127, #1277, kap. 13.4) | po, st, pá 23:05 a so 10:00 | **jako správce** `pwsh -File scripts/register-compact-vhdx-task.ps1` | `data\logs\compact-vhdx.log` | ne (VHDX má jen Docker Desktop) |
 | GEXLens docker úklid | rollback tagy (3 na službu), build cache starší 7 dnů, osiřelé image; alert `disk_low` do zvonku (#1127, kap. 13.4) | so 08:00 | `pwsh -File scripts/register-docker-cleanup-task.ps1` | `data\logs\docker-cleanup.log` | potřeba, ale skript je jen pro Windows (APPDATA, VHDX, Task Scheduler) → úklid a hlídka místa na serveru #1567 |
 | GEXLens walk-forward | noční walk-forward parametrů setupů, jen report (ADR-0034, kap. 12) | po–pá 23:30 | `pwsh -File scripts/register-walkforward-task.ps1` (účet s `docker` a `uv`) | `data\reports\walkforward-nightly.log` | `scripts/systemd/gexlens-walkforward.{service,timer}`; předpoklady: pásmo Europe/Prague (timer je v místním čase serveru), `uv` v PATH služby, `pwsh` v `/usr/bin`, uživatel `gex` ve skupině `docker` (#1567) |
-| GEXLens backup-postgres | noční záloha PostgreSQL: `backup-postgres.ps1` (dump, hlavička PGDMP, `pg_restore --list`, rotace 14 dumpů v `D:\Programy\GEX\zalohy-pg`); čeká na zámek údržby (kompaktace, aktualizace) a deploy; selhání a dump starší 36 h = upozornění Noční údržba (#1566) | denně 23:50 | `pwsh -File scripts/register-backup-postgres-task.ps1` | `%LOCALAPPDATA%\GEXLens\logsackup-postgres.log` | potřeba: timer systemd s `pg_dump` a kopie mimo server (#1094) |
+| GEXLens backup-postgres | noční záloha PostgreSQL: `backup-postgres.ps1` (dump, hlavička PGDMP, celé čtení `pg_restore`, rotace 14 dumpů v `D:\Programy\GEX\zalohy-pg`) s limitem 20 min; čeká na zámek údržby (kompaktace, aktualizace), deploy a ruční zálohu; selhání dumpu = upozornění Noční údržba, přeskočení (aplikace vypnutá, Docker neodpovídá) jen při dumpu starším 36 h (#1566) | denně 23:50 | `pwsh -File scripts/register-backup-postgres-task.ps1` | `%LOCALAPPDATA%\GEXLens\logs\backup-postgres.log` | potřeba: timer systemd s `pg_dump` a kopie mimo server (#1094) |
 
 Jednorázové úlohy `GEXLens-deploy-engine` a `GEXLens-deploy-engine-600` ze srpna 2026 (odložený deploy
 přes `scripts/deploy-engine-offhours.cmd`) už proběhly a vlastník je 15. 10. 2026 smazal; nepřenášejí se. Pravidelnou zálohu PG dělá od #1566
@@ -1275,19 +1275,19 @@ Dumpy leží na D:, stejně jako VHDX — selhání disku D: přežije jen kopie
      v `compact-docker-vhdx.ps1`). V Docker Desktopu nastav Settings → Resources → Advanced → Disk image
      location na `D:\Programy\Docker\DockerDesktopWSL`. Jinak kompaktace skončí `VHDX nenalezen` bez
      upozornění a VHDX poroste (12. 9. 2026 plný disk shodil Docker).
-   - Cíl záloh PG `D:\Programy\GEX\zalohy-pg` (výchozí `-Target` v `backup-postgres.ps1` a `-BackupTarget`
-     v `update-wsl-docker-offhours.ps1`). Bez zapisovatelné složky záloha selže a update-offhours Docker
-     Desktop neaktualizuje.
+   - Cíl záloh PG `D:\Programy\GEX\zalohy-pg` (výchozí `-Target` v `backup-postgres.ps1`
+     a `backup-postgres-nightly.ps1`, `-BackupTarget` v `update-wsl-docker-offhours.ps1`). Bez zapisovatelné
+     složky záloha selže, noční úloha upozorní a update-offhours Docker Desktop neaktualizuje.
    - Docker Desktop v `C:\Program Files\Docker\Docker` (kompaktace ho po sobě spouští touto cestou).
 3. PowerShell 7: úloha volá `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe` (alias instalace
    z Microsoft Store, přežije aktualizaci verze); když chybí, použije `pwsh` z PATH v okamžiku registrace.
    Spustitelný soubor akce Task Scheduler v PATH uživatele nehledá, proto plná cesta; skripty pak PATH
-   uživatele vidí (`uv` v `~\.local\bin` stačí). Hlídač a update-offhours volají pwsh přes
+   uživatele vidí (`uv` v `~\.local\bin` stačí). Hlídač, update-offhours a backup-postgres volají pwsh přes
    `conhost.exe --headless` (bez okna).
 4. `uv sync --all-packages`: hlídač Dockeru bere rozvrh trhu se svátky z Pythonu v `.venv` repa
    (bez něj náhradou `Get-GlobexClock` bez svátků, s varováním v logu). Walk-forward potřebuje `uv`.
 5. Proměnné v `.env`:
-   - hlídač, update-offhours a compact-vhdx posílají upozornění na Telegram mimo Docker
+   - hlídač, update-offhours, compact-vhdx a backup-postgres posílají upozornění na Telegram mimo Docker
      (`scripts/lib/OpsAlert.ps1`), když jsou `GEXLENS_PUSH_TELEGRAM_TOKEN`
      a `GEXLENS_PUSH_TELEGRAM_CHAT_ID` a v Nastavení → Notifikace je zapnutý přepínač **Noční údržba
      selhala**; když API neodpoví, pošle se i tak. Bez proměnných se jen zapíše do logu;
@@ -1296,9 +1296,9 @@ Dumpy leží na D:, stejně jako VHDX — selhání disku D: přežije jen kopie
 6. Defender → **Řízený přístup ke složkám**: když je zapnutý a repo leží v chráněné složce (Dokumenty,
    Plocha), pwsh do `data\` nezapíše (`Could not find file`, událost 1123) a compact-vhdx, docker úklid
    a walk-forward neuloží log ani report. Repo dej mimo chráněné složky, nebo mezi povolené aplikace přidej
-   `pwsh.exe` (alias i skutečnou cestu) a `python.exe` z `.venv`. Hlídač a update-offhours proto logují
-   do `%LOCALAPPDATA%`.
-7. Bez správce zaregistruj docker-watchdog, docker úklid a walk-forward. V terminálu **jako správce**
+   `pwsh.exe` (alias i skutečnou cestu) a `python.exe` z `.venv`. Hlídač, update-offhours a backup-postgres
+   proto logují do `%LOCALAPPDATA%`.
+7. Bez správce zaregistruj docker-watchdog, docker úklid, walk-forward a backup-postgres. V terminálu **jako správce**
    (Win+X → Terminál (správce)) update-offhours a compact-vhdx.
 8. Úlohy běží pod účtem, který je zaregistroval, a jen když je ten účet přihlášený
    (`LogonType Interactive`). Po restartu se tedy PC musí přihlásit.
@@ -1306,12 +1306,14 @@ Dumpy leží na D:, stejně jako VHDX — selhání disku D: přežije jen kopie
    Globexu 23:00–24:00). Zavřený trh si ověřují compact-vhdx, update-offhours a walk-forward (#1568): v jiném
    pásmu nebo v týdnech posunu letního času (pauza 22:00–23:00 SEČ, AGENTS.md) běh přeskočí. Walk-forward
    v těch týdnech dá report jen v pátek (23:30 SEČ je už víkendová zavírka); docker úklid v sobotu bránu
-   nepotřebuje.
+   nepotřebuje. Backup-postgres bránu trhu nemá (`pg_dump` sběr nezastaví), v těch týdnech zálohuje
+   v otevřeném trhu.
    Čas změníš parametrem `-At` (u compact-vhdx `-At` = sobota a `-WeekdayAt` = po, st, pá; hlídač
    `-EveryMinutes`).
 10. Kontrola hned po registraci: `Start-ScheduledTask -TaskName 'GEXLens docker-watchdog'` (při běžícím
     Dockeru nic nedělá) a `Start-ScheduledTask -TaskName 'GEXLens walk-forward'` (jen report; za otevřeného trhu jen řádek
-    „walk-forward se přeskakuje“ v logu, #1568).
+    „walk-forward se přeskakuje“ v logu, #1568) a `Start-ScheduledTask -TaskName 'GEXLens backup-postgres'` (nový dump
+    v `D:\Programy\GEX\zalohy-pg`, řádek „Noční záloha PG hotová“ v `%LOCALAPPDATA%\GEXLens\logs\backup-postgres.log`).
     Za minutu `Get-ScheduledTask -TaskName 'GEXLens*' | Get-ScheduledTaskInfo`: `LastTaskResult` 0
     (267011 = ještě neběžela) a vyplněný `NextRunTime`; u walk-forwardu i nový čas změny logu (hlídač
     zapisuje log jen při výpadku). Elevované úlohy zkontroluj ráno po první pauze. Konzolový `-DryRun`

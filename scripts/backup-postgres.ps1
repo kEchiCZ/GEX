@@ -52,19 +52,21 @@ $stream = [IO.File]::OpenRead($file)
 try { [void]$stream.Read($head, 0, $head.Length) } finally { $stream.Dispose() }
 $magic = [Text.Encoding]::ASCII.GetString($head)
 if ($magic -ne 'PGDMP') { Remove-Item $file -Force; throw "Záloha není platný pg_dump (hlavička '$magic')" }
-# Čitelnost celého obsahu (#1566): pg_restore --list přečte TOC dumpu; useknutý
-# nebo poškozený soubor tu selže, ne až při obnově. Přes cmd ze stejného důvodu
-# jako pg_dump — PowerShell by binární stdin převedl na text.
-$toc = cmd /c "docker exec -i $Container pg_restore --list < `"$file`" 2>&1"
-$tocCode = $LASTEXITCODE
-$entries = @($toc | Where-Object { $_ -and $_ -notmatch '^\s*;' }).Count
-if ($tocCode -ne 0 -or $entries -eq 0) {
-    Remove-Item $file -Force
-    throw "pg_restore --list nad dumpem selhal (kód $tocCode, položek $entries) — záloha smazána"
+# Obnovitelnost celého souboru (#1566): pg_restore přečte dump do /dev/null včetně
+# dat — `--list` čte jen hlavičku a TOC, useknutá data by prošla. Bez připojení
+# k DB, jen CPU kontejneru (~1 min). Přes cmd ze stejného důvodu jako pg_dump —
+# PowerShell by binární stdin převedl na text. Selhání nemusí být vada souboru
+# (restart kontejneru), proto se dump nemaže, jen vypadne z rotace jako .invalid.
+$check = cmd /c "docker exec -i $Container pg_restore --file=/dev/null < `"$file`" 2>&1"
+$checkCode = $LASTEXITCODE
+if ($checkCode -ne 0) {
+    $invalid = "$file.invalid"
+    Move-Item $file $invalid -Force
+    throw "pg_restore nad dumpem selhal (kód ${checkCode}: $((@($check) | Select-Object -Last 2) -join ' ')) — soubor přejmenován na $invalid"
 }
 
 $size = (Get-Item $file).Length / 1MB
-Write-Host ("Hotovo: {0:N1} MB, pg_restore --list: {1} položek" -f $size, $entries) -ForegroundColor Green
+Write-Host ("Hotovo: {0:N1} MB, pg_restore přečetl celý dump" -f $size) -ForegroundColor Green
 
 # Rotace — starší zálohy nad limit smazat, ať složka neroste donekonečna
 $old = Get-ChildItem $resolved -Filter 'gexlens-*.dump' | Sort-Object LastWriteTime -Descending | Select-Object -Skip $Keep

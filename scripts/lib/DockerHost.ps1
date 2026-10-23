@@ -97,6 +97,12 @@ function Get-BusyJobs([string]$Pattern) {
         Sort-Object -Unique)
 }
 
+# Noční záloha PG (#1566): přeskočený běh se hlásí, až je poslední dump starší než
+# $MaxAgeHours (druhá noc za sebou); $null = žádný dump, hlásit hned
+function Test-PgBackupStale($LastWriteTime, [double]$MaxAgeHours, [datetime]$Now = (Get-Date)) {
+    $null -eq $LastWriteTime -or ($Now - [datetime]$LastWriteTime).TotalHours -gt $MaxAgeHours
+}
+
 # Zámek údržby Dockeru (#1552): kompaktace VHDX a aktualizace WSL / Docker
 # Desktopu se nesmí potkat (diskpart drží datový VHDX, instalátor restartuje VM)
 # a hlídač je musí poznat i jako neelevovaný proces. Soubor nese jméno úlohy

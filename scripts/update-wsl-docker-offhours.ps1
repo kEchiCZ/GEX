@@ -12,7 +12,7 @@
 #   2) WSL: `wsl --update`; změnila-li se verze → `docker desktop restart`,
 #      kontrola kontejnerů gex-* a spojení enginu s IBKR (/status);
 #   3) Docker Desktop: `docker desktop update --check-only`; je-li novější verze →
-#      čerstvá záloha PG (backup-postgres.ps1) + `pg_restore --list` nad dumpem
+#      čerstvá záloha PG (backup-postgres.ps1 ji ověří celým čtením pg_restore)
 #      (bez úspěšné zálohy se NEaktualizuje), přesné počty řádků všech tabulek,
 #      `docker desktop update --quiet`, nová verze, kontejnery, engine, počty
 #      řádků po (žádná tabulka nesmí zmizet ani ztratit polovinu řádků — instalátor
@@ -154,8 +154,8 @@ try {
         $dump = Get-ChildItem $BackupTarget -Filter 'gexlens-*.dump' | Where-Object { $_.LastWriteTime -ge $started.AddMinutes(-1) } |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if (-not $dump) { return "Docker Desktop $ddBefore → $available neaktualizován: čerstvý dump v $BackupTarget nenalezen." }
-        # Čitelnost (pg_restore --list) ověřil backup-postgres.ps1 — při selhání by vyhodil výjimku výše (#1566)
-        Write-Step ("Záloha PG {0} ({1:N0} MB) ověřena pg_restore --list." -f $dump.Name, ($dump.Length / 1MB))
+        # Obnovitelnost (pg_restore celým čtením) ověřil backup-postgres.ps1 — při selhání by vyhodil výjimku výše (#1566)
+        Write-Step ("Záloha PG {0} ({1:N0} MB) ověřena pg_restore celým čtením." -f $dump.Name, ($dump.Length / 1MB))
 
         $countsBefore = Get-PgRowCounts
         if (-not $countsBefore) { return "Docker Desktop $ddBefore → $available neaktualizován: počty řádků PG nejde načíst." }

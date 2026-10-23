@@ -195,3 +195,14 @@ def test_zamek_mrtveho_drzitele_se_uklidi(tmp_path: Path) -> None:
         )
     )
     assert result == {"holder": None, "exists": False, "taken": True}
+
+
+def test_zaloha_pg_hlasi_az_starou_zalohu() -> None:
+    # #1566: přeskočená noc se hlásí až druhou noc za sebou (dump > 36 h), bez dumpu hned
+    result = _pwsh(
+        "$now = [datetime]'2026-10-23T23:50:00'\n"
+        "@{ none = (Test-PgBackupStale $null 36 $now); "
+        "fresh = (Test-PgBackupStale ([datetime]'2026-10-22T23:51:00') 36 $now); "
+        "stale = (Test-PgBackupStale ([datetime]'2026-10-21T23:51:00') 36 $now) }"
+    )
+    assert result == {"none": True, "fresh": False, "stale": True}
