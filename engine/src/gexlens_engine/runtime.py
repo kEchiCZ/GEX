@@ -858,8 +858,8 @@ class EngineRuntime:
             )
         elif not tracker.minute_measured:
             # Mezera trade větve (jen zdroj tisků): netflow se nepíše, značka
-            # minuty ano — kalibrace α podle ní vynechá den s mezerou i u
-            # sekundáru, jehož řádek flow se zahazuje (ADR-0057 bod 6, #1460)
+            # minuty ano (ADR-0057 bod 6, #1460). Kalibrace ρ (v6, ADR-0061) ji
+            # nečte, platný den pozná ze snímků; spotřebitele řeší #1667
             await asyncio.to_thread(
                 self.writer.write_netgap,
                 self.symbol,

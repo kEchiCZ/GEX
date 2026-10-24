@@ -464,7 +464,14 @@ def _rho_point(
         oi_repository, symbol, expiry, next_day, session, publication_utc
     )
     if not oi_after and not oi_repository.values_for(symbol, expiry, next_day):
-        return None  # archiv dalšího dne řetěz (zatím) nenese
+        logger.info(
+            "Kalibrace ρ %s %s %s: archiv %s řetěz (zatím) nenese — bez bodu",
+            symbol,
+            expiry,
+            session,
+            next_day,
+        )
+        return None
     coverage = snapshot_session_volumes(chain_dir, session)
     problem = coverage.problem()
     if problem is not None:

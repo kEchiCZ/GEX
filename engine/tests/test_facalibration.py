@@ -737,6 +737,18 @@ def test_v6_rho_z_objemu_retezu_d1_ne_d2(
     assert _collect_v6(settings, oi_repo, alpha_repo, today) is None  # dedup history_exists
 
 
+def test_v5_bere_nejvzdalenejsi_retez_d2_beze_zmeny(tmp_path: Path) -> None:
+    """Regrese v5 (ADR-0061 bod 6): pod v5 vyhrává D+2 s netflow po rollu (#1580)."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_day(settings, oi_repo, doi=40.0, expiry=EXPIRY_D1)
+    _seed_day(settings, oi_repo, doi=90.0, expiry=EXPIRY_D2)
+    legacy = _collect(settings, oi_repo, alpha_repo)
+    assert legacy is not None and legacy.expiry == EXPIRY_D2
+    assert legacy.point.ratio_median == pytest.approx(0.9)
+    state = alpha_repo.get("ES")
+    assert state is not None and state.source == SOURCE_MIDPOINT
+
+
 def test_v6_strana_s_prevahou_prodeje_a_rostoucim_oi_da_kladny_bod(tmp_path: Path) -> None:
     """#1612: OI roste i na stranách s převahou prodeje — ρ znaménko toku nečte (netflow žádné)."""
     settings, oi_repo, alpha_repo = _repos(tmp_path)

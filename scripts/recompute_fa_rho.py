@@ -181,9 +181,11 @@ def replay_symbol(
             )
         finally:
             logger.removeHandler(handler)
+        # Zpráva nese „{expirace} {seance}“ (bez řetězu „{symbol} {seance}“); samotné
+        # datum by spárovalo i zmínku dalšího dne archivu jiné seance
         for message in handler.messages:
             for session, row in rows.items():
-                if f" {session.isoformat()}" in message:
+                if f" {row.expiry or symbol} {session.isoformat()}:" in message:
                     row.log.append(message)
     with memory.connect() as conn:
         history = list(
