@@ -5,6 +5,9 @@
 od burzy (midpoint test zrušen, #1018); tisky dostává i sekundární řetěz, kalibrace α bere
 expiraci, která byla celou seanci sekundárem, a při bumpu v6 se α resetuje (FA vypnutá do ≥ 5
 platných dnů, výchozí α 0). Vzorec odhadu a FA validace platí dál.
+**Revidováno ADR-0061** (24. 10. 2026, od bumpu v6): odhad je `OI_ráno + ρ·objem strany za
+seanci` místo `α·net` — OI roste i na stranách s převahou prodeje (#1612). ρ = medián ΔOI/objem
+řetězu D+1, retro ρ z archivu; pod v5 do bumpu platí tento ADR beze změny.
 **Kontext:** OI se aktualizuje 1× denně (SPEC 3.5) — všechny GEX výpočty stojí
 na ranním snapshotu a dnešní nově postavený positioning nevidí. U 0DTE, které
 tvoří většinu objemu, je to díra přesně tam, kde se odehrává většina gammy.

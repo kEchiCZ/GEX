@@ -159,7 +159,7 @@ Per snapshot t, strike K (vol = kumulativní denní volume do času t; ΔVol = p
 Celý sbíraný řetěz (dxFeed TimeAndSale, ADR-0032, ADR-0057):
   za každý trade: sign = aggressorSide (BUY → +1, SELL → −1, jinak mimo tok)
   flowΔ += sign · size · Δ(K,s) · M
-  net(K,s) += sign · size              (čistý objem, vstup FA odhadu OI — ADR-0011)
+  net(K,s) += sign · size              (čistý objem; FA odhad OI ho od v6 nečte — ADR-0061)
 
 Objem bez tisku se stranou (1min, ΔVol(t,K,s) = vol(t) − vol(t−1)):
   jen rozklad objemu (printvol, pokrytí), do flowΔ ani net nevstupuje
@@ -286,7 +286,7 @@ nový řádek v této tabulce ve stejném PR (viz `AGENTS.md`, Definition of don
 | Konvence obchodního dne a settle; kvartální roll a SOQ; pozdní start | 0023, 0024, 0039 | — | USER kap. 6, 8b |
 | Retence 90 dní; věčný archiv učicích dat | 0022, 0029 | #437 | ADMIN kap. 6 |
 | Zmrzlé kotace (stáří dat v každé buňce) | 0015 | #306 | USER kap. 15 |
-| Dyn GEX pole, projekce do settle, sekundární zeď, dominance zdí, flow-adjusted GEX | 0006, 0008, 0009, 0010, 0011 | #629 | USER kap. 5, 18 |
+| Dyn GEX pole, projekce do settle, sekundární zeď, dominance zdí, flow-adjusted GEX | 0006, 0008, 0009, 0010, 0011, 0061 | #629 | USER kap. 5, 18 |
 | Volatilitní režim (bez VIX), IV rank, tendence, gamma útes, EM respect, stav „tenká mapa" | 0028 | #394, #576, #1245 | USER kap. 4, 11f, 18 |
 | Setup detektor, signály, track record, parameter store, walk-forward, risk framework | 0004, 0020, 0021, 0030, 0033, 0034, 0038 | #794, #453 | USER kap. 11d; ADMIN kap. 12 |
 | SentimentLens: news-engine, zdroje (IBKR news, ForexFactory, Reddit, CNN F&G), dedup, vlny, SentIndex, per-symbol, reakce trhu, klasifikace v2 a jedna definice významnosti | 0012–0014, 0016–0019, 0026, 0031, 0036, 0037, 0043, 0045, 0059 | #561, #566, #740, #1293 | USER kap. 11c, 14; ADMIN kap. 12 |

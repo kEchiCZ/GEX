@@ -118,6 +118,9 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
    resetu jela na nekalibrovaném defaultu.) Vědomý limit: net nese jen
    outright agresi, strukturovaný objem (ES ~21 %, NQ ~10 %) mění OI bez znaménka a α ho jen
    globálně rozpustí.
+   *(Revidováno ADR-0061, 24. 10. 2026: FA pod v6 bere objem seance, ne net — `OI + ρ·objem`,
+   ρ z řetězu D+1 a zpětně z archivu, takže FA po bumpu nečeká 5 dnů; reset přes `source`
+   a `FA_MIN_DAYS` platí dál. Retro α z tisků (#1627) odpadá.)*
 7. **Replay a walk-forward pod v6 (vlastník 16. 10., varianta A).** Replay backtestu čte pro
    seance od 21. 9. 2026 do nasazení stín `derived/{sym}/cumdelta_dx` — tentýž model jako 1A
    (univerzum aktivního řetězu, delta z tasty greeks, strana od burzy), přeskočená značka minuty
