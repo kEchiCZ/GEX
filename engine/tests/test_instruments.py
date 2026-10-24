@@ -47,7 +47,7 @@ from gexlens_engine.instruments import (
 )
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
-from gexlens_engine.storage.fa_calibration import FaAlphaRepository
+from gexlens_engine.storage.fa_calibration import SOURCE_VOLUME, FaAlphaRepository
 from gexlens_engine.storage.meta import settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import (
     ArchiveResult,
@@ -1475,10 +1475,11 @@ async def test_kalibrace_alfa_po_oi_archivu_nastavi_runtime(
     assert fresh.runtime.flow_alpha == pytest.approx(0.4)
 
 
-async def test_v6_fa_jede_az_po_peti_dnech_kalibrace_z_tisku(
+async def test_v6_fa_jede_az_po_peti_dnech_kalibrace_rho(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:
-    """ADR-0057 bod 6: pod tisky α z midpointu ani výchozí α FA nepustí; až ≥ 5 dnů z tisků."""
+    """ADR-0057 bod 6, ADR-0061 bod 4: pod v6 α z midpointu, α z tisků ani výchozí α FA
+    nepustí; až ρ z objemu s ≥ 5 dny."""
     settings, writer, oi_repository, publisher = env
     pipeline = make_pipeline("ES", 7600.0, settings, writer, oi_repository, publisher)
     pipeline.runtime.cum_delta = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
@@ -1495,10 +1496,13 @@ async def test_v6_fa_jede_az_po_peti_dnech_kalibrace_z_tisku(
     alpha_repo.record("ES", day, "20260717", point, 0.505, 17, source=SOURCE_MIDPOINT)
     await pipeline._restore_alpha()
     assert pipeline.runtime.flow_alpha == 0.0  # stav z midpointu = nekalibrováno
-    alpha_repo.record("ES", day, "20260717", point, 0.3, FA_MIN_DAYS - 1, source=SOURCE_AGGRESSOR)
+    alpha_repo.record("ES", day, "20260717", point, 0.3, FA_MIN_DAYS, source=SOURCE_AGGRESSOR)
+    await pipeline._restore_alpha()
+    assert pipeline.runtime.flow_alpha == 0.0  # α z tisků (ADR-0057) model A nahradil
+    alpha_repo.record("ES", day, "20260717", point, 0.3, FA_MIN_DAYS - 1, source=SOURCE_VOLUME)
     await pipeline._restore_alpha()
     assert pipeline.runtime.flow_alpha == 0.0
-    alpha_repo.record("ES", day, "20260717", point, 0.3, FA_MIN_DAYS, source=SOURCE_AGGRESSOR)
+    alpha_repo.record("ES", day, "20260717", point, 0.3, FA_MIN_DAYS, source=SOURCE_VOLUME)
     await pipeline._restore_alpha()
     assert pipeline.runtime.flow_alpha == pytest.approx(0.3)
 

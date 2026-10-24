@@ -1472,37 +1472,6 @@ class SnapshotWriter:
             }
 
 
-def read_netgap_minutes(path: Path) -> list[dt.datetime]:
-    """Minuty mezery trade větve z partice netgap (#1460); bez partice prázdný seznam."""
-    if not path.exists():
-        return []
-    table = pq.read_table(path, schema=NETGAP_SCHEMA)
-    return [ts for ts in table.column("ts_min").to_pylist() if ts is not None]
-
-
-def read_netflow_last_minute(
-    path: Path, *, end: dt.datetime, sources: frozenset[str | None] | None
-) -> dt.datetime | None:
-    """Poslední minuta s ne-NULL řádkem netflow před `end` (zdroj jako `read_netflow_latest`).
-
-    Kalibrace α pod tisky (#1460) podle ní pozná den, jehož řada skončila před
-    řezem — engine spadlý přes konec dne nemá v partici ani značku mezery.
-    """
-    if not path.exists():
-        return None
-    table = pq.read_table(path, columns=["ts_min", "net_volume", "source"], schema=NETFLOW_SCHEMA)
-    last: dt.datetime | None = None
-    columns = [table.column(name).to_pylist() for name in ("ts_min", "net_volume", "source")]
-    for ts, net, source in zip(*columns, strict=True):
-        if ts is None or net is None or ts >= end:
-            continue
-        if sources is not None and source not in sources:
-            continue
-        if last is None or ts > last:
-            last = ts
-    return last
-
-
 def read_netflow_latest(
     path: Path,
     *,

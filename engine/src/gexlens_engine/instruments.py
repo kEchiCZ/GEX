@@ -67,6 +67,7 @@ from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_calibration import (
     FaAlphaRepository,
     FaAlphaState,
+    calibration_source,
     collect_alpha_calibration,
     live_alpha,
 )
@@ -1026,11 +1027,11 @@ class InstrumentPipeline:
         return tracker
 
     def _apply_alpha(self, state: FaAlphaState | None) -> None:
-        """α pro FA vrstvu podle stavu kalibrace (`live_alpha`).
+        """Faktor pro FA vrstvu podle stavu kalibrace (`live_alpha`).
 
         Pod mechanikou v5 se propíše uložená α (bez stavu platí konfigurace).
-        Pod tisky (v6, ADR-0057 bod 6) jen stav z tisků s ≥ `FA_MIN_DAYS` dny,
-        jinak α 0 = FA vypnutá („nekalibrováno n/5“), i bez stavu.
+        Pod v6 (ADR-0057 bod 6, ADR-0061) jen ρ z objemu s ≥ `FA_MIN_DAYS` dny,
+        jinak 0 = FA vypnutá („nekalibrováno n/5“), i bez stavu.
         """
         prints = self._cum_tracker().prints
         alpha = live_alpha(state, prints=prints)
@@ -1047,11 +1048,11 @@ class InstrumentPipeline:
         else:
             days = (
                 state.days
-                if state is not None and state.source == self._cum_tracker().source
+                if state is not None and state.source == calibration_source(prints=prints)
                 else 0
             )
             logger.info(
-                "FA %s vypnutá do kalibrace z tisků: %d/%d dnů (ADR-0057 bod 6)",
+                "FA %s vypnutá do kalibrace ρ z objemu: %d/%d dnů (ADR-0061)",
                 self.symbol,
                 days,
                 FA_MIN_DAYS,
@@ -1080,6 +1081,7 @@ class InstrumentPipeline:
             logger.exception("FA validace %s selhala — zkusí se při dalším OI cyklu", self.symbol)
             return
         alpha = self._current_alpha()
+        factor = "ρ" if self._cum_tracker().prints else "α"
         for record in records:
             point = record.point
             logger.info(
@@ -1103,7 +1105,7 @@ class InstrumentPipeline:
                     "message": (
                         f"FA validace {self.symbol} {record.expiry} ({record.day}): "
                         f"open-ratio {point.open_ratio:.2f}, korelace {point.spearman:.2f} "
-                        f"(α={alpha:.2f}, ADR-0011)"
+                        f"({factor}={alpha:.2f}, ADR-0011)"
                     ),
                     "ts": dt.datetime.now(dt.UTC).timestamp(),
                 },
@@ -1114,7 +1116,7 @@ class InstrumentPipeline:
         return self.runtime.fa_alpha()
 
     async def _run_alpha_calibration(self, today: dt.date) -> None:
-        """Ranní kalibrace α (#232 fáze 2): včerejší netflow vs. skutečné ΔOI.
+        """Ranní kalibrace FA (#232 fáze 2): v5 α z netflow, v6 ρ z objemu (ADR-0061).
 
         Běží po FA validaci nad týmiž archivy, jen nad finálním snímkem
         (`_run_fa_jobs`, #1314); selhání nesmí zabít pipeline — bod se
@@ -1132,28 +1134,33 @@ class InstrumentPipeline:
                 self.alpha_repository,
                 today,
                 publication_utc=self.settings.oi_publication_utc,
+                snapshots_dir=self.settings.snapshots_dir,
                 cumdelta_prints=self._cum_tracker().prints,
             )
         except Exception:
-            logger.exception("Kalibrace α %s selhala — zkusí se při dalším OI cyklu", self.symbol)
+            logger.exception("Kalibrace FA %s selhala — zkusí se při dalším OI cyklu", self.symbol)
             return
         if result is None:
             await self._restore_alpha()
             return
-        # Pod tisky jde α do FA až po FA_MIN_DAYS dnech (ADR-0057 bod 6)
+        prints = self._cum_tracker().prints
+        # Pod v6 jde ρ do FA až po FA_MIN_DAYS dnech (ADR-0057 bod 6, ADR-0061)
         self.runtime.flow_alpha = live_alpha(
             FaAlphaState(
                 symbol=self.symbol,
                 alpha=result.alpha_after,
                 days=result.days,
                 updated_at=dt.datetime.now(dt.UTC),
-                source=self._cum_tracker().source,
+                source=calibration_source(prints=prints),
             ),
-            prints=self._cum_tracker().prints,
+            prints=prints,
         )
         point = result.point
+        # Pod v6 je faktor ρ = medián ΔOI/objem seance (ADR-0061), pod v5 α = ΔOI/net
+        factor, ratio = ("ρ", "ΔOI/objem") if prints else ("α", "ΔOI/net")
         logger.info(
-            "Kalibrace α %s %s (%s): medián %.3f (buy %s / sell %s, %d stran) → α %.3f (%d dnů)",
+            "Kalibrace %s %s %s (%s): medián %.3f (buy %s / sell %s, %d stran) → %s %.3f (%d dnů)",
+            factor,
             self.symbol,
             result.expiry,
             result.day,
@@ -1161,6 +1168,7 @@ class InstrumentPipeline:
             "—" if point.ratio_buy is None else f"{point.ratio_buy:.3f}",
             "—" if point.ratio_sell is None else f"{point.ratio_sell:.3f}",
             point.samples,
+            factor,
             result.alpha_after,
             result.days,
         )
@@ -1170,9 +1178,9 @@ class InstrumentPipeline:
                 "kind": "fa_calibration",
                 "symbol": self.symbol,
                 "message": (
-                    f"Kalibrace FA α {self.symbol}: denní medián ΔOI/net "
+                    f"Kalibrace FA {factor} {self.symbol}: denní medián {ratio} "
                     f"{point.ratio_median:.2f} ({point.samples} stran) → "
-                    f"α = {result.alpha_after:.2f} po {result.days} dnech"
+                    f"{factor} = {result.alpha_after:.2f} po {result.days} dnech"
                 ),
                 "ts": dt.datetime.now(dt.UTC).timestamp(),
             },

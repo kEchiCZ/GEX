@@ -9,11 +9,14 @@ aktualizuje α symbolu. Historie bodů zůstává v `fa_alpha_history` pro audit
 Aktuální α per symbol drží `fa_alpha`; čte ji engine (runtime.flow_alpha)
 i API (/fa/alpha pro frontend badge).
 
-Pod tisky (mechanika v6, ADR-0057 bod 6, #1460) se kalibruje řetěz, který byl
-celou seanci D sekundárem (první expirace po D, #1580), jen z netflow se zdrojem
-tisků, a den s mezerou trade větve bod nedá. Stav i body nesou zdroj (`source`,
-NULL = midpoint); stav jiného zdroje se bere jako nekalibrovaný, takže α se při
-bumpu resetuje sama a FA jede až po `FA_MIN_DAYS` dnech.
+Pod mechanikou v6 (ADR-0061) se místo α kalibruje ρ odhadu `OI + ρ·objem
+seance`: řetěz, který byl celou seanci D sekundárem (první expirace po D,
+#1580), objem stran ze snímků (maximum kumulativu do řezu), platný den ze
+snímků (`compute.facalibration.session_volume_coverage`). Ranní job dopočítá
+i dny bez bodu po posledním bodu symbolu. Stav i body nesou zdroj (`source`:
+NULL = midpoint, `volume` = ρ); stav jiného zdroje se bere jako nekalibrovaný,
+takže faktor se při bumpu resetuje sám a FA jede až po `FA_MIN_DAYS` dnech —
+dřív jen po zpětném dopočtu ρ (`scripts/recompute_fa_rho.py`).
 """
 
 import datetime as dt
@@ -21,6 +24,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow.parquet as pq
 from sqlalchemy import (
     Column,
     Date,
@@ -30,6 +34,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    func,
     inspect,
     select,
     text,
@@ -39,13 +44,17 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql import Executable
 
-from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, SOURCE_MIDPOINT
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT
 from gexlens_engine.compute.facalibration import (
     FA_MIN_DAYS,
     MIN_ABS_NET,
+    MIN_VOLUME,
     AlphaCalibrationPoint,
     Key,
+    SessionVolumeCoverage,
     calibrate_alpha,
+    calibrate_rho,
+    session_volume_coverage,
     update_alpha,
 )
 from gexlens_engine.compute.marketclock import daily_close_utc
@@ -53,11 +62,7 @@ from gexlens_engine.compute.settle import is_trading_session, session_bounds
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS
 from gexlens_engine.storage.fa_validation import PublicationUtc, measured_oi_pair
 from gexlens_engine.storage.oi_archive import OIEodRepository
-from gexlens_engine.storage.parquet_store import (
-    read_netflow_last_minute,
-    read_netflow_latest,
-    read_netgap_minutes,
-)
+from gexlens_engine.storage.parquet_store import read_netflow_latest
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +76,8 @@ fa_alpha_table = Table(
     Column("alpha", Float, nullable=False),
     Column("days", Integer, nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
-    # Zdroj netu bodů, ze kterých stav vznikl (ADR-0057 bod 8); NULL = midpoint
+    # Zdroj bodů, ze kterých stav vznikl (ADR-0057 bod 8, ADR-0061 bod 4):
+    # NULL = midpoint (α z netu), `volume` = ρ z objemu seance (v6)
     Column("source", String(16), nullable=True),
 )
 
@@ -87,7 +93,8 @@ fa_alpha_history_table = Table(
     Column("ratio_buy", Float, nullable=True),
     Column("ratio_sell", Float, nullable=True),
     Column("alpha_after", Float, nullable=False),
-    # Zdroj netu bodu (ADR-0057 bod 8); NULL = midpoint (body před #1460)
+    # Zdroj bodu (ADR-0057 bod 8, ADR-0061 bod 4); NULL = midpoint (body před
+    # #1460), `volume` = ρ z objemu seance (`ratio_buy` a `ratio_sell` NULL)
     Column("source", String(16), nullable=True),
 )
 
@@ -96,9 +103,11 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "fa_alpha": {"source": "VARCHAR(16)"},
     "fa_alpha_history": {"source": "VARCHAR(16)"},
 }
-#: Den pod tisky je dokončený, má-li netflow řádek nejvýš tolik minut před řezem
-#: (po rollu v settle je řetěz aktivní a píše každou minutu)
-DAY_END_TOLERANCE_MIN = 5
+#: Zdroj kalibrace pod v6 (ADR-0061 bod 4): ρ z objemu seance místo α z netu
+SOURCE_VOLUME = "volume"
+#: Ranní job dopočítá nejvýš tolik obchodních dnů bez bodu po posledním bodu
+#: (promeškaný den, #1668); starší mezeru dorovná zpětný dopočet ρ
+CATCH_UP_SESSIONS = 5
 
 
 @dataclass(frozen=True)
@@ -109,7 +118,7 @@ class FaAlphaState:
     alpha: float
     days: int
     updated_at: dt.datetime
-    # Zdroj netu (ADR-0057 bod 8); None = midpoint (stav před #1460)
+    # Zdroj kalibrace (ADR-0057 bod 8, ADR-0061); None = midpoint (stav před #1460)
     source: str | None = None
 
 
@@ -178,6 +187,15 @@ class FaAlphaRepository:
             FaAlphaState(symbol=row[0], alpha=row[1], days=row[2], updated_at=row[3], source=row[4])
             for row in rows
         ]
+
+    def last_history_day(self, symbol: str) -> dt.date | None:
+        """Poslední den s bodem v historii symbolu (jakéhokoli zdroje); None = bez bodu."""
+        stmt = select(func.max(fa_alpha_history_table.c.day)).where(
+            fa_alpha_history_table.c.symbol == symbol
+        )
+        with self._engine.connect() as conn:
+            day = conn.execute(stmt).scalar()
+        return day if isinstance(day, dt.date) else None
 
     def history_exists(self, symbol: str, day: dt.date) -> bool:
         stmt = select(fa_alpha_history_table.c.symbol).where(
@@ -273,16 +291,21 @@ class FaAlphaRepository:
         raise ValueError(f"Nepodporovaný databázový dialekt pro upsert: {dialect!r}")
 
 
-def live_alpha(state: FaAlphaState | None, *, prints: bool) -> float | None:
-    """α pro FA vrstvu runtime; None = platí konfigurace (jen mechanika v5).
+def calibration_source(*, prints: bool) -> str:
+    """Zdroj kalibrace FA podle mechaniky: v6 ρ z objemu (ADR-0061), v5 α z midpointu."""
+    return SOURCE_VOLUME if prints else SOURCE_MIDPOINT
 
-    Pod tisky (ADR-0057 bod 6) bere jen stav kalibrovaný z tisků s aspoň
-    `FA_MIN_DAYS` dny, jinak 0 = FA vypnutá: stav z midpointu je jiná veličina
-    a výchozí α z konfigurace by FA pustila nekalibrovanou.
+
+def live_alpha(state: FaAlphaState | None, *, prints: bool) -> float | None:
+    """Faktor pro FA vrstvu runtime; None = platí konfigurace (jen mechanika v5).
+
+    Pod v6 (ADR-0057 bod 6, ADR-0061 bod 4) bere jen ρ kalibrované z objemu
+    s aspoň `FA_MIN_DAYS` dny, jinak 0 = FA vypnutá: α z midpointu je jiná
+    veličina a výchozí α z konfigurace by FA pustila nekalibrovanou.
     """
     if not prints:
         return state.alpha if state is not None else None
-    if state is None or state.source != SOURCE_AGGRESSOR or state.days < FA_MIN_DAYS:
+    if state is None or state.source != SOURCE_VOLUME or state.days < FA_MIN_DAYS:
         return 0.0
     return state.alpha
 
@@ -295,11 +318,11 @@ def _previous_session(today: dt.date) -> dt.date:
     return day
 
 
-def _calibrated_chain(exp_dirs: list[Path], session: dt.date) -> list[Path]:
+def calibrated_chain(exp_dirs: list[Path], session: dt.date) -> Path | None:
     """Řetěz, který byl celou seanci `session` sekundárem: první expirace po ní (#1580).
 
-    Další expirace (D+2) píše netflow dne D až po rollu v settle (~20:05 UTC)
-    a její bod by kalibroval 55 minut toku; náhradní řetěz se proto nehledá.
+    Další expirace (D+2) je sekundárem až po rollu v settle (~20:05 UTC) a její
+    bod by kalibroval 55 minut; náhradní řetěz se proto nehledá.
     """
     chains = sorted(
         (path for path in exp_dirs if path.name.isdigit() and len(path.name) == 8),
@@ -307,40 +330,248 @@ def _calibrated_chain(exp_dirs: list[Path], session: dt.date) -> list[Path]:
     )
     for path in chains:
         if dt.datetime.strptime(path.name, "%Y%m%d").date() > session:
-            return [path]
-    return []
+            return path
+    return None
 
 
-def _session_gaps(exp_dir: Path, session: dt.date) -> list[dt.datetime]:
-    """Minuty mezery trade větve řetězu v seanci `session` do řezu dne (#1460).
-
-    Seance začíná v 17:00 CT předchozího dne, takže leží ve dvou UTC particích.
-    """
-    start = session_bounds(session)[0]
-    cutoff = daily_close_utc(session)
-    gaps: set[dt.datetime] = set()
-    for day in sorted({start.date(), session}):
-        path = exp_dir / "netgap" / f"{day.isoformat()}.parquet"
-        gaps.update(ts for ts in read_netgap_minutes(path) if start <= ts <= cutoff)
-    return sorted(gaps)
-
-
-def netflow_at_cutoff(
-    path: Path, day: dt.date, *, sources: frozenset[str | None] | None = None
-) -> dict[Key, float]:
+def netflow_at_cutoff(path: Path, day: dt.date) -> dict[Key, float]:
     """Poslední kumulativní net každé strany k řezu 16:00 CT (konec trade date).
 
     Stejný řez jako FA validace (`daily_close_utc`: v létě 21:00 UTC, v zimě
     22:00 UTC): po přestávce začíná další seance a kumulativ už patří novému
     trade date (counter volume IBKR se resetuje v 17:00 CT). Řádek přesně
     v řezu nese tok do řezu, proto se počítá (`end` je řez + 1 min, okno
-    `read_netflow_latest` je zprava otevřené). Čte se přes
-    `schema=` (#1460), staré partice bez sloupce `source` projdou. `sources`
-    pod tisky = jen řádky zdroje tisků (den před bumpem bod nedá); None = bez
-    filtru (mechanika v5).
+    `read_netflow_latest` je zprava otevřené). Čte se přes `schema=` (#1460),
+    staré partice bez sloupce `source` projdou; zdroj se nefiltruje (v5).
     """
     cutoff = daily_close_utc(day)
-    return read_netflow_latest(path, end=cutoff + dt.timedelta(minutes=1), sources=sources)
+    return read_netflow_latest(path, end=cutoff + dt.timedelta(minutes=1), sources=None)
+
+
+def snapshot_session_volumes(chain_dir: Path, session: dt.date) -> SessionVolumeCoverage:
+    """Objem stran řetězu za seanci `session` a pokrytí seance ze snímků (ADR-0061 bod 3).
+
+    Seance začíná v 17:00 CT předchozího dne, takže leží ve dvou UTC particích
+    (#1002); čte se jen `ts_min`, strana a kumulativní `volume`.
+    """
+    start = session_bounds(session)[0]
+    rows: list[tuple[dt.datetime | None, float, str, float | None]] = []
+    for day in sorted({start.date(), session}):
+        path = chain_dir / f"{day.isoformat()}.parquet"
+        if not path.exists():
+            continue
+        table = pq.read_table(path, columns=["ts_min", "strike", "right", "volume"])
+        columns = [
+            table.column(name).to_pylist() for name in ("ts_min", "strike", "right", "volume")
+        ]
+        rows.extend(zip(*columns, strict=True))
+    return session_volume_coverage(rows, start, daily_close_utc(session))
+
+
+def next_session(day: dt.date) -> dt.date:
+    """První obchodní den po `day` (pátek → pondělí, svátky NYSE přeskočí)."""
+    day += dt.timedelta(days=1)
+    while not is_trading_session(day):
+        day += dt.timedelta(days=1)
+    return day
+
+
+def pending_rho_sessions(
+    last_point: dt.date | None, today: dt.date, *, limit: int = CATCH_UP_SESSIONS
+) -> list[dt.date]:
+    """Seance k dopočtu ρ v pořadí dnů: po posledním bodu symbolu až do seance před `today`.
+
+    Promeškaný den (job neběžel, NQ 8. 10. 2026, #1668) se dopočítá s dalším
+    během, ale jen po posledním bodu: EMA jde v pořadí dnů a den starší než
+    poslední bod by ji přepsal mimo pořadí. Symbol bez bodu bere jen seanci
+    před `today`; nejvýš `limit` seancí, starší dorovná zpětný dopočet ρ.
+    """
+    sessions: list[dt.date] = []
+    day = _previous_session(today)
+    while len(sessions) < limit and (last_point is None or day > last_point):
+        sessions.append(day)
+        if last_point is None:
+            break
+        day = _previous_session(day)
+    return sorted(sessions)
+
+
+def _collect_rho(
+    symbol: str,
+    snapshots_dir: Path,
+    oi_repository: OIEodRepository,
+    alpha_repository: FaAlphaRepository,
+    today: dt.date,
+    *,
+    publication_utc: PublicationUtc,
+) -> AlphaCalibrationResult | None:
+    """Kalibrace ρ pod v6 (ADR-0061 body 2–4): body seancí k dopočtu, vrací poslední.
+
+    Seance D (`pending_rho_sessions`) se kalibruje proti archivu dalšího
+    obchodního dne nad řetězem, který byl celou seanci D sekundárem (#1580):
+    medián ΔOI/V přes strany s V ≥ `MIN_VOLUME`, ΔOI jen ze stran změřených
+    po publikaci v obou dnech (`measured_oi_pair`, #1605), V ze snímků
+    (`snapshot_session_volumes`). Den, jehož snímky mají mezeru, končí před
+    řezem nebo chybí, bod nedá; strana bez objemu u řezu je „nevíme“. Bod
+    s mediánem ≤ 0 jde do historie, ρ nemění. Stav jiného zdroje (α
+    z midpointu) se bere jako nekalibrovaný — první bod ρ začíná znovu.
+    Den bez stran změřených po publikaci se neukládá a zkusí se znovu, dokud
+    ho nepředběhne bod pozdější seance.
+    """
+    base = snapshots_dir / symbol
+    if not is_trading_session(today) or not base.is_dir():
+        return None
+    exp_dirs = [path for path in base.iterdir() if path.is_dir()]
+    result: AlphaCalibrationResult | None = None
+    for session in pending_rho_sessions(alpha_repository.last_history_day(symbol), today):
+        if alpha_repository.history_exists(symbol, session):
+            continue
+        point = _rho_point(
+            symbol, exp_dirs, session, oi_repository, alpha_repository, publication_utc
+        )
+        if point is not None:
+            result = point
+    return result
+
+
+def _rho_point(
+    symbol: str,
+    exp_dirs: list[Path],
+    session: dt.date,
+    oi_repository: OIEodRepository,
+    alpha_repository: FaAlphaRepository,
+    publication_utc: PublicationUtc,
+) -> AlphaCalibrationResult | None:
+    """Bod ρ jedné seance; uloží ho do historie (a stavu) a vrátí výsledek s novým ρ."""
+    chain_dir = calibrated_chain(exp_dirs, session)
+    if chain_dir is None:
+        logger.info("Kalibrace ρ %s %s: bez řetězu po seanci — bez bodu", symbol, session)
+        return None
+    expiry = chain_dir.name
+    next_day = next_session(session)
+    previous = oi_repository.latest_trading_day_before(symbol, expiry, next_day)
+    if previous != session:
+        logger.info(
+            "Kalibrace ρ %s %s %s: poslední archiv před %s je %s, ne seance — bez bodu",
+            symbol,
+            expiry,
+            session,
+            next_day,
+            previous,
+        )
+        return None
+    oi_before, oi_after, before_tasty = measured_oi_pair(
+        oi_repository, symbol, expiry, next_day, session, publication_utc
+    )
+    if not oi_after and not oi_repository.values_for(symbol, expiry, next_day):
+        logger.info(
+            "Kalibrace ρ %s %s %s: archiv %s řetěz (zatím) nenese — bez bodu",
+            symbol,
+            expiry,
+            session,
+            next_day,
+        )
+        return None
+    coverage = snapshot_session_volumes(chain_dir, session)
+    problem = coverage.problem()
+    if problem is not None:
+        logger.info(
+            "Kalibrace ρ %s %s %s: %s — den bez bodu (ADR-0061 bod 3)",
+            symbol,
+            expiry,
+            session,
+            problem,
+        )
+        return None
+    # ΔOI jen pro strany změřené po publikaci v OBOU dnech (#1605); ostatní
+    # zůstávají bez klíče a kalibrace je přeskočí (#1172)
+    doi = {key: oi_after[key] - oi_before[key] for key in oi_after.keys() & oi_before.keys()}
+    qualifying = [key for key, volume in coverage.volumes.items() if volume >= MIN_VOLUME]
+    no_after = sum(1 for key in qualifying if key not in oi_after)
+    no_before = sum(1 for key in qualifying if key in oi_after and key not in oi_before)
+    tasty_before = sum(1 for key in qualifying if key in doi and key in before_tasty)
+    logger.info(
+        "Kalibrace ρ %s %s %s: %d stran s V ≥ %.0f, vyřazeno %d bez měření po publikaci "
+        "(D+1 %d, D %d), D tasty %d, bez objemu u řezu %d",
+        symbol,
+        expiry,
+        session,
+        len(qualifying),
+        MIN_VOLUME,
+        no_after + no_before,
+        no_after,
+        no_before,
+        tasty_before,
+        len(coverage.unknown),
+    )
+    if not doi:
+        logger.info(
+            "Kalibrace ρ %s %s %s: bez stran změřených po publikaci v obou dnech "
+            "(D+1 %d, D %d stran) — bod se neukládá, zkusí se znovu",
+            symbol,
+            expiry,
+            session,
+            len(oi_after),
+            len(oi_before),
+        )
+        return None
+    if all(value == 0.0 for value in doi.values()):
+        logger.info(
+            "Kalibrace ρ %s %s %s: archivy %s a %s jsou shodné (ΔOI všude 0) — bod se neukládá",
+            symbol,
+            expiry,
+            session,
+            session,
+            next_day,
+        )
+        return None
+    point = calibrate_rho(coverage.volumes, doi)
+    if point is None:
+        logger.info(
+            "Kalibrace ρ %s %s %s: nedostatečný vzorek — bod se neukládá", symbol, expiry, session
+        )
+        return None
+    state = alpha_repository.get(symbol)
+    if state is not None and state.source != SOURCE_VOLUME:
+        # α z midpointu je jiná veličina (ADR-0061 bod 4, ADR-0057 doplněk 20. 10.):
+        # první bod ρ začíná znovu, historie zůstává a nese zdroj
+        state = None
+    if point.ratio_median <= 0.0:
+        # Medián ≤ 0 není důkaz pro ρ = 0 (vypnutí vrstvy): bod jde do historie
+        # pro audit, ρ i počet dnů zůstávají; symbol bez kalibrace stav nedostane
+        # (#1172, #1314)
+        logger.warning(
+            "Kalibrace ρ %s %s %s: medián %.3f ≤ 0 (%d stran) — ρ beze změny",
+            symbol,
+            expiry,
+            session,
+            point.ratio_median,
+            point.samples,
+        )
+        alpha_repository.record(
+            symbol,
+            session,
+            expiry,
+            point,
+            state.alpha if state else 0.0,
+            state.days if state else 0,
+            source=SOURCE_VOLUME,
+            update_state=state is not None,
+        )
+        return None
+    rho_after = update_alpha(
+        state.alpha if state is not None and state.days > 0 else None, point.ratio_median
+    )
+    days = (state.days if state else 0) + 1
+    alpha_repository.record(symbol, session, expiry, point, rho_after, days, source=SOURCE_VOLUME)
+    return AlphaCalibrationResult(
+        symbol=symbol,
+        day=session,
+        expiry=expiry,
+        point=point,
+        alpha_after=rho_after,
+        days=days,
+    )
 
 
 def collect_alpha_calibration(
@@ -351,6 +582,7 @@ def collect_alpha_calibration(
     today: dt.date,
     *,
     publication_utc: PublicationUtc,
+    snapshots_dir: Path,
     cumdelta_prints: bool = CUMDELTA_PRINTS,
 ) -> AlphaCalibrationResult | None:
     """Spočítá a uloží chybějící kalibrační bod symbolu k dnešnímu OI archivu.
@@ -369,21 +601,22 @@ def collect_alpha_calibration(
     (i po rollu nad večerním archivem). Blokující (parquet + DB) — volat
     přes to_thread.
 
-    `cumdelta_prints` (mechanika v6, ADR-0057 bod 6): jen řetěz, který byl
-    celou seanci D sekundárem (#1580), jen netflow ze zdroje tisků, den
-    s mezerou trade větve nebo s řadou ukončenou před řezem bod nedá a stav
-    z midpointu se bere jako nekalibrovaný. Pod v5 beze změny.
+    `cumdelta_prints` (mechanika v6, ADR-0061): kalibruje se ρ z objemu seance
+    ze snímků (`snapshots_dir`, `_collect_rho`). Pod v5 beze změny.
     """
+    if cumdelta_prints:
+        return _collect_rho(
+            symbol,
+            snapshots_dir,
+            oi_repository,
+            alpha_repository,
+            today,
+            publication_utc=publication_utc,
+        )
     base = derived_dir / symbol
     if not is_trading_session(today) or not base.is_dir():
         return None
     exp_dirs = sorted((p for p in base.iterdir() if p.is_dir()), reverse=True)
-    session: dt.date | None = None
-    sources: frozenset[str | None] | None = None
-    if cumdelta_prints:
-        session = _previous_session(today)
-        exp_dirs = _calibrated_chain(exp_dirs, session)
-        sources = frozenset({SOURCE_AGGRESSOR})
     for exp_dir in exp_dirs:
         expiry = exp_dir.name
         netflow_dir = exp_dir / "netflow"
@@ -391,16 +624,6 @@ def collect_alpha_calibration(
             continue
         previous = oi_repository.latest_trading_day_before(symbol, expiry, today)
         if previous is None or alpha_repository.history_exists(symbol, previous):
-            continue
-        if session is not None and previous != session:
-            logger.info(
-                "Kalibrace α %s %s: poslední archiv před %s je %s, ne seance %s — bez bodu",
-                symbol,
-                expiry,
-                today,
-                previous,
-                session,
-            )
             continue
         # Řetěz, který v den netflow (nebo dřív) expiroval, žádné „ΔOI do
         # dalšího dne" nemá — archiv D+1 pro něj buď chybí, nebo nese tytéž
@@ -423,11 +646,7 @@ def collect_alpha_calibration(
         )
         if not oi_after and not oi_repository.values_for(symbol, expiry, today):
             continue  # mrtvá expirace — dnešní archiv ji nenese
-        if session is not None and not _day_complete(
-            symbol, expiry, exp_dir, netflow_path, session, sources
-        ):
-            continue
-        netflow = netflow_at_cutoff(netflow_path, previous, sources=sources)
+        netflow = netflow_at_cutoff(netflow_path, previous)
         # ΔOI jen pro strany změřené po publikaci v OBOU dnech (#1605);
         # ostatní zůstávají bez klíče a kalibrace je přeskočí (#1172) — nula
         # za chybějící hodnotu by dala ΔOI = −oi_before nebo přesně 0
@@ -480,11 +699,7 @@ def collect_alpha_calibration(
             )
             continue
         state = alpha_repository.get(symbol)
-        if cumdelta_prints and state is not None and state.source != SOURCE_AGGRESSOR:
-            # Stav z midpointu je jiná veličina (ADR-0057 bod 6): první bod
-            # z tisků začíná znovu, historie zůstává a nese zdroj
-            state = None
-        source = SOURCE_AGGRESSOR if cumdelta_prints else SOURCE_MIDPOINT
+        source = SOURCE_MIDPOINT
         if point.ratio_median <= 0.0:
             # Nulový nebo záporný medián = tok se do OI nepropsal nebo jsou
             # data rozbitá; není to důkaz pro α = 0 (vypnutí vrstvy). Bod jde
@@ -526,49 +741,3 @@ def collect_alpha_calibration(
             days=days,
         )
     return None
-
-
-def _day_complete(
-    symbol: str,
-    expiry: str,
-    exp_dir: Path,
-    netflow_path: Path,
-    session: dt.date,
-    sources: frozenset[str | None] | None,
-) -> bool:
-    """Je net seance pod tisky úplný? Bez mezery trade větve a s řadou až k řezu.
-
-    Mezeru nese značka `netgap` (i po restartu: první minuta za otevřeného trhu
-    je mezera) a platí bez výjimky. Roll v settle mezeru nedělá: nová pipeline
-    převezme tracker sekundáru (#1460, varianta C). Engine spadlý přes konec
-    dne značku do seance D nezapíše, proto řada netflow musí končit nejvýš
-    `DAY_END_TOLERANCE_MIN` před řezem.
-    """
-    gaps = _session_gaps(exp_dir, session)
-    if gaps:
-        logger.info(
-            "Kalibrace α %s %s %s: mezera trade větve v %d minutách (první %s UTC) "
-            "— bod se neukládá",
-            symbol,
-            expiry,
-            session,
-            len(gaps),
-            gaps[0].strftime("%H:%M"),
-        )
-        return False
-    cutoff = daily_close_utc(session)
-    last = read_netflow_last_minute(
-        netflow_path, end=cutoff + dt.timedelta(minutes=1), sources=sources
-    )
-    if last is None or last < cutoff - dt.timedelta(minutes=DAY_END_TOLERANCE_MIN):
-        logger.info(
-            "Kalibrace α %s %s %s: netflow končí %s, řez je %s UTC — den nedokončený, "
-            "bod se neukládá",
-            symbol,
-            expiry,
-            session,
-            "bez řádku" if last is None else last.strftime("%H:%M"),
-            cutoff.strftime("%H:%M"),
-        )
-        return False
-    return True

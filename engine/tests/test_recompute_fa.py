@@ -198,8 +198,8 @@ def test_report_bez_nove_alfy_necha_stavajici_fa_alpha() -> None:
 
 
 def test_srovnava_jen_body_a_stav_zdroje_prehrani(tmp_path: Path) -> None:
-    """#1590: přehrání počítá zdrojem mechaniky kódu (v5 midpoint) — bod a stav α
-    tisků (`aggressor`) nejsou jeho „staré hodnoty“ a `--apply` je nechá být."""
+    """#1590: přehrání počítá zdrojem mechaniky kódu (v5 midpoint) — bod a stav ρ
+    z objemu (`volume`, ADR-0061) nejsou jeho „staré hodnoty“ a `--apply` je nechá být."""
     module = _load()
     url, settings = _seed(tmp_path)
     db = create_engine(url)
@@ -211,9 +211,9 @@ def test_srovnava_jen_body_a_stav_zdroje_prehrani(tmp_path: Path) -> None:
         AlphaCalibrationPoint(20, 0.3, None, None),
         0.3,
         1,
-        source="aggressor",
+        source="volume",
     )
-    FaAlphaRepository(db).set_state("ES", 0.3, 1, source="aggressor")
+    FaAlphaRepository(db).set_state("ES", 0.3, 1, source="volume")
     result = module.replay_symbol("ES", settings, OIEodRepository(db), db)
     assert all(day != other_day for day, _, _ in result.stale_alpha)
     assert result.old_alpha is None  # stav jiného zdroje se nesrovnává

@@ -96,3 +96,16 @@ def test_gap_all_drzi_maximum() -> None:
     assert (step.increment, step.reference) == (None, 1000.0)
     volumes.end_cycle()
     assert volumes.add("C", 1000.0).increment == 0.0
+
+
+def test_maximum_je_objem_seance_pro_fa() -> None:
+    """ADR-0061 bod 1: objem strany = maximum kumulativu, pokles ani návrat ho nezvětší."""
+    volumes = SessionVolumes()
+    assert volumes.maximum("C") is None
+    for value in (100.0, 250.0, 90.0, 250.0):  # propad feedu a návrat (#1602)
+        volumes.add("C", value)
+        volumes.end_cycle()
+    assert volumes.maximum("C") == 250.0
+    volumes.roll(DAY)
+    volumes.roll(DAY + dt.timedelta(days=1))  # nová seance začíná bez objemu
+    assert volumes.maximum("C") is None
