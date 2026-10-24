@@ -382,6 +382,18 @@ async def run_minute_oi(pipeline: InstrumentPipeline, at: dt.datetime) -> SweepM
     return metrics
 
 
+async def archive_pass(
+    pipeline: InstrumentPipeline, today: dt.date, now: dt.datetime | None = None
+) -> bool:
+    """Celý průchod OI archivu dne bez minutového cyklu (#1674): otevření, dávky
+    bez časového limitu a joby po archivu; vrací `oi_available` po průchodu."""
+    await pipeline.start_oi_archive(today, now)
+    await pipeline.advance_oi_archive(math.inf, lambda: 0.0)
+    if pipeline._oi_jobs_task is not None:
+        await pipeline._oi_jobs_task
+    return pipeline.oi_available
+
+
 def test_roll_handover_jen_sekundar_pod_tisky(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:
@@ -479,20 +491,20 @@ async def test_predpublikacni_snimek_se_po_okne_prepise(
     # Po okně dodá IBKR kompletní hodnoty — mock fetcher vrací 500.0
     pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
     po_okne = settings.oi_publication_utc(dt.date(2026, 8, 4)) + dt.timedelta(minutes=5)
-    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
 
     assert repository.get_oi("ES", today, specs[0].strike, specs[0].right) == 500.0
     assert pipeline.oi_final is False  # jedno čtení po okně nestačí
 
     # Druhé čtení dá totéž → snímek je potvrzený a dál se neobnovuje
-    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
     assert pipeline.oi_final is True
 
     # A před oknem se předpublikační snímek nepřepisuje (data ještě nejsou)
     pipeline.oi_final = False
     pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 9.0)), settings)
     pred_oknem = settings.oi_publication_utc(dt.date(2026, 8, 4)) - dt.timedelta(hours=2)
-    assert await pipeline.try_archive_oi(today, pred_oknem) is True
+    assert await archive_pass(pipeline, today, pred_oknem) is True
     assert repository.get_oi("ES", today, specs[0].strike, specs[0].right) == 500.0
 
 
@@ -511,16 +523,16 @@ async def test_ridky_snimek_nesmi_byt_finalni(
     pipeline.archiver = OIArchiver(
         repository, MockOIFetcher(dict.fromkeys(specs[:2], 40.0)), settings
     )
-    assert await pipeline.try_archive_oi(today, po_okne) is True
-    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
     assert pipeline.oi_final is False  # pokrytí pod prahem — obnova musí běžet dál
     assert pipeline._oi_refresh_due(po_okne) is True
 
     # Publikace doběhla → plné čtení; dvě shodná čtení teprve teď finalizují
     pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
-    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
     assert pipeline.oi_final is False  # první plné čtení se od řídkého liší
-    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
     assert pipeline.oi_final is True
 
 
@@ -548,7 +560,7 @@ async def test_obnova_po_okne_cte_i_striky_pridane_expanzi(
         repository, MockOIFetcher(dict.fromkeys(vsechny, 500.0)), settings
     )
     po_okne = settings.oi_publication_utc(dt.date(2026, 7, 17)) + dt.timedelta(minutes=5)
-    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
 
     assert repository.get_oi("ES", today, 7650.0, "C") == 500.0
 
@@ -630,7 +642,7 @@ async def test_pulnoc_resetuje_finalitu_a_archivuje_novy_den(
         ],
         po_okne - dt.timedelta(minutes=1),
     )
-    assert await pipeline.try_archive_oi(day1, po_okne) is True
+    assert await archive_pass(pipeline, day1, po_okne) is True
     assert pipeline.oi_final is True
 
     # Přechod přes půlnoc: finalita se resetuje a nový den se archivuje hned
@@ -652,13 +664,15 @@ async def test_neuspesna_obnova_jede_na_starsim_snimku(
     today = TS.date()
     po_okne = settings.oi_publication_utc(dt.date(2026, 7, 17)) + dt.timedelta(minutes=5)
 
-    class ExplodingArchiver:
-        async def archive_day(self, contracts: object, day: dt.date, now: object = None) -> object:
+    class ExplodingFetcher(MockOIFetcher):
+        async def fetch_snapshot(
+            self, spec: OptionContractSpec, timeout_s: float
+        ) -> ContractSnapshot | OIMiss:
             raise RuntimeError("mock: přechodný výpadek IBKR")
 
-    pipeline.archiver = ExplodingArchiver()  # type: ignore[assignment]
+    pipeline.archiver = OIArchiver(repository, ExplodingFetcher(), settings)
 
-    assert await pipeline.try_archive_oi(today, po_okne) is True  # starší snímek platí dál
+    assert await archive_pass(pipeline, today, po_okne) is True  # starší snímek platí dál
     alerts = [d for ch, d in publisher.messages if ch == "alerts"]
     assert alerts[-1]["kind"] == "oi_refresh_failed"
     assert "starším snímku" in str(alerts[-1]["message"])
@@ -667,7 +681,7 @@ async def test_neuspesna_obnova_jede_na_starsim_snimku(
     # Totéž pro fetch, který nespadne, ale nic nevrátí (written == 0): týž den
     # je už ohlášený, další selhání jde jen do logu (#1307 hranově)
     pipeline.archiver = OIArchiver(repository, MockOIFetcher(), settings)
-    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
     alerts = [d for ch, d in publisher.messages if ch == "alerts"]
     assert [a["kind"] for a in alerts] == ["oi_refresh_failed"]
     assert pipeline.oi_final is False  # obnova běží dál, jen bez opakovaného alertu
@@ -786,65 +800,134 @@ async def test_oi_missing_alert_and_retry_counter(
     pipeline = make_pipeline("CL", 80.0, settings, writer, repository, publisher)
 
     # MockOIFetcher bez hodnot
-    ok = await pipeline.try_archive_oi(OPEN_MONDAY.date(), OPEN_MONDAY)
+    ok = await archive_pass(pipeline, OPEN_MONDAY.date(), OPEN_MONDAY)
     assert ok is False
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
     assert alerts and alerts[-1]["kind"] == "oi_missing"
     assert alerts[-1]["symbol"] == "CL"
 
 
-async def test_prvni_archiv_na_pozadi_neblokuje_a_nastavi_oi_available(
+async def test_prvni_archiv_po_zalozeni_jen_otevre_pruchod(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:
-    """#1208: start_initial_archive vrátí hned; oi_available se nastaví po doběhnutí."""
+    """#1674: založení pipeline (start enginu, roll) průchod jen otevře — IBKR
+    nečte a nečeká; platný snímek bez obnovy je k dispozici hned (#1208)."""
     settings, writer, repository, publisher = env
-    pipeline = make_pipeline(
-        "ES", 7600.0, settings, writer, repository, publisher, oi_available=False
+    pipeline, archiver, _ = timed_pipeline(env, 700.0, oi_available=False)
+    po_okne = settings.oi_publication_utc(TS.date()) + dt.timedelta(hours=1)
+
+    await pipeline.start_oi_archive(po_okne.date(), po_okne)
+    assert pipeline._oi_pass is not None and pipeline._oi_pass.offset == 0
+    assert archiver.batches == [] and archiver.calls == []
+    assert pipeline.oi_available is False  # volume fallback do konce průchodu
+
+    # Snímek dne před publikačním oknem obnovu nepotřebuje — OI je hned
+    fresh = make_pipeline(
+        "NQ", 24000.0, settings, writer, repository, publisher, oi_available=False
     )
-    specs = list(pipeline.runtime.contracts)
-    pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
-
-    task = pipeline.start_initial_archive(TS.date())
-    assert pipeline.oi_available is False  # nečekalo se
-    assert pipeline.initial_archive_running() is True
-    assert await task is True
-    assert pipeline.oi_available is True
-    assert pipeline.initial_archive_running() is False
+    pred_oknem = settings.oi_publication_utc(TS.date()) - dt.timedelta(hours=2)
+    await fresh.start_oi_archive(TS.date(), pred_oknem)
+    assert fresh._oi_pass is None
+    assert fresh.oi_available is True
 
 
-async def test_minutovy_cyklus_nearchivuje_dokud_bezi_prvni_archiv(
+async def test_selhani_otevreni_prvniho_archivu_neshodi_zalozeni(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1208: retry v run_minute čeká na první archiv; po jeho doběhnutí jede normálně."""
-    settings, writer, repository, publisher = env
-    pipeline = make_pipeline(
-        "ES", 7600.0, settings, writer, repository, publisher, oi_available=False
-    )
-    gate = asyncio.Event()
-    calls: list[dt.date] = []
+    """#1674 + #215: chyba PG při otevření prvního archivu nesmí shodit
+    `create_pipeline` (start ani roll) — dřív ji spolkl task na pozadí. Pipeline
+    jede s volume fallbackem a retry z minutového cyklu průchod otevře."""
+    settings, _, _, _ = env
+    pipeline, archiver, _ = timed_pipeline(env, 700.0, oi_available=False)
+    po_okne = settings.oi_publication_utc(TS.date()) + dt.timedelta(hours=1)
+    days = pipeline.oi_repository.days
 
-    async def slow_archive(today: dt.date, now: dt.datetime | None = None) -> bool:
-        calls.append(today)
-        await gate.wait()
-        return True
+    def broken_days(symbol: str) -> list[dt.date]:
+        raise RuntimeError("mock: PG nedostupné")
 
-    pipeline.try_archive_oi = slow_archive  # type: ignore[method-assign]
-    pipeline._cycles_since_oi = OI_RETRY_CYCLES  # retry by jinak archivoval hned
-    task = pipeline.start_initial_archive(TS.date())
-    await asyncio.sleep(0)
-    await pipeline.run_minute(TS + dt.timedelta(minutes=1))
-    assert calls == [TS.date()]  # jen první archiv, žádný souběžný retry
-    assert pipeline._oi_pass is None  # ani průchod po dávkách (#1646)
+    monkeypatch.setattr(pipeline.oi_repository, "days", broken_days)
+    await pipeline.start_oi_archive(po_okne.date(), po_okne)
+    assert pipeline._oi_pass is None
     assert pipeline.oi_available is False
 
-    gate.set()
-    assert await task is True
-    assert pipeline.oi_available is True
-    # Po doběhnutí se retry (OI nefinální) zase hlásí — otevře průchod po dávkách
+    monkeypatch.setattr(pipeline.oi_repository, "days", days)
     pipeline._cycles_since_oi = OI_RETRY_CYCLES
-    await pipeline.run_minute(TS + dt.timedelta(minutes=2))
+    await pipeline.run_minute(po_okne)
     assert pipeline._oi_pass is not None
-    assert calls == [TS.date()]  # minutový cyklus celý archiv naráz nečte (#1646)
+    assert archiver.batches == []
+
+
+async def test_prvni_archiv_po_davkach_bez_soubehu_se_sweepem_ani_symbolem(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1674 (#1649): první archiv po startu a rollu četl celý průchod naráz na
+    pozadí souběžně se sweepy i s prvním archivem druhého symbolu — 23. 10. po
+    rollu ve 20:01 UTC stála smyčka 8,08 s a hlídač heartbeatu shodil spojení.
+    Teď ho čte zbytek minuty po sweepech jako obnovu (#1646): ES celý, pak NQ,
+    minutový cyklus ho znovu neotevře a žádná iterace nepřetáhne start další."""
+    settings, writer, repository, publisher = env
+    sweeping = [False]
+    es, es_archiver, clock = timed_pipeline(env, 700.0, oi_available=False, sweeping=sweeping)
+    nq = make_pipeline("NQ", 24000.0, settings, writer, repository, publisher, oi_available=False)
+    nq_fetcher = SweepGuardFetcher(dict.fromkeys(nq.runtime.contracts, 900.0), sweeping)
+    nq_archiver = TimedArchiver(repository, nq_fetcher, settings, clock)
+    nq.archiver = nq_archiver
+    po_okne = settings.oi_publication_utc(TS.date()) + dt.timedelta(hours=1)
+
+    async def sweep(
+        ts_min: dt.datetime, spot: float, bars: object, forming_bar: object = None
+    ) -> SweepMetrics:
+        sweeping[0] = True
+        for _ in range(5):  # pustí ke slovu úlohy na pozadí
+            await asyncio.sleep(0)
+        clock.t += 20.0
+        sweeping[0] = False
+        return SweepMetrics(
+            total=6, greeks_complete=6, repair_count=0, stale_count=0, sweep_duration_s=20.0
+        )
+
+    for pipeline in (es, nq):
+        monkeypatch.setattr(pipeline.runtime, "run_cycle", sweep)
+        await pipeline.start_oi_archive(po_okne.date(), po_okne)
+    for minute in range(5):
+        cycle_start = 60.0 * minute
+        clock.t = cycle_start
+        for pipeline in (es, nq):
+            await pipeline.run_minute(po_okne + dt.timedelta(minutes=minute))
+        await advance_oi_archives([es, nq], cycle_start + 60.0, clock=clock)
+        assert clock.t <= cycle_start + 60.0 - OI_ARCHIVE_RESERVE_S
+    for pipeline in (es, nq):
+        if pipeline._oi_jobs_task is not None:
+            await pipeline._oi_jobs_task
+
+    # ES 3 + 3 dávky, zápis ve třetí minutě; NQ začne až po něm
+    assert es_archiver.batches == [40.0, 44.0, 48.0, 100.0, 104.0, 108.0]
+    assert nq_archiver.batches == [161.0, 165.0, 169.0, 220.0, 224.0, 228.0]
+    assert es_archiver.calls == [po_okne.date()] and nq_archiver.calls == [po_okne.date()]
+    for pipeline, fetcher in ((es, es_archiver._fetcher), (nq, nq_fetcher)):
+        assert isinstance(fetcher, SweepGuardFetcher)
+        assert fetcher.during_sweep == []  # žádné čtení z IBKR souběžně se sweepem
+        assert pipeline._oi_pass is None
+        assert pipeline.oi_available is True
+
+
+async def test_prvni_archiv_po_startu_v_zavrenem_trhu_dobehne(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1674: start v zavřeném trhu (víkend, pauza Globexu = okno nasazení) není
+    hrana zavření — první cyklus průchod nezahodí a OI dne se dočte."""
+    pipeline, archiver, clock = timed_pipeline(env, 640.0, oi_available=False)
+    assert is_market_closed(SAT_NOON)
+    await pipeline.start_oi_archive(SAT_NOON.date(), SAT_NOON)
+    assert pipeline._oi_pass is not None  # sobotní den snímek nemá
+
+    await pipeline.run_minute(SAT_NOON + dt.timedelta(minutes=1))
+    assert pipeline._oi_pass is not None
+    await advance_oi_archives([pipeline], math.inf, clock=clock)
+    assert archiver.calls == [SAT_NOON.date()]
+    assert pipeline.oi_available is True
 
 
 async def test_watchdog_prerusi_visici_cyklus(
@@ -1166,13 +1249,19 @@ async def test_archive_failure_does_not_kill_pipeline(
     settings, writer, repository, publisher = env
     pipeline = make_pipeline("MES", 7500.0, settings, writer, repository, publisher)
 
-    class ExplodingArchiver:
-        async def archive_day(self, contracts: object, day: dt.date) -> object:
+    class ExplodingArchiver(OIArchiver):
+        async def commit(
+            self,
+            records: Sequence[OIRecord],
+            missing: Sequence[OptionContractSpec],
+            day: dt.date,
+            now: dt.datetime | None = None,
+        ) -> ArchiveResult:
             raise RuntimeError("mock: CardinalityViolation")
 
-    pipeline.archiver = ExplodingArchiver()  # type: ignore[assignment]
+    pipeline.archiver = ExplodingArchiver(repository, MockOIFetcher(), settings)
 
-    ok = await pipeline.try_archive_oi(OPEN_MONDAY.date(), OPEN_MONDAY)
+    ok = await archive_pass(pipeline, OPEN_MONDAY.date(), OPEN_MONDAY)
 
     assert ok is False  # pipeline žije dál, retry po OI_RETRY_CYCLES
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
@@ -1495,7 +1584,7 @@ async def test_kalibrace_alfa_az_nad_finalnim_snimkem(
         dt.datetime(2026, 7, 17, 0, 5, tzinfo=dt.UTC),
     )
     okno = settings.oi_publication_utc(today)
-    assert await pipeline.try_archive_oi(today, okno - dt.timedelta(hours=2)) is True
+    assert await archive_pass(pipeline, today, okno - dt.timedelta(hours=2)) is True
     assert pipeline.oi_final is False
     assert alpha_repo.history_exists("ES", prev) is False  # bod nezamčený
     assert pipeline.runtime.flow_alpha is None
@@ -1506,9 +1595,9 @@ async def test_kalibrace_alfa_az_nad_finalnim_snimkem(
         oi_repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings
     )
     po_okne = okno + dt.timedelta(minutes=5)
-    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
     assert alpha_repo.history_exists("ES", prev) is False  # jedno čtení nestačí
-    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await archive_pass(pipeline, today, po_okne) is True
     assert pipeline.oi_final is True
     assert pipeline.runtime.flow_alpha == pytest.approx(0.4)
 
@@ -1736,7 +1825,7 @@ async def test_sobota_oi_neobnovuje_ani_nehlasi(
     assert archiver.calls == []
     assert alerts_of(publisher, OI_KINDS) == []
     # První archiv po restartu enginu v sobotu uložený snímek jen použije
-    assert await pipeline.try_archive_oi(day, SAT_NOON) is True
+    assert await archive_pass(pipeline, day, SAT_NOON) is True
     assert archiver.calls == []
 
 
@@ -2264,11 +2353,84 @@ async def test_log_pruchodu_po_davkach_nese_pozici_davek_a_duvod_nefinality(
 
     messages = [r.getMessage() for r in caplog.records]
     positions = [m.split(": dávka ")[1].split(" ")[0] for m in messages if ": dávka " in m]
-    assert positions == [f"{i}–{i}/{len(specs)}" for i in range(1, len(specs) + 1)]
+    # Po průchodu jedna dávka dočtení chybějícího kontraktu (#1674)
+    assert positions == [f"{i}–{i}/{len(specs)}" for i in range(1, len(specs) + 1)] + ["1–1/1"]
+    assert f"OI archiv ES {day}: dočtení 1 chybějících kontraktů průchodu (#1674)" in messages
     n = len(specs)
     pruchod = f"OI archiv ES {day}: {n - 1} zapsáno, 1 chybí — pokrytí {100 * (n - 1) / n:.1f} %"
     assert f"{pruchod}, změněno {n - 1}, chybí dřív archivovaných 1" in messages
     assert pipeline.oi_final is False
+
+
+class LateTickFetcher(MockOIFetcher):
+    """Tick 101 vybraných kontraktů dorazí až na druhé čtení (#1650, hypotéza 4)."""
+
+    def __init__(
+        self, values: dict[OptionContractSpec, float], late: Sequence[OptionContractSpec]
+    ) -> None:
+        super().__init__(values)
+        self.late = set(late)
+
+    async def fetch_snapshot(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> ContractSnapshot | OIMiss:
+        if spec in self.late:
+            self.late.discard(spec)
+            self.fetch_calls.append(spec)
+            return OIMiss.NO_OI
+        return await super().fetch_snapshot(spec, timeout_s)
+
+
+async def test_docteni_chybejicich_kontraktu_dovoli_finalitu(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1674: 23. 10. držely NQ nefinální 4, 2 a 9 náhodně chybějících dřív
+    archivovaných kontraktů (FA a α o 1,5 h později). Jedna dávka dočtení před
+    zápisem je přečte a průchod se shodnými hodnotami je finální."""
+    settings, _, repository, _ = env
+    pipeline, archiver, clock = timed_pipeline(env, 500.0)
+    settings.batch_size = 2
+    day = TS.date()
+    po_okne = settings.oi_publication_utc(day) + dt.timedelta(minutes=5)
+    specs = list(pipeline.runtime.contracts)
+    repository.upsert_many(
+        [
+            OIRecord("ES", s.expiry, s.strike, s.right, day, 500.0, trading_class=s.trading_class)
+            for s in specs
+        ],
+        po_okne - dt.timedelta(minutes=1),
+    )
+    late = [specs[1], specs[4]]
+    fetcher = LateTickFetcher(dict.fromkeys(specs, 500.0), late)
+    archiver = TimedArchiver(repository, fetcher, settings, clock)
+    pipeline.archiver = archiver
+
+    assert await archive_pass(pipeline, day, po_okne) is True
+    assert archiver.batches == [0.0, 4.0, 8.0, 12.0]  # 3 dávky průchodu + 1 dočtení
+    assert fetcher.fetch_calls[len(specs) :] == late
+    assert pipeline.oi_final is True
+
+
+async def test_docteni_jen_jednou_a_ne_nad_davku(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1674: dočtení je jedna dávka. Kontrakt, který nedodá ani podruhé, zůstane
+    chybět (obnova jede dál); víc chybějících než `batch_size` je systémový
+    výpadek a dočítat se nezačne."""
+    settings, _, _, _ = env
+    pipeline, archiver, _ = timed_pipeline(env, 700.0)
+    po_okne = settings.oi_publication_utc(TS.date()) + dt.timedelta(minutes=5)
+    specs = list(pipeline.runtime.contracts)
+    fetcher = archiver._fetcher
+    assert isinstance(fetcher, MockOIFetcher)
+    del fetcher.values[specs[0]]
+    assert await archive_pass(pipeline, TS.date(), po_okne) is True
+    assert fetcher.fetch_calls == [*specs, specs[0]]  # jen jedno dočtení
+
+    del fetcher.values[specs[1]]  # 2 chybějící > batch_size 1
+    fetcher.fetch_calls.clear()
+    assert await archive_pass(pipeline, TS.date(), po_okne) is True
+    assert fetcher.fetch_calls == specs
 
 
 async def test_rozpracovany_pruchod_oi_se_zahodi_novy_den(
@@ -2385,8 +2547,8 @@ async def test_chyba_davky_oi_nezastavi_ostatni_pipeline(
 async def test_selhani_zapisu_pruchodu_po_davkach_hlasi_jako_cteni_naraz(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:
-    """#1646 + #494: selhání zápisu po celém průchodu je neúspěšná obnova, stejně
-    jako pád `archive_day` při čtení naráz — starší snímek platí, hlásí se hranově."""
+    """#1646 + #494: selhání zápisu po celém průchodu je neúspěšná obnova —
+    starší snímek platí, hlásí se hranově."""
     settings, _, _, publisher = env
     pipeline, archiver, clock = timed_pipeline(env, 700.0)
 

@@ -119,6 +119,8 @@ class OIArchivePass:
     offset: int = 0
     records: list[OIRecord] = field(default_factory=list)
     missing: list[OptionContractSpec] = field(default_factory=list)
+    #: Chybějící kontrakty průchodu už jednou dočteny (#1674)
+    reread: bool = False
 
 
 class InstrumentSetupError(RuntimeError):
@@ -438,8 +440,10 @@ class InstrumentPipeline:
     # jednou za den a znovu až po úspěšném čtení. Opakovat tutéž větu à 30 min
     # je spam, který uživatele naučí zvonek ignorovat.
     _oi_alerted_day: dt.date | None = field(default=None, repr=False)
-    # Stav rozvrhu CME z minulého cyklu (#1307) — z něj hrana otevření trhu
-    _market_closed: bool = field(default=False, repr=False)
+    # Stav rozvrhu CME z minulého cyklu (#1307) — z něj hrana otevření trhu.
+    # None před prvním cyklem: start v zavřeném trhu (víkend, pauza Globexu =
+    # okno nasazení) není hrana zavření a první archiv nezahodí (#1674)
+    _market_closed: bool | None = field(default=None, repr=False)
     # Poslední stav živosti spotu pod v6 — log jen na přechodu, ne každou minutu;
     # hlídá se až `SPOT_WATCH_GRACE` po startu a po každém otevření trhu
     _spot_live: bool = field(default=True, repr=False)
@@ -448,9 +452,7 @@ class InstrumentPipeline:
     _last_spot: float = field(default=float("nan"), repr=False)
     _backfill_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _gap_fill_task: asyncio.Task[int] | None = field(default=None, repr=False)
-    #: První OI archiv dne na pozadí (#1208); None = neběží (hotovo nebo nezačal)
-    _initial_oi_task: asyncio.Task[bool] | None = field(default=None, repr=False)
-    #: OI archiv z minutového cyklu čtený po dávkách (#1646); None = neběží
+    #: OI archiv čtený po dávkách mezi cykly (#1646, první archiv dne #1674); None = neběží
     _oi_pass: OIArchivePass | None = field(default=None, repr=False)
     #: Joby po průchodu (FA, sebekontrola, Forward GEX) na pozadí (#1646)
     _oi_jobs_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -555,39 +557,18 @@ class InstrumentPipeline:
         """
         return self._oi_published(now) and not self.oi_final and not is_market_closed(now)
 
-    def start_initial_archive(self, today: dt.date) -> asyncio.Task[bool]:
-        """První OI archiv dne jako task na pozadí (#1208).
+    async def start_oi_archive(self, today: dt.date, now: dt.datetime | None = None) -> None:
+        """Otevře průchod OI archivu dne; dávky čte `advance_oi_archive` (#1646, #1674).
 
-        `create_pipeline` na něj dřív čekal: archiv z IBKR + FA validace +
-        kalibrace α + Forward GEX trvaly u ES 5–10 min a hlavní smyčka zakládá
-        instrumenty sekvenčně, takže NQ po restartu stál 11 min bez dat.
-        Do doběhnutí jede pipeline s `oi_available=False` (volume fallback,
-        stejně jako při selhání archivu); minutový cyklus mezitím vlastní
-        retry archivu přeskakuje, aby neběžely dva naráz.
-        """
-        task = asyncio.create_task(self.try_archive_oi(today), name=f"oi-archive-{self.symbol}")
-
-        def _done(done: asyncio.Task[bool]) -> None:
-            self._initial_oi_task = None
-            if done.cancelled():
-                return
-            exc = done.exception()
-            if exc is not None:
-                logger.error(
-                    "První OI archiv %s selhal (%s) — retry v minutovém cyklu", self.symbol, exc
-                )
-                return
-            self.oi_available = done.result()
-
-        task.add_done_callback(_done)
-        self._initial_oi_task = task
-        return task
-
-    def initial_archive_running(self) -> bool:
-        return self._initial_oi_task is not None and not self._initial_oi_task.done()
-
-    async def try_archive_oi(self, today: dt.date, now: dt.datetime | None = None) -> bool:
-        """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2).
+        Jediná cesta pro první archiv po založení pipeline (start enginu, roll
+        v settle) i pro retry, čtení nového UTC dne a obnovu z minutového cyklu.
+        První archiv dřív četl celý průchod naráz jako task na pozadí (#1208),
+        souběžně se sweepy a s prvním archivem druhého symbolu (#1649): 23. 10.
+        2026 po rollu ve 20:01 UTC stála smyčka asyncio až 8,08 s a hlídač
+        heartbeatu shodil zdravé spojení (#1650). Po dávkách mezi cykly přijde
+        první OI po startu za 2–4 min, ale bez souběhu; do té doby jede pipeline
+        s `oi_available=False` (volume fallback, jako při selhání archivu).
+        Platný snímek dne bez obnovy = OI je k dispozici hned.
 
         Po #463 archivace nekončí prvním úspěchem: snímek z doby před publikací
         IBKR nese neúplná čísla (4. 8. 2026 tak celý den běžel GEX na půlnočním
@@ -595,21 +576,27 @@ class InstrumentPipeline:
         `now` je injektovatelné kvůli testům — rozhodnutí o obnově závisí na
         hodině, takže by test jinak platil jen část dne.
 
-        Celý průchod naráz čte jen první archiv dne na pozadí (#1208); minutový
-        cyklus čte po dávkách ve zbytku minuty (#1646, `advance_oi_archive`).
+        Selhání otevření (PG, disk) nesmí shodit založení pipeline ani cyklus
+        (#215): pipeline jede dál s volume fallbackem a retry přijde za
+        `OI_RETRY_CYCLES` cyklů — dřív to za první archiv hlídal task na pozadí.
         """
         now = now or dt.datetime.now(dt.UTC)
-        archive = await self._open_oi_archive(today, now)
-        if archive is None:
-            return True
         try:
-            result = await self.archiver.archive_day(archive.contracts, today, now=now)
+            self._oi_pass = await self._open_oi_archive(today, now)
         except Exception:
-            return await self._oi_archive_failed(archive)
-        available = await self._oi_archive_done(archive, result)
-        if result.written:
-            await self._after_oi_archive(today)
-        return available
+            logger.exception(
+                "OI archiv %s %s se neotevřel — retry v minutovém cyklu", self.symbol, today
+            )
+            return
+        if self._oi_pass is None:
+            self.oi_available = True
+            return
+        logger.info(
+            "OI archiv %s %s: průchod %d kontraktů po dávkách mezi cykly",
+            self.symbol,
+            today,
+            len(self._oi_pass.contracts),
+        )
 
     async def _open_oi_archive(self, today: dt.date, now: dt.datetime) -> OIArchivePass | None:
         """Začátek průchodu OI archivu dne; None = platný snímek, číst není co."""
@@ -643,6 +630,14 @@ class InstrumentPipeline:
         průchodu — dávka i závěrečný zápis — začne, jen když se do zbytku
         minuty vejde `batch_timeout_s`, a průchod pokračuje v dalších minutách.
         Zápis a finalita až po celém průchodu; joby po archivu jdou na pozadí.
+
+        Před zápisem jedna dávka znovu přečte kontrakty, které průchod nedodal
+        (#1674). 23. 10. 2026 nesl první průchod ES po publikaci 64 kontraktů
+        „tick bez OI“ (pozdní tick 101) a průchody NQ 2–9 náhodných výpadků
+        z IBKR; každý chybějící dřív archivovaný kontrakt drží snímek nefinální
+        a FA i kalibrace α NQ doběhly o 1,5 h později. Víc chybějících než
+        `batch_size` je systémový výpadek (farma, celé expirace), ten jedno
+        dočtení nespraví — průchod se zapíše bez něj a obnova jede dál.
         """
         archive = self._oi_pass
         if archive is None:
@@ -660,16 +655,29 @@ class InstrumentPipeline:
                         len(archive.contracts),
                     )
                 return
-            if archive.offset >= len(archive.contracts):
+            if archive.offset < len(archive.contracts):
+                batch = archive.contracts[archive.offset : archive.offset + size]
+                records, missing = await self.archiver.fetch_batch(
+                    batch, archive.day, offset=archive.offset, total=len(archive.contracts)
+                )
+                archive.records.extend(records)
+                archive.missing.extend(missing)
+                archive.offset += len(batch)
+                read += len(batch)
+            elif not archive.reread and 0 < len(archive.missing) <= size:
+                archive.reread = True
+                logger.info(
+                    "OI archiv %s %s: dočtení %d chybějících kontraktů průchodu (#1674)",
+                    self.symbol,
+                    archive.day,
+                    len(archive.missing),
+                )
+                records, archive.missing = await self.archiver.fetch_batch(
+                    archive.missing, archive.day, offset=0, total=len(archive.missing)
+                )
+                archive.records.extend(records)
+            else:
                 break
-            batch = archive.contracts[archive.offset : archive.offset + size]
-            records, missing = await self.archiver.fetch_batch(
-                batch, archive.day, offset=archive.offset, total=len(archive.contracts)
-            )
-            archive.records.extend(records)
-            archive.missing.extend(missing)
-            archive.offset += len(batch)
-            read += len(batch)
         self._oi_pass = None
         try:
             result = await self.archiver.commit(
@@ -687,7 +695,7 @@ class InstrumentPipeline:
 
         IBKR nečtou, takže se lines se sweepem nesčítají; FA validace s kalibrací
         α ale trvala v den finality u ES 22 s (20. 10. 2026) a ke dvěma sweepům
-        by se do minuty nevešla vždy. Na pozadí je pouští i první archiv dne (#1208).
+        by se do minuty nevešla vždy. Platí i pro první archiv dne (#1674).
         """
         task = asyncio.create_task(self._after_oi_archive(today), name=f"oi-jobs-{self.symbol}")
         task.add_done_callback(self._log_oi_jobs_result)
@@ -893,7 +901,7 @@ class InstrumentPipeline:
         se už neohlásila.
 
         Po okně se ohlásí první selhání dne, další až po úspěšném čtení
-        (`_oi_alerted_day` se nuluje v `try_archive_oi`). Do #1307 chodila
+        (`_oi_alerted_day` se nuluje v `_oi_archive_done`). Do #1307 chodila
         tatáž věta každých 30 min pro ES i NQ (Telegram deduplikuje jen
         10 min, zvonek vůbec).
         """
@@ -1281,9 +1289,10 @@ class InstrumentPipeline:
         market_closed = is_market_closed(now)
         if self._market_closed and not market_closed:
             self._on_market_open()
-        elif market_closed and not self._market_closed:
+        elif market_closed and self._market_closed is False:
             # Obnova se při zavřeném trhu nečte (#1307); po otevření jde nová hned.
-            # Čtení nového UTC dne otevřené v zavřeném trhu hranu nemá a doběhne
+            # Čtení nového UTC dne otevřené v zavřeném trhu hranu nemá a doběhne,
+            # stejně jako první archiv po startu v zavřeném trhu (#1674)
             self.drop_oi_archive("trh se zavřel")
         self._market_closed = market_closed
         # Nový den (#494): finalita i dostupnost OI patřily včerejšku. Pipeline
@@ -1300,8 +1309,8 @@ class InstrumentPipeline:
         self._oi_day = today
         # Retry běží nejen když OI chybí, ale i dokud snímek není finální (#463):
         # předpublikační čísla jsou nenulová, takže se bez toho nikdy neobnoví.
-        # Dokud běží první archiv na pozadí (#1208), retry čeká — dva archivy
-        # téhož dne naráz by se přepisovaly.
+        # Dokud se čte rozpracovaný průchod (i první archiv po založení, #1674),
+        # retry čeká — dva archivy téhož dne naráz by se přepisovaly.
         # Při zavřeném trhu (#1307) se neopakuje ani neobnovuje: nic nového se
         # nepublikuje a každý pokus by jen selhal (sobota 26. 9.: 0 zapsáno
         # à 30 min). Výjimkou je jediné čtení na začátku nového UTC dne
@@ -1311,24 +1320,11 @@ class InstrumentPipeline:
         # takže chybějící OI (nebo nefinální snímek po okně) se čte hned.
         # Cyklus průchod jen otevře; dávky čte `advance_oi_archives` po sweepech
         # ve zbytku minuty (#1646) — celý průchod ES tu dřív stál ~100 s.
-        if (
-            self._oi_pass is None
-            and not self.initial_archive_running()
-            and (not self.oi_available or self._oi_refresh_due(now))
-        ):
+        if self._oi_pass is None and (not self.oi_available or self._oi_refresh_due(now)):
             self._cycles_since_oi += 1
             if self._cycles_since_oi >= OI_RETRY_CYCLES and (not market_closed or new_day):
                 self._cycles_since_oi = 0
-                self._oi_pass = await self._open_oi_archive(today, now)
-                if self._oi_pass is None:
-                    self.oi_available = True
-                else:
-                    logger.info(
-                        "OI archiv %s %s: průchod %d kontraktů po dávkách mezi cykly",
-                        self.symbol,
-                        today,
-                        len(self._oi_pass.contracts),
-                    )
+                await self.start_oi_archive(today, now)
 
         spot = self._current_spot()
         live_spot, spot_missing = self._live_spot(spot, market_closed, now)
@@ -1864,8 +1860,6 @@ class InstrumentPipeline:
             self._backfill_task.cancel()
         if self._gap_fill_task is not None:
             self._gap_fill_task.cancel()
-        if self._initial_oi_task is not None:
-            self._initial_oi_task.cancel()
         if self._oi_jobs_task is not None:
             self._oi_jobs_task.cancel()
         self.drop_oi_archive("pipeline končí")
