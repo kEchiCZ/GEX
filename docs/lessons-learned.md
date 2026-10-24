@@ -16,6 +16,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-23 — oprava souběhu jen na jedné ze dvou cest k témuž čtení IBKR (#1674, #1649).**
+  #1646 přesunul obnovu OI archivu z minutového cyklu po dávkách mezi cykly. První archiv po
+  založení pipeline ale dál četl celý průchod naráz jako task na pozadí (#1208). Po rollu v settle
+  ve 20:01 UTC tak běžel souběžně u ES i NQ a se sweepy nových pipeline. Dávky trvaly 23 s místo
+  ~4 s a lag smyčky asyncio byl 8,08 s. Hlídač heartbeatu (timeout 15 s) ve 20:02:24 shodil zdravé
+  spojení a minuta 20:02 chyběla. Odhalil to řádek dávky s lagem smyčky (#1650 D1) při měření v RTH.
+  → Jedno čtení IBKR má jednu cestu: i první archiv jde po dávkách mezi cykly (`start_oi_archive`).
+  Při opravě souběhu hledat všechny cesty k témuž IO, ne jen tu, kde se symptom ukázal. Hodnotu
+  konfigurace ověřit v běžícím kontejneru (`Settings()`), ne z výchozí hodnoty konstruktoru.
+  Verdikt D3 uvedl timeout 5 s místo 15 s.
+
 - **2026-10-22 — dlouhý await v minutovém cyklu = ztracená minuta, podruhé po #1337 (#1646).**
   Obnova OI archivu po publikaci (`await self.try_archive_oi` à 30 cyklů) četla v cyklu ES celý
   průchod ~1 400 kontraktů, ~100 s. Hlavní smyčka čeká `max(1, 60 − elapsed)`, takže přetažená

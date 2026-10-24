@@ -1647,9 +1647,11 @@ async def create_pipeline(
 
     manager.on_resubscribe(resubscribe)
 
-    # První OI archiv dne na pozadí (#1208): čekání tady blokovalo založení
-    # dalšího instrumentu v hlavní smyčce (NQ startoval 11 min po ES)
-    pipeline.start_initial_archive(dt.datetime.now(dt.UTC).date())
+    # První OI archiv dne se tu jen otevře a čte se po dávkách mezi cykly
+    # (#1674): celý průchod naráz tady blokoval založení dalšího instrumentu
+    # (NQ startoval 11 min po ES, #1208) a na pozadí běžel souběžně se sweepy
+    # i s druhým symbolem (#1649, po rollu 23. 10. lag smyčky 8 s)
+    await pipeline.start_oi_archive(dt.datetime.now(dt.UTC).date())
     return pipeline
 
 
