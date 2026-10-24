@@ -59,6 +59,54 @@ def test_varianty_k1_odlozene_reakce(
     assert script.variant_flags(contaminators, "MACRO", NEWS, OPEN, 60) == expected
 
 
+PAUSE_NEWS = dt.datetime(2026, 10, 22, 21, 30, tzinfo=dt.UTC)
+PAUSE_OPEN = dt.datetime(2026, 10, 22, 22, 0, tzinfo=dt.UTC)
+
+
+@pytest.mark.parametrize(
+    ("news", "start", "other", "window", "expected"),
+    [
+        # Zpráva v denní pauze, jiná po konci okna 15, ale do 61 min po zprávě:
+        # výnos okna neovlivnila — žádná varianta (kontrola PR #1659)
+        (
+            PAUSE_NEWS,
+            PAUSE_OPEN,
+            PAUSE_OPEN + dt.timedelta(minutes=20),
+            15,
+            {"C": False, "A": False, "B": False},
+        ),
+        (
+            PAUSE_NEWS,
+            PAUSE_OPEN,
+            PAUSE_OPEN + dt.timedelta(minutes=20),
+            60,
+            {"C": True, "A": True, "B": True},
+        ),
+        # Přesně na konci okna: horní mez je otevřená ve všech variantách
+        (NEWS, OPEN, OPEN + dt.timedelta(minutes=60), 60, {"C": False, "A": False, "B": False}),
+        # Přesně zpráva + 61 min: uzavřená mez C (a tedy B); o sekundu později jen A
+        (NEWS, OPEN, NEWS + dt.timedelta(minutes=61), 60, {"C": True, "A": True, "B": True}),
+        (
+            NEWS,
+            OPEN,
+            NEWS + dt.timedelta(minutes=61, seconds=1),
+            60,
+            {"C": False, "A": True, "B": False},
+        ),
+    ],
+)
+def test_varianty_k1_hranice(
+    news: dt.datetime,
+    start: dt.datetime,
+    other: dt.datetime,
+    window: int,
+    expected: dict[str, bool],
+) -> None:
+    script = load_script()
+    contaminators = Contaminators.build([(news, "MACRO", 3), (other, "FED", 2)])
+    assert script.variant_flags(contaminators, "MACRO", news, start, window) == expected
+
+
 def test_c_odpovida_predikatu_jobu() -> None:
     """C je dnešní `window_contaminated` nad eventy z `Contaminators.around`."""
     script = load_script()

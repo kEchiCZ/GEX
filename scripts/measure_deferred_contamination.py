@@ -8,8 +8,9 @@ změřené minutové okno odložené reakce spočítá příznak K1 ve třech va
 * **C** — dnešní stav: jiná významná zpráva v (zpráva, zpráva + 61 min]
   a před koncem okna (`window_contaminated`); sloupec `cont_<w>` by měl sedět;
 * **A** — celá uzavírka: jiná významná zpráva v (zpráva, začátek + okno);
-* **B** — 61 min po zprávě + okno po otevření:
-  (zpráva, zpráva + 61 min] ∪ [začátek, začátek + okno).
+* **B** — 61 min po zprávě + okno po otevření: C ∪ [začátek, začátek + okno).
+
+Všechny varianty berou jen zprávy před koncem okna (pozdější výnos neovlivnily).
 
 „Jiná významná“ = importance ≥ 2 a jiná kategorie (`contaminates`). Pak
 odložené buckety režimu `all` týmiž funkcemi jako noční `ModelStatsJob`
@@ -73,10 +74,11 @@ def others_between(
     lo: dt.datetime,
     hi: dt.datetime,
     *,
-    hi_inclusive: bool,
+    lo_inclusive: bool = False,
+    hi_inclusive: bool = False,
 ) -> bool:
-    """Je v (lo, hi) — s `hi_inclusive` v (lo, hi] — kontaminující event?"""
-    start = bisect.bisect_right(contaminators.times, lo)
+    """Je v (lo, hi) kontaminující event? Meze `*_inclusive` = uzavřené."""
+    start = (bisect.bisect_left if lo_inclusive else bisect.bisect_right)(contaminators.times, lo)
     end = (bisect.bisect_right if hi_inclusive else bisect.bisect_left)(contaminators.times, hi)
     return any(
         contaminates(category, contaminators.categories[index]) for index in range(start, end)
@@ -90,23 +92,25 @@ def variant_flags(
     start: dt.datetime,
     window_min: int,
 ) -> dict[str, bool]:
-    """Příznak K1 okna [start, start + okno) podle variant C, A a B."""
+    """Příznak K1 okna [start, start + okno) podle variant C, A a B.
+
+    Všechny varianty berou jen zprávy před koncem okna — pozdější výnos
+    neovlivnily (`window_contaminated`).
+    """
     end = start + dt.timedelta(minutes=window_min)
     span_end = ts_event + CONTAMINATION_SPAN
     after_news = others_between(
         contaminators, category, ts_event, min(span_end, end), hi_inclusive=span_end < end
     )
+    in_window = (
+        others_between(contaminators, category, start, end, lo_inclusive=True)
+        if start > ts_event
+        else others_between(contaminators, category, ts_event, end)
+    )
     return {
         "C": after_news,
-        "A": others_between(contaminators, category, ts_event, end, hi_inclusive=False),
-        "B": others_between(contaminators, category, ts_event, span_end, hi_inclusive=True)
-        or others_between(
-            contaminators,
-            category,
-            max(ts_event, start - dt.timedelta(microseconds=1)),
-            end,
-            hi_inclusive=False,
-        ),
+        "A": others_between(contaminators, category, ts_event, end),
+        "B": after_news or in_window,
     }
 
 
@@ -118,8 +122,13 @@ def load_contaminators(engine: Engine) -> Contaminators:
         )
 
 
-def iter_windows(engine: Engine, contaminators: Contaminators) -> Iterator[DeferredWindow]:
-    """Odložená minutová okna vzestupně podle času zprávy (pořadí `ModelStatsJob`)."""
+def iter_windows(
+    engine: Engine, contaminators: Contaminators, skipped: Counter[str]
+) -> Iterator[DeferredWindow]:
+    """Odložená minutová okna vzestupně podle času zprávy (pořadí `ModelStatsJob`).
+
+    Řádky bez `closure_open_ts` nemají začátek oken; počítají se do `skipped`.
+    """
     stmt = (
         select(
             news_events.c.category,
@@ -143,6 +152,7 @@ def iter_windows(engine: Engine, contaminators: Contaminators) -> Iterator[Defer
     with engine.connect() as conn:
         for row in conn.execution_options(yield_per=5000).execute(stmt).mappings():
             if row["closure_open_ts"] is None:
+                skipped["closure"] += 1
                 continue
             surprise = float(row["surprise_z"]) if row["surprise_z"] is not None else None
             for window_min in DEFAULT_WINDOWS:
@@ -189,7 +199,7 @@ def buckets(windows: Iterable[DeferredWindow], variant: str) -> list[BucketStats
     return [stats for regime, stats in aggregate_by_regime(samples) if regime == "all"]
 
 
-def report(windows: Sequence[DeferredWindow]) -> list[str]:
+def report(windows: Sequence[DeferredWindow], skipped: Counter[str]) -> list[str]:
     lines = ["# Kontaminace K1 odložené reakce (#1659)", ""]
     total = len(windows)
     closures = len({(w.symbol, w.closure_open) for w in windows})
@@ -201,6 +211,7 @@ def report(windows: Sequence[DeferredWindow]) -> list[str]:
     lines.append(
         f"Parita C × uložené `cont_<w>`: {total - parity}/{total} shodných ({parity} rozdílných)."
     )
+    lines.append(f"Odložených řádků bez `closure_open_ts` (přeskočeno): {skipped['closure']}.")
     lines += [
         "",
         "| varianta | kontaminovaná okna | % | přepnuto proti C |",
@@ -216,8 +227,8 @@ def report(windows: Sequence[DeferredWindow]) -> list[str]:
     lines += ["", "| okno | C | A | B |", "|---:|---:|---:|---:|"]
     for window_min in DEFAULT_WINDOWS:
         n = sum(1 for w in windows if w.window_min == window_min)
-        cells = " | ".join(f"{per_window[(window_min, v)]}/{n}" for v in VARIANTS)
-        lines.append(f"| {window_min} | {cells} |")
+        counts = " | ".join(f"{per_window[(window_min, v)]}/{n}" for v in VARIANTS)
+        lines.append(f"| {window_min} | {counts} |")
     stats = {variant: buckets(windows, variant) for variant in VARIANTS}
     lines += [
         "",
@@ -279,8 +290,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     engine = make_engine(database_url(args.db), read_only=True)
     contaminators = load_contaminators(engine)
-    windows = list(iter_windows(engine, contaminators))
-    print("\n".join(report(windows)))
+    skipped: Counter[str] = Counter()
+    windows = list(iter_windows(engine, contaminators, skipped))
+    print("\n".join(report(windows, skipped)))
     return 0
 
 
