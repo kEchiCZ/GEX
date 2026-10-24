@@ -308,5 +308,6 @@ def test_truncated_deferred_premeri_useknute_okno_a_je_idempotentni(tmp_path: Pa
     row = reaction(engine, truncated, "ES")
     base, last = 7000.0 + 1259 / 100, 7100.0 + 1379 / 100  # pá 20:59 a ne 22:59 UTC
     assert row["ret_60"] == pytest.approx((last - base) / base * 10_000)
+    assert reaction(engine, edge, "ES")["ret_60"] != 1.0  # hrana rezervy přeměřena
     assert reaction(engine, whole, "ES")["ret_60"] == 1.0  # celé okno se nepřepisuje
     assert list(script.truncated_deferred(engine)) == []
