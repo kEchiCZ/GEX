@@ -157,10 +157,11 @@ def test_apply_zapise_body_a_stav_volume_idempotentne(tmp_path: Path) -> None:
     url, settings = _seed(tmp_path)
     assert _run(module, url, settings, tmp_path / "out", "--apply", "--yes") == 0
     history = _history(url)
-    assert history == [(TUESDAY, SOURCE_VOLUME, pytest.approx(0.4), pytest.approx(0.4))]
+    assert [(day, source) for day, source, _, _ in history] == [(TUESDAY, SOURCE_VOLUME)]
+    assert history[0][2:] == pytest.approx((0.4, 0.4))
     state = FaAlphaRepository(create_engine(url)).get("ES")
     assert state is not None and state.source == SOURCE_VOLUME
-    assert (state.alpha, state.days) == (pytest.approx(0.4), 1)
+    assert state.alpha == pytest.approx(0.4) and state.days == 1
 
     assert _run(module, url, settings, tmp_path / "out", "--apply", "--yes") == 0
     assert _history(url) == history  # opakovaný běh zapíše totéž

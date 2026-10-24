@@ -190,10 +190,10 @@ def replay_symbol(
             conn.execute(select(fa_alpha_history_table).order_by(fa_alpha_history_table.c.day))
         )
     for point in history:
-        row = rows.get(point.day)
-        if row is None:  # seance bez archivu v `days` (nemá být)
+        replayed = rows.get(point.day)
+        if replayed is None:  # seance bez archivu v `days` (nemá být)
             continue
-        row.median, row.rho_after = point.ratio_median, point.alpha_after
+        replayed.median, replayed.rho_after = point.ratio_median, point.alpha_after
     state = alpha_memory.get(symbol)
     result.rho = state.alpha if state else None
     result.days = state.days if state else 0
