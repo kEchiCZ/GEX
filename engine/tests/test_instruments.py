@@ -831,6 +831,33 @@ async def test_prvni_archiv_po_zalozeni_jen_otevre_pruchod(
     assert fresh.oi_available is True
 
 
+async def test_selhani_otevreni_prvniho_archivu_neshodi_zalozeni(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1674 + #215: chyba PG při otevření prvního archivu nesmí shodit
+    `create_pipeline` (start ani roll) — dřív ji spolkl task na pozadí. Pipeline
+    jede s volume fallbackem a retry z minutového cyklu průchod otevře."""
+    settings, _, _, _ = env
+    pipeline, archiver, _ = timed_pipeline(env, 700.0, oi_available=False)
+    po_okne = settings.oi_publication_utc(TS.date()) + dt.timedelta(hours=1)
+    days = pipeline.oi_repository.days
+
+    def broken_days(symbol: str) -> list[dt.date]:
+        raise RuntimeError("mock: PG nedostupné")
+
+    monkeypatch.setattr(pipeline.oi_repository, "days", broken_days)
+    await pipeline.start_oi_archive(po_okne.date(), po_okne)
+    assert pipeline._oi_pass is None
+    assert pipeline.oi_available is False
+
+    monkeypatch.setattr(pipeline.oi_repository, "days", days)
+    pipeline._cycles_since_oi = OI_RETRY_CYCLES
+    await pipeline.run_minute(po_okne)
+    assert pipeline._oi_pass is not None
+    assert archiver.batches == []
+
+
 async def test_prvni_archiv_po_davkach_bez_soubehu_se_sweepem_ani_symbolem(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
     monkeypatch: pytest.MonkeyPatch,
@@ -2520,8 +2547,8 @@ async def test_chyba_davky_oi_nezastavi_ostatni_pipeline(
 async def test_selhani_zapisu_pruchodu_po_davkach_hlasi_jako_cteni_naraz(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:
-    """#1646 + #494: selhání zápisu po celém průchodu je neúspěšná obnova, stejně
-    jako pád `archive_day` při čtení naráz — starší snímek platí, hlásí se hranově."""
+    """#1646 + #494: selhání zápisu po celém průchodu je neúspěšná obnova —
+    starší snímek platí, hlásí se hranově."""
     settings, _, _, publisher = env
     pipeline, archiver, clock = timed_pipeline(env, 700.0)
 

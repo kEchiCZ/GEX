@@ -575,9 +575,19 @@ class InstrumentPipeline:
         stavu, kde put strana měla Σ OI 1 877 proti 29 282 na call straně).
         `now` je injektovatelné kvůli testům — rozhodnutí o obnově závisí na
         hodině, takže by test jinak platil jen část dne.
+
+        Selhání otevření (PG, disk) nesmí shodit založení pipeline ani cyklus
+        (#215): pipeline jede dál s volume fallbackem a retry přijde za
+        `OI_RETRY_CYCLES` cyklů — dřív to za první archiv hlídal task na pozadí.
         """
         now = now or dt.datetime.now(dt.UTC)
-        self._oi_pass = await self._open_oi_archive(today, now)
+        try:
+            self._oi_pass = await self._open_oi_archive(today, now)
+        except Exception:
+            logger.exception(
+                "OI archiv %s %s se neotevřel — retry v minutovém cyklu", self.symbol, today
+            )
+            return
         if self._oi_pass is None:
             self.oi_available = True
             return
