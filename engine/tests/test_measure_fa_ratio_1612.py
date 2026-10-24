@@ -215,7 +215,8 @@ def test_bod_d_bere_jen_zmerene_strany_tisky_seance_a_rez(tmp_path: Path) -> Non
     assert [s.strike for s in point.sides] == STRIKES[:-1]
     assert point.spot == 29020.0  # bar 21:00 už patří za řez
     first, second = point.sides[0], point.sides[1]
-    assert first.net == {20: 50.0, 21: 100.0, 22: 100.0}
+    # Klíč = posun od řezu dne 16:00 CT (v létě 21:00 UTC): −1 h, řez, +1 h
+    assert first.net == {-1: 50.0, 0: 100.0, 1: 100.0}
     # Tisky jen ze seance D do řezu a jen expirace řetězu
     assert (first.buy, first.sell) == (30.0, 5.0)
     assert first.aggressor_net == 25.0
@@ -228,6 +229,104 @@ def test_bod_d_bere_jen_zmerene_strany_tisky_seance_a_rez(tmp_path: Path) -> Non
     assert (point.stored_median, point.stored_samples) == (0.0, 48)
     report = module.report_markdown({"NQ": points}, dt.datetime(2026, 10, 23, 20, 0, tzinfo=dt.UTC))
     assert "### H7" in report and "### H2" in report
+
+
+def _seed_pair(
+    tmp_path: Path,
+    day: dt.date,
+    archive: dict[dt.date, float],
+    netflow: dict[str, list[tuple[dt.datetime, float]]],
+    stored_expiry: str | None = None,
+) -> tuple[str, Settings]:
+    """Archiv OI všech `netflow` řetězů po dnech (strana 29000 C, třída per expirace) a netflow."""
+    settings = Settings(data_dir=tmp_path / "data")
+    url = f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}"
+    oi_repo = OIEodRepository(create_engine(url))
+    oi_repo.ensure_schema()
+    alpha_repo = FaAlphaRepository(create_engine(url))
+    alpha_repo.ensure_schema()
+    if stored_expiry is not None:
+        alpha_repo.record(
+            "NQ",
+            day,
+            stored_expiry,
+            AlphaCalibrationPoint(7, 0.5, None, None),
+            0.3,
+            5,
+            source=SOURCE_MIDPOINT,
+        )
+    for expiry in netflow:
+        for archive_day, oi in archive.items():
+            oi_repo.upsert_many(
+                [
+                    OIRecord(
+                        "NQ", expiry, 29000.0, "C", archive_day, oi, trading_class=f"Q{expiry[-1]}A"
+                    )
+                ],
+                settings.oi_publication_utc(archive_day) + dt.timedelta(hours=1),
+            )
+    writer = SnapshotWriter(settings)
+    for expiry, rows in netflow.items():
+        for ts, net in rows:
+            writer.write_netflow(
+                "NQ",
+                expiry,
+                day,
+                [
+                    NetFlowRow(
+                        ts_min=ts, strike=29000.0, right="C", net_volume=net, source=SOURCE_MIDPOINT
+                    )
+                ],
+            )
+    return url, settings
+
+
+def test_patek_paruje_s_pondelim_pres_vikendove_klice_archivu(tmp_path: Path) -> None:
+    module = _load()
+    friday, monday = dt.date(2026, 10, 2), dt.date(2026, 10, 5)
+    cutoff = dt.datetime(2026, 10, 2, 21, 0, tzinfo=dt.UTC)  # 16:00 CDT
+    # Sobotní a nedělní klíč archivu nejsou obchodní den: ΔOI se bere pá → po (130 − 100)
+    url, settings = _seed_pair(
+        tmp_path,
+        friday,
+        {
+            friday: 100.0,
+            dt.date(2026, 10, 3): 999.0,
+            dt.date(2026, 10, 4): 999.0,
+            monday: 130.0,
+        },
+        # D+1 = pondělní expirace; uložený bod pod v5 bral D+2 (#1580)
+        {"20261005": [(cutoff, 40.0)], "20261006": [(cutoff, -40.0)]},
+        stored_expiry="20261006",
+    )
+    points = module.collect_symbol("NQ", settings, create_engine(url), friday, friday)
+    assert [(p.day, p.next_day, p.expiry, p.role) for p in points] == [
+        (friday, monday, "20261005", "D+1"),
+        (friday, monday, "20261006", "uložený"),
+    ]
+    assert [[side.doi for side in p.sides] for p in points] == [[30.0], [30.0]]
+    assert (points[0].stored_median, points[1].stored_median) == (None, 0.5)
+    assert points[1].stored_samples == 7
+    assert points[0].sides[0].net[0] == 40.0 and points[1].sides[0].net[0] == -40.0
+
+
+def test_rez_v_zime_je_22_utc(tmp_path: Path) -> None:
+    module = _load()
+    day, next_day = dt.date(2026, 11, 2), dt.date(2026, 11, 3)  # po konci US letního času
+    url, settings = _seed_pair(
+        tmp_path,
+        day,
+        {day: 100.0, next_day: 120.0},
+        {
+            "20261103": [
+                (dt.datetime(2026, 11, 2, 21, 0, tzinfo=dt.UTC), 10.0),  # 15:00 CST
+                (dt.datetime(2026, 11, 2, 22, 0, tzinfo=dt.UTC), 60.0),  # řez 16:00 CST
+            ]
+        },
+    )
+    points = module.collect_symbol("NQ", settings, create_engine(url), day, day)
+    assert [(p.day, p.expiry) for p in points] == [(day, "20261103")]
+    assert points[0].sides[0].net == {-1: 10.0, 0: 60.0, 1: 60.0}
 
 
 def test_report_nesmi_do_data(tmp_path: Path) -> None:

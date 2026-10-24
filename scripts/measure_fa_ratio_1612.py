@@ -14,8 +14,9 @@ rozloží strany každého bodu D tak, aby šly ověřit hypotézy H1–H7 z #16
 - **rozpad stran**: znaménko netu × znaménko ΔOI (H7: platí model ΔOI ≈ α·net
   znaménkem?), vzdálenost striku od ceny futures v řezu (H1), net ze strany agresora
   z tisků `data/trades` za celou seanci do řezu (H2, ADR-0057 bod 1: BUY +size,
-  SELL −size, tisk bez strany mimo), |net| proti objemu snímku (H3), řez 20:00 / 21:00 /
-  22:00 UTC (H4), pátek × všední den (H5), do 30. 9. × od 1. 10. (H6).
+  SELL −size, tisk bez strany mimo), |net| proti objemu snímku (H3), řez dne 16:00 CT
+  a ± 1 h (H4; v létě 20:00 / 21:00 / 22:00 UTC), pátek × všední den (H5), do 30. 9.
+  × od 1. 10. (H6).
 
 Expirace tisku se bere z třídy streamer symbolu (`./Q1BV26C29000:XCME` → třída Q1B,
 měsíc V, rok 26) přes mapu třída → expirace z `oi_eod` (tvrdá data, ne pravidlo
@@ -62,8 +63,9 @@ Key = tuple[float, str]
 
 MONTH_CODES = "FGHJKMNQUVXZ"
 STREAMER_RE = re.compile(r"^\./([A-Z0-9]+?)([FGHJKMNQUVXZ])(\d\d)([CP])(\d+(?:\.\d+)?):XCME$")
-#: Řezy citlivosti H4 v UTC (v létě je řez dne 21:00 UTC = 16:00 CT)
-CUTOFF_HOURS_UTC = (20, 21, 22)
+#: Řezy citlivosti H4 v hodinách od řezu dne 16:00 CT (`daily_close_utc`): v létě
+#: 20:00 / 21:00 / 22:00 UTC, od konce US letního času o hodinu později
+CUTOFF_OFFSETS_H = (-1, 0, 1)
 #: Hranice období H6: zlom kolem 1. 10. 2026
 BREAK_DAY = dt.date(2026, 10, 1)
 #: Pásma vzdálenosti striku od ceny futures v řezu (|K − S| / S), H1
@@ -78,7 +80,8 @@ class Side:
     right: str
     doi: float
     oi_before: float
-    #: net z netflow podle řezu (hodina UTC → net); chybí = strana bez řádku do řezu
+    #: net z netflow podle řezu (posun v hodinách od řezu dne → net, 0 = řez 16:00 CT);
+    #: chybí = strana bez řádku do řezu
     net: Mapping[int, float]
     #: tisky ze strany agresora za seanci do řezu (kontrakty); None = bez tisků dne
     buy: float | None
@@ -170,8 +173,8 @@ def group_stats(
     )
 
 
-def midpoint_pairs(sides: Iterable[Side], hour: int = 21) -> list[tuple[float, float]]:
-    return [(side.net[hour], side.doi) for side in sides if hour in side.net]
+def midpoint_pairs(sides: Iterable[Side], offset: int = 0) -> list[tuple[float, float]]:
+    return [(side.net[offset], side.doi) for side in sides if offset in side.net]
 
 
 def aggressor_pairs(sides: Iterable[Side]) -> list[tuple[float, float]]:
@@ -400,15 +403,15 @@ def collect_point(
         return None
     cutoff = daily_close_utc(day)
     nets: dict[int, dict[Key, float]] = {}
-    for hour in CUTOFF_HOURS_UTC:
-        moment = dt.datetime.combine(day, dt.time(hour), tzinfo=dt.UTC)
-        if moment == cutoff:
-            nets[hour] = netflow_at_cutoff(netflow_path, day)  # tatáž funkce jako kalibrace
+    for offset in CUTOFF_OFFSETS_H:
+        moment = cutoff + dt.timedelta(hours=offset)
+        if offset == 0:
+            nets[offset] = netflow_at_cutoff(netflow_path, day)  # tatáž funkce jako kalibrace
         else:
-            nets[hour] = read_netflow_latest(
+            nets[offset] = read_netflow_latest(
                 netflow_path, end=moment + dt.timedelta(minutes=1), sources=None
             )
-    prints = aggressor_volumes(settings.data_dir / "trades" / symbol, day, expiry, mapping, cutoff)
+    prints = aggressor_volumes(settings.trades_dir / symbol, day, expiry, mapping, cutoff)
     volumes = snapshot_volumes(settings.snapshots_dir / symbol / expiry, day, cutoff)
     point = DayPoint(
         symbol=symbol,
@@ -428,7 +431,7 @@ def collect_point(
                 right=key[1],
                 doi=doi[key],
                 oi_before=oi_before[key],
-                net={hour: values[key] for hour, values in nets.items() if key in values},
+                net={offset: values[key] for offset, values in nets.items() if key in values},
                 buy=buy_sell[0] if buy_sell is not None else None,
                 sell=buy_sell[1] if buy_sell is not None else None,
                 volume_last=volume[0] if volume else None,
@@ -524,12 +527,12 @@ def report_symbol(symbol: str, points: Sequence[DayPoint]) -> list[str]:
         return [*lines, "- žádný bod D se změřenými stranami", ""]
 
     # 1. Body D
-    lines += ["### Body D (řetěz D+1, net midpoint v řezu 21:00 UTC)", ""]
+    lines += ["### Body D (řetěz D+1, net midpoint v řezu dne 16:00 CT)", ""]
     rows = []
     for p in main:
         stats = group_stats(midpoint_pairs(p.sides))
         engine_point = calibrate_alpha(
-            {(s.strike, s.right): s.net[21] for s in p.sides if 21 in s.net},
+            {(s.strike, s.right): s.net[0] for s in p.sides if 0 in s.net},
             {(s.strike, s.right): s.doi for s in p.sides},
         )
         check = "" if engine_point is None else _f(engine_point.ratio_median)
@@ -594,8 +597,8 @@ def report_symbol(symbol: str, points: Sequence[DayPoint]) -> list[str]:
             if p.spot is None or (period != "celkem" and _period(p.day) != period):
                 continue
             for side in p.sides:
-                if 21 in side.net:
-                    buckets[distance_bucket(side.strike, p.spot)].append((side.net[21], side.doi))
+                if 0 in side.net:
+                    buckets[distance_bucket(side.strike, p.spot)].append((side.net[0], side.doi))
         for index, (low, high) in enumerate(DISTANCE_BUCKETS):
             label = f"{100 * low:.2f}–{100 * high:.2f} %" if high < 1.0 else f"≥ {100 * low:.2f} %"
             rows.append(
@@ -621,10 +624,10 @@ def report_symbol(symbol: str, points: Sequence[DayPoint]) -> list[str]:
         pooled_aggr[_period(p.day)] += aggr
         pooled_aggr["celkem"] += aggr
         agreement = [
-            (side.net[21] > 0) == ((side.aggressor_net or 0.0) > 0)
+            (side.net[0] > 0) == ((side.aggressor_net or 0.0) > 0)
             for side in p.sides
-            if 21 in side.net
-            and abs(side.net[21]) >= MIN_ABS_NET
+            if 0 in side.net
+            and abs(side.net[0]) >= MIN_ABS_NET
             and side.aggressor_net is not None
             and side.aggressor_net != 0.0
         ]
@@ -672,11 +675,11 @@ def report_symbol(symbol: str, points: Sequence[DayPoint]) -> list[str]:
             if period != "celkem" and _period(p.day) != period:
                 continue
             for side in p.sides:
-                if 21 not in side.net or abs(side.net[21]) < MIN_ABS_NET or not side.volume_max:
+                if 0 not in side.net or abs(side.net[0]) < MIN_ABS_NET or not side.volume_max:
                     continue
-                share_net.append(abs(side.net[21]) / side.volume_max)
-                (within if abs(side.net[21]) <= side.volume_max else above).append(
-                    (side.net[21], side.doi)
+                share_net.append(abs(side.net[0]) / side.volume_max)
+                (within if abs(side.net[0]) <= side.volume_max else above).append(
+                    (side.net[0], side.doi)
                 )
         rows.append(
             [
@@ -691,28 +694,30 @@ def report_symbol(symbol: str, points: Sequence[DayPoint]) -> list[str]:
     lines.append("")
 
     # H4: citlivost řezu
-    lines += ["### H4 — citlivost na řez (net z netflow do hodiny UTC)", ""]
+    lines += ["### H4 — citlivost na řez (net z netflow do řezu dne 16:00 CT ± 1 h)", ""]
     rows = []
     for p in main:
         cells = [f"{p.day:%d. %m.} {WEEKDAYS[p.day.weekday()]}"]
-        for hour in CUTOFF_HOURS_UTC:
-            stats = group_stats(midpoint_pairs(p.sides, hour))
+        for offset in CUTOFF_OFFSETS_H:
+            stats = group_stats(midpoint_pairs(p.sides, offset))
             cells.append(f"{_f(stats.median)} ({stats.samples})")
         flips = shrunk = 0
         for side in p.sides:
             if (
-                20 in side.net
-                and 21 in side.net
-                and max(abs(side.net[20]), abs(side.net[21])) >= MIN_ABS_NET
+                -1 in side.net
+                and 0 in side.net
+                and max(abs(side.net[-1]), abs(side.net[0])) >= MIN_ABS_NET
             ):
-                if side.net[20] * side.net[21] < 0:
+                if side.net[-1] * side.net[0] < 0:
                     flips += 1
-                if abs(side.net[21]) < 0.5 * abs(side.net[20]):
+                if abs(side.net[0]) < 0.5 * abs(side.net[-1]):
                     shrunk += 1
         cells += [str(flips), str(shrunk)]
         rows.append(cells)
     lines += _table(
-        "bod D | 20:00 | 21:00 | 22:00 | změna znaménka 20→21 | \\|net 21\\| < ½ \\|net 20\\|", rows
+        "bod D | řez − 1 h | řez | řez + 1 h | změna znaménka −1 h → řez "
+        "| \\|net řez\\| < ½ \\|net −1 h\\|",
+        rows,
     )
     lines.append("")
 
@@ -832,9 +837,9 @@ SIDES_COLUMNS = (
     "right",
     "oi_before",
     "doi",
-    "net_20",
-    "net_21",
-    "net_22",
+    "net_cut_m1h",
+    "net_cut",
+    "net_cut_p1h",
     "buy",
     "sell",
     "volume_last",
@@ -862,9 +867,9 @@ def write_sides_csv(path: Path, results: Mapping[str, Sequence[DayPoint]]) -> No
                             s.right,
                             s.oi_before,
                             s.doi,
-                            s.net.get(20),
-                            s.net.get(21),
-                            s.net.get(22),
+                            s.net.get(-1),
+                            s.net.get(0),
+                            s.net.get(1),
                             s.buy,
                             s.sell,
                             s.volume_last,

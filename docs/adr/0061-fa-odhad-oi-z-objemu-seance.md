@@ -6,7 +6,8 @@
   jsou převzaté z kalibrace α a retro ρ v #1665 je přeměří.
 - **Datum:** 2026-10-24
 - **Mění:** ADR-0011 rozhodnutí fáze 1 bod 2 a fáze 2 body 2 a 5 (vzorec odhadu a kalibrace α) ·
-  ADR-0057 bod 6 (vstup FA a kalibrace z tisků, FA vypnutá do 5 dnů po bumpu)
+  ADR-0057 bod 6 (vstup FA a kalibrace z tisků, FA vypnutá do 5 dnů po bumpu) · SPEC 4.5
+  (net jako vstup FA)
 - **Implementace:** #1665 (engine, retro ρ), #1666 (texty UI); nasazení s bumpem v6 E-1.14b #1403.
 - **Podklad:** rozbor #1612 (issuecomment-6373807743), skript `scripts/measure_fa_ratio_1612.py`.
 
@@ -32,7 +33,7 @@ s |net| ≥ 25, jejichž ΔOI bylo změřené po publikaci v D i D+1:
 | medián ΔOI/net, nákup / prodej | +0,37 / −0,26 | +0,86 / −0,81 |
 | Spearman ΔOI × net / ΔOI × \|net\| | 0,14 / 0,35 | 0,21 / 0,55 |
 | korelace podílu prodejních stran a mediánu dne | −0,88 | −0,51 |
-| medián dne ΔOI/objem bez 9. 10. (variační koeficient) | 0,339 (0,17) | 0,255 (0,21) |
+| průměr denních mediánů ΔOI/objem bez 9. 10. (variační koeficient) | 0,339 (0,17) | 0,255 (0,21) |
 | dnů s mediánem ΔOI/objem > 0 | 19 z 19 | 19 z 19 |
 
 Z toho vyplývá:
@@ -45,7 +46,8 @@ Z toho vyplývá:
   stranách prodeje. Fit ΔOI = b·net⁺ + s·|net⁻| dává oba koeficienty kladné: NQ 0,59 a 1,34,
   ES 1,10 a 1,28.
 - Hypotézy #1612 H1 (výběr stran u ATM), H4 (řez a roll) a H6 (zlom kolem 1. 10.) data
-  vyvrátila. H2 (midpoint) a H3 (šum objemu) zkreslují velikost poměru, ne jeho znaménko.
+  vyvrátila. H2 platí: znaménko midpointu je šum, ani net ze strany agresora ale model
+  nezachrání (viz výše). H3 (šum objemu) zkresluje velikost poměru, ne jeho znaménko.
   H5 (pátek) vysvětluje menší podíl prodejních stran.
 - **ΔOI/objem je stabilní.** Sedí s open-ratiem FA validace (0,26–0,41) i s hodnotou 0,39 ze
   zpětné validace ADR-0011, ze které vznikla výchozí α 0,4. Ta se ale násobila netem, ne objemem.
