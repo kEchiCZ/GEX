@@ -3,7 +3,8 @@
 - **Stav:** přijato 24. 10. 2026. Vlastník v chatu zvolil doporučené varianty: model A (bod 1),
   kdy 2a (bod 5) a FA do opravy 3a (bod 6). Zapsáno v Rozhodnuto 24. 10. v epice #1385. Body 2–4
   a věty označené „odvozeno“ rozvádějí variantu A, jak ji vlastník dostal k volbě. Prahy kalibrace
-  jsou převzaté z kalibrace α a retro ρ v #1665 je přeměří.
+  jsou převzaté z kalibrace α a retro ρ v #1665 je přeměří. Odvozené body 2–4 vlastník potvrdil
+  24. 10. (Rozhodnuto 24. 10. dopoledne v #1385).
 - **Datum:** 2026-10-24
 - **Mění:** ADR-0011 rozhodnutí fáze 1 bod 2 a fáze 2 body 2 a 5 (vzorec odhadu a kalibrace α) ·
   ADR-0057 bod 6 (vstup FA a kalibrace z tisků, FA vypnutá do 5 dnů po bumpu) · SPEC 4.5
