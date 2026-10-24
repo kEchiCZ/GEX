@@ -37,7 +37,10 @@ dry-run měří stejně jako `--apply`.
 odložená reakce měřila podle času zprávy, ne podle otevření po uzavírce, takže okna
 často usekl poslední bar v době měření (16. 10.: 23 060 z 52 580 odložených
 minutových reakcí). Kandidát je pár (event, symbol) s `deferred_min` a
-`computed_at_min` < `closure_open_ts` + nejdelší okno. Přeměří ho táž
+`computed_at_min` < `closure_open_ts` + nejdelší okno + minuta rezervy
+(`DEFERRED_SETTLE_MARGIN` jako v jobu: poslední bar okna mohl být ještě provizorní
+kopie rozdělané minuty — 24. 10. tak zbylo 81 párů změřených 23:00:04 po otevření
+ve 22:00). Přeměří ho táž
 `complete_minute` z archivu barů (věčný) a minutovou fázi páru přepíše celým oknem.
 Opakovaný běh už pár nenajde (nový `computed_at_min` je po uzavření okna). Pak
 noční `ModelStatsJob` přepočítá buckety.
@@ -71,7 +74,7 @@ from sqlalchemy.engine import Engine  # noqa: E402
 from gexlens_engine.storage.sentiment import news_events, news_reactions  # noqa: E402
 from gexlens_news.bars import CachedBars  # noqa: E402
 from gexlens_news.reaction_job import MinuteGap, ReactionJob, minute_gaps  # noqa: E402
-from gexlens_news.reactions import DEFAULT_WINDOWS  # noqa: E402
+from gexlens_news.reactions import DEFAULT_WINDOWS, DEFERRED_SETTLE_MARGIN  # noqa: E402
 
 SYMBOLS = ("ES", "NQ")
 DEFAULT_BATCH = 500
@@ -146,7 +149,7 @@ def truncated_deferred(
     Filtr času v Pythonu: součet sloupce a intervalu není dialektově neutrální
     (SQLite v testech) a odložených řádků je jen desítky tisíc.
     """
-    span = dt.timedelta(minutes=max_window)
+    span = dt.timedelta(minutes=max_window) + DEFERRED_SETTLE_MARGIN
     stmt = (
         select(
             news_reactions.c.event_id,
