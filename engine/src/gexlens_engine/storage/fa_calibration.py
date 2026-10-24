@@ -318,7 +318,7 @@ def _previous_session(today: dt.date) -> dt.date:
     return day
 
 
-def _calibrated_chain(exp_dirs: list[Path], session: dt.date) -> Path | None:
+def calibrated_chain(exp_dirs: list[Path], session: dt.date) -> Path | None:
     """Řetěz, který byl celou seanci `session` sekundárem: první expirace po ní (#1580).
 
     Další expirace (D+2) je sekundárem až po rollu v settle (~20:05 UTC) a její
@@ -368,7 +368,7 @@ def snapshot_session_volumes(chain_dir: Path, session: dt.date) -> SessionVolume
     return session_volume_coverage(rows, start, daily_close_utc(session))
 
 
-def _next_session(day: dt.date) -> dt.date:
+def next_session(day: dt.date) -> dt.date:
     """První obchodní den po `day` (pátek → pondělí, svátky NYSE přeskočí)."""
     day += dt.timedelta(days=1)
     while not is_trading_session(day):
@@ -443,12 +443,12 @@ def _rho_point(
     publication_utc: PublicationUtc,
 ) -> AlphaCalibrationResult | None:
     """Bod ρ jedné seance; uloží ho do historie (a stavu) a vrátí výsledek s novým ρ."""
-    chain_dir = _calibrated_chain(exp_dirs, session)
+    chain_dir = calibrated_chain(exp_dirs, session)
     if chain_dir is None:
         logger.info("Kalibrace ρ %s %s: bez řetězu po seanci — bez bodu", symbol, session)
         return None
     expiry = chain_dir.name
-    next_day = _next_session(session)
+    next_day = next_session(session)
     previous = oi_repository.latest_trading_day_before(symbol, expiry, next_day)
     if previous != session:
         logger.info(
