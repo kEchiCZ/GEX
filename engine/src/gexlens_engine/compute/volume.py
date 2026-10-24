@@ -82,6 +82,14 @@ class SessionVolumes:
         self._after_gap.discard(key)
         return step
 
+    def maximum(self, key: Hashable) -> float | None:
+        """Maximum kumulativu kontraktu viděné v seanci (reference); None = bez objemu.
+
+        Objem strany za seanci pro FA odhad pod v6 (ADR-0061 bod 1): pokles
+        a návrat feedu ho nezvětší, restart ho převezme z prvního kumulativu.
+        """
+        return self._reference.get(key)
+
     def end_cycle(self) -> None:
         """Konec cyklu: kontrakty se stavem bez objemu v cyklu mají v dalším mezeru."""
         self._after_gap |= self._reference.keys() - self._fed

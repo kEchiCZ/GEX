@@ -396,6 +396,17 @@ class CumDeltaTracker:
         """
         return self._net_volume.get(spec, 0.0)
 
+    def session_volume(self, spec: OptionContractSpec) -> float:
+        """Objem kontraktu za seanci: maximum denního kumulativu (#1602), 0 bez objemu.
+
+        Vstup FA odhadu pod tisky (ADR-0061 bod 1, `OI + ρ·V`). Jen zdroj
+        `aggressor` — pod midpointem se maximum seance nevede (reference je
+        poslední hodnota, ADR-0057 bod 11).
+        """
+        if not self.prints:
+            raise ValueError("session_volume: maximum seance jen pod zdrojem tisků")
+        return self._volumes.maximum(spec) or 0.0
+
     def net_volumes(self) -> dict[OptionContractSpec, float]:
         """Kopie celé mapy čistého objemu (pod tisky do posledního řezu) — řada netflow (#232)."""
         return dict(self._net_volume)

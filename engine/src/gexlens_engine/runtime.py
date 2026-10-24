@@ -249,9 +249,10 @@ class EngineRuntime:
         self._netflow_seed_pending = secondary._netflow_seed_pending
 
     def fa_alpha(self) -> float:
-        """α FA odhadu: kalibrovaná (`flow_alpha`), jinak pod v5 konfigurace.
+        """Faktor FA odhadu: kalibrovaný (`flow_alpha`), jinak pod v5 konfigurace.
 
-        Pod tisky (ADR-0057 bod 6) bez nastavené α platí 0 = FA vypnutá — po
+        Pod v5 je to α (násobí net), pod tisky ρ (násobí objem seance, ADR-0061).
+        Pod tisky (ADR-0057 bod 6) bez nastaveného ρ platí 0 = FA vypnutá — po
         startu před prvním obnovením α, bez repozitáře i při chybě čtení DB.
         Výchozí α z konfigurace by FA pustila nekalibrovanou.
         """
@@ -811,10 +812,11 @@ class EngineRuntime:
         )
 
         # Flow-adjusted vrstva (ADR-0011, #222/#232): OI odhad = ranní OI +
-        # α·čistý objem (buy − sell v kontraktech; v5 z midpoint testu barů, od
-        # v6 jen z tisků se stranou agresora, ADR-0057 bod 1). FA vrstva jen
-        # aktivní řetěz, net měří i sekundár (vstup kalibrace α, #1182);
-        # α = 0 odhad vypíná. Jediný odhad (compute/flowoi.oi_estimate) sdílí
+        # α·čistý objem (buy − sell v kontraktech z midpoint testu barů, v5);
+        # pod tisky (v6, ADR-0061) ranní OI + ρ·objem strany za seanci
+        # (maximum kumulativu, #1602) bez znaménka toku. FA vrstva jen
+        # aktivní řetěz, net měří i sekundár (vstup kalibrace α v5, #1182);
+        # faktor 0 odhad vypíná. Jediný odhad (compute/flowoi.oi_estimate) sdílí
         # FA levels, FA Dyn GEX profil/pole i řadu oiest — TENTÝŽ model.
         alpha = self.fa_alpha()
         fa_oi: dict[OptionContractSpec, float] = {}
@@ -906,8 +908,9 @@ class EngineRuntime:
         # FA vrstva (oiest, levelsfa, gexprofilefa, gexfieldfa) se v minutě
         # s mezerou nepíše (ADR-0057 bod 4) — net by nesl cenzurovanou minutu
         if not self.secondary and alpha > 0.0 and tracker.minute_measured:
+            fa_flow = tracker.session_volume if tracker.prints else tracker.net_volume
             fa_oi = {
-                spec: oi_estimate(inp.oi, tracker.net_volume(spec), alpha)
+                spec: oi_estimate(inp.oi, fa_flow(spec), alpha)
                 for inp, spec in zip(gex_inputs, gex_specs, strict=True)
             }
             # Řada oiest (#232): jen strany, kde se odhad liší od měřeného OI —

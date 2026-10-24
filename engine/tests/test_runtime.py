@@ -796,12 +796,39 @@ async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
     # Značka mezery pro kalibraci α (ADR-0057 bod 6): jen minuta bez měření
     netgap = pd.read_parquet(base / "netgap" / f"{day}.parquet")
     assert netgap["ts_min"].tolist() == [TS]
+    # oiest má pod v6 řádek každé strany s objemem (ADR-0061), minuty jen měřené
     for series in ("levelsfa", "gexprofilefa", "oiest"):
-        assert pd.read_parquet(base / series / f"{day}.parquet")["ts_min"].tolist() == [measured], (
-            series
-        )
+        minutes = pd.read_parquet(base / series / f"{day}.parquet")["ts_min"].unique().tolist()
+        assert minutes == [measured], series
     channels = [channel for channel, _ in publisher.messages]
     assert channels.count("levelsfa.ES.20260716") == 1
+
+
+async def test_v6_fa_odhad_z_objemu_seance_zveda_i_stranu_prodeje(tmp_path: Path) -> None:
+    """ADR-0061 bod 1: pod tisky OI_est = OI + ρ·V, V = maximum kumulativu seance.
+
+    Call 7600 má čistý prodej z tisků (net −5) a objem roste — odhad OI zvedá.
+    Model α·net by ho snížil (#1612: OI roste i na stranách s převahou prodeje).
+    """
+    engine_runtime, _publisher, settings = build_runtime(tmp_path, RisingVolumeStreamer())
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    engine_runtime.cum_delta = tracker
+    engine_runtime.flow_alpha = 0.25  # ρ kalibrovaný z objemu
+    c = _spec(7600.0, "C")
+    _sample(tracker, running=True)
+    await engine_runtime.run_cycle(TS, SPOT, [])  # start za otevřeného trhu = mezera, objem 100
+    tracker.add_dx_trade(c, 5.0, "SELL", 0.5)
+    _sample(tracker, running=True)
+    measured = TS + dt.timedelta(minutes=1)
+    await engine_runtime.run_cycle(measured, SPOT, [])  # objem 200
+
+    assert tracker.net_volume(c) == -5.0
+    assert tracker.session_volume(c) == 200.0
+    day = TS.date().isoformat()
+    oiest = pd.read_parquet(settings.derived_dir / "ES" / "20260716" / "oiest" / f"{day}.parquet")
+    assert oiest["ts_min"].tolist() == [measured] * 6  # minuta s mezerou FA nepíše
+    # Všech 6 stran: 1000 + 0,25 · 200 — znaménko toku do odhadu nevstupuje
+    assert set(oiest["oi_est"]) == {1050.0}
 
 
 async def test_v6_zavreny_trh_zapise_nulu_ne_mezeru(tmp_path: Path) -> None:
