@@ -310,10 +310,11 @@ class CumDeltaTracker:
     def begin_cycle(self) -> None:
         """Zafixuje verdikt minuty pro celý cyklus a otevře další okno vzorků.
 
-        Rozklad barů, netflow, FA i `close_minute` čtou týž verdikt, i když tisky
-        chodí mezi awaity cyklu. Bez vzorku a řezu od minulého cyklu není nic
-        doloženo → mezera. Minutu, kterou spadlý cyklus neuzavřel, nese i tento —
-        měřená je jen tehdy, byl-li měřený i ten.
+        Rozklad barů, netflow i `close_minute` čtou týž verdikt, i když tisky
+        chodí mezi awaity cyklu (FA pod v6 ne — bere objem IBKR, doplněk
+        ADR-0061). Bez vzorku a řezu od minulého cyklu není nic doloženo →
+        mezera. Minutu, kterou spadlý cyklus neuzavřel, nese i tento — měřená
+        je jen tehdy, byl-li měřený i ten.
 
         Pod tisky má kontrakt, který v minulém cyklu nedostal bar, mezeru
         (#1460, #1602 B): přírůstek jeho dalšího baru pokrývá celou mezeru, ne

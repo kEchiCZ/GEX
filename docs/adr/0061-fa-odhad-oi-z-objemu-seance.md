@@ -128,3 +128,31 @@ Příklad NQ, bod 14. 10. 2026, expirace 15. 10.:
 - Do bumpu ukazuje FA pod v5 model s vadou: na stranách s převahou prodeje odhad podhodnocuje
   (vědomě, 3a).
 - Texty UI (badge „FA α“, Legenda FA, uživatelský manuál) řeší #1666, ADMIN-MANUAL kap. FA #1665.
+
+## Doplněk (24. 10. 2026, #1665)
+
+Vlastník v chatu 24. 10. odpoledne (Rozhodnuto 24. 10. v #1385, otázky v #1665
+issuecomment-6384662358) po retro dry-runu nad produkcí:
+
+- **Retro ρ (dry-run jen čtením, 25. 9.–23. 10.):** NQ 0,314 (16 bodů z 21 seancí, průměr denních
+  mediánů 0,329 proti 0,339 v #1612), ES 0,236 (16 z 21, 0,259 proti 0,255). Prahy bodu 2 platí.
+  Bez bodu: 29. 9. (strany bez objemu u řezu), 8. 10. (mezera snímků 20:42 UTC), 9. 10. (useknutý
+  den), 13. 10. (výpadek 03:10–08:01 UTC).
+- **Platný den (bod 3) — pravidlo mezery A:** mezera snímků řetězu za otevřeného trhu delší než
+  10 min (`SNAPSHOT_GAP_MAX_MIN`) = den bez bodu i uprostřed seance. Sekundár píše snímek každý
+  3. cyklus, běžná mezera je 2 min, v datech nejvýš 7. Výpadek stojí jeden bod a ρ se mění
+  o < 0,01. Varianta B (rozhoduje jen pokrytí konce seance) ne.
+  - *Odvozeno (#1668):* snímky končící víc než 5 min před koncem obchodu (`SNAPSHOT_END_TOLERANCE_MIN`;
+    konec = řez, při zkrácené seanci začátek zavřeného trhu) = bez bodu. Strana, jejíž poslední
+    objem je starší, je „nevíme“ a do mediánu nejde.
+  - *Odvozeno (#1668):* ranní job dopočítá seance po posledním bodu symbolu v pořadí dnů, nejvýš 5
+    (`CATCH_UP_SESSIONS`).
+- **`--apply` (bod 5) — a:** retro ρ přepíše body α z midpointu téhož dne (klíč `fa_alpha_history`
+  je symbol a den, 16 bodů na symbol). Staré body zůstanou v záloze PG před bumpem a v rozboru
+  #1612. Pořadí v pauze s bumpem: záloha PG → nasazení v6 → `--apply`, po dotazu. Varianty b (jen
+  stav) a c (migrace klíče se zdrojem) ne.
+- **Brána FA pod v6 — B (mění ADR-0057 bod 4 pro v6):** FA vrstva (oiest, levelsfa, gexprofilefa,
+  gexfieldfa) se píše jen v minutě, kdy řetěz nesl objem IBKR (aspoň jeden kontrakt). Mezera trade
+  větve FA nezastaví, odhad tisky nečte. Při fallbacku řetězu na tasty (`volume` NULL) je minuta
+  mezera místo V zmrzlého bez stáří. Pod v5 beze změny. Varianty A (brána trade větve) a C (bez
+  brány) ne.

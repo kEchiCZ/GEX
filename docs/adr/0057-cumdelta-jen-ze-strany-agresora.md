@@ -86,7 +86,9 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
      v 17:00 CT je nález #1581.
    - news-engine: chybějící sklon = noha COMBINED nepodporuje (flip může), cyklus nespadne.
    - FA vrstva (oiest, levelsfa, gexprofilefa, gexfieldfa) se v mezeře nepíše; frontend
-     poslední FA profil nedrží a OI matici nepřepíná potichu na měřené.
+     poslední FA profil nedrží a OI matici nepřepíná potichu na měřené. *Revidováno ADR-0061
+     (doplněk 24. 10.): pod v6 FA tisky nečte, takže ji mezera trade větve nezastaví; mezera FA
+     je minuta, kdy řetěz nenesl objem IBKR (fallback řetězu na tasty).*
 5. **Co spotřebitelé dostanou po přepnutí:**
 
    | Spotřebitel | Po přepnutí | Při mezeře |

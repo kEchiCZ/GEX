@@ -768,10 +768,14 @@ def _prints_runtime(
     return engine_runtime, publisher, settings, tracker
 
 
-async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
-    """ADR-0057 bod 3–4: minuta s mezerou má ve flow NULL, netflow ani FA vrstvu nepíše."""
+async def test_v6_mezera_je_null_bez_netflow_fa_jede_z_objemu(tmp_path: Path) -> None:
+    """ADR-0057 bod 3–4: minuta s mezerou má ve flow NULL a netflow nepíše.
+
+    FA pod v6 mezera trade větve nezastaví (doplněk ADR-0061, Rozhodnuto 24. 10.):
+    odhad bere objem IBKR, ne tisky — píše se v obou minutách.
+    """
     engine_runtime, publisher, settings, tracker = _prints_runtime(tmp_path)
-    engine_runtime.flow_alpha = 0.4  # kalibrovaná α z tisků — bez ní FA pod v6 nejede
+    engine_runtime.flow_alpha = 0.4  # kalibrovaný ρ z objemu — bez něj FA pod v6 nejede
     c = _spec(7600.0, "C")
     tracker.add_dx_trade(c, 3.0, "BUY", 0.5)  # tisk před prvním cyklem: částečná minuta
     _sample(tracker, running=True)
@@ -796,12 +800,12 @@ async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
     # Značka mezery pro kalibraci α (ADR-0057 bod 6): jen minuta bez měření
     netgap = pd.read_parquet(base / "netgap" / f"{day}.parquet")
     assert netgap["ts_min"].tolist() == [TS]
-    # oiest má pod v6 řádek každé strany s objemem (ADR-0061), minuty jen měřené
+    # oiest má pod v6 řádek každé strany s objemem (ADR-0061), i v minutě s mezerou
     for series in ("levelsfa", "gexprofilefa", "oiest"):
-        minutes = pd.read_parquet(base / series / f"{day}.parquet")["ts_min"].unique().tolist()
-        assert minutes == [measured], series
+        frame = pd.read_parquet(base / series / f"{day}.parquet")
+        assert sorted(frame["ts_min"].unique().tolist()) == [TS, measured], series
     channels = [channel for channel, _ in publisher.messages]
-    assert channels.count("levelsfa.ES.20260716") == 1
+    assert channels.count("levelsfa.ES.20260716") == 2
 
 
 async def test_v6_fa_odhad_z_objemu_seance_zveda_i_stranu_prodeje(tmp_path: Path) -> None:
@@ -826,9 +830,10 @@ async def test_v6_fa_odhad_z_objemu_seance_zveda_i_stranu_prodeje(tmp_path: Path
     assert tracker.session_volume(c) == 200.0
     day = TS.date().isoformat()
     oiest = pd.read_parquet(settings.derived_dir / "ES" / "20260716" / "oiest" / f"{day}.parquet")
-    assert oiest["ts_min"].tolist() == [measured] * 6  # minuta s mezerou FA nepíše
-    # Všech 6 stran: 1000 + 0,25 · 200 — znaménko toku do odhadu nevstupuje
-    assert set(oiest["oi_est"]) == {1050.0}
+    # Všech 6 stran: 1000 + 0,25 · V — znaménko toku do odhadu nevstupuje; minuta
+    # s mezerou trade větve FA píše taky (V je objem IBKR, doplněk ADR-0061)
+    by_minute = oiest.groupby("ts_min")["oi_est"].apply(set).to_dict()
+    assert by_minute == {TS: {1025.0}, measured: {1050.0}}
 
 
 async def test_v6_zavreny_trh_zapise_nulu_ne_mezeru(tmp_path: Path) -> None:
@@ -1177,6 +1182,28 @@ async def test_expired_quote_stays_in_snapshot_but_leaves_computations(tmp_path:
     assert stale_gex != pytest.approx(fresh_gex)
 
 
+def _tasty_chain(specs: list[OptionContractSpec]) -> dict[OptionContractSpec, CachedQuote]:
+    """Fallback řetězu z tasty (#614): kotace a greeks bez kumulativního objemu a `last`."""
+    return {
+        spec: CachedQuote(
+            snapshot=QuoteSnapshot(
+                bid=11.0,
+                ask=11.5,
+                last=None,
+                volume=None,
+                iv=0.2,
+                delta=0.4,
+                gamma=0.0042,
+                theta=-1.0,
+                vega=0.8,
+            ),
+            updated_at=time.monotonic(),
+            feed=FEED_TASTY,
+        )
+        for spec in specs
+    }
+
+
 @pytest.mark.parametrize(
     ("mechanics", "running"),
     [("v5", True), ("v6", True), ("v6", False)],
@@ -1200,25 +1227,7 @@ async def test_fallback_retezu_prebira_kotace_cumdelta_podle_mechaniky(
         tracker.observe(running=False, market_closed=True)  # start v pauze: hranice známá
         tracker.add_dx_trade(_spec(7600.0, "C"), 4.0, "BUY", 0.5)  # +4 × 0.5 × 50 = +100
         _sample(tracker, running=running)
-    specs = list(engine_runtime.contracts)
-    substitute = {
-        spec: CachedQuote(
-            snapshot=QuoteSnapshot(
-                bid=11.0,
-                ask=11.5,
-                last=None,
-                volume=None,
-                iv=0.2,
-                delta=0.4,
-                gamma=0.0042,
-                theta=-1.0,
-                vega=0.8,
-            ),
-            updated_at=time.monotonic(),
-            feed=FEED_TASTY,
-        )
-        for spec in specs
-    }
+    substitute = _tasty_chain(list(engine_runtime.contracts))
     engine_runtime.chain_fallback = lambda _specs: substitute
 
     await engine_runtime.run_cycle(TS, SPOT, [])
@@ -1249,6 +1258,43 @@ async def test_fallback_retezu_prebira_kotace_cumdelta_podle_mechaniky(
         # Trade větev neběžela: mezera, ne nula ani poslední hodnota
         assert (flow_row.flow_delta, flow_row.cum_delta) == (None, None)
         assert not netflow_path.exists()
+
+
+@pytest.mark.parametrize("mechanics", ["v5", "v6"])
+async def test_fa_pod_v6_jen_v_minute_s_objemem_ibkr(tmp_path: Path, mechanics: str) -> None:
+    """ADR-0057 bod 4, doplněk ADR-0061 (Rozhodnuto 24. 10., brána B).
+
+    Minuta 1: start za otevřeného trhu (mezera trade větve), objem IBKR je →
+    FA pod v6 jede. Minuta 2: fallback řetězu na tasty (`volume` NULL), trade
+    větev běží → pod v6 mezera místo zmrzlého V. Minuta 3: IBKR zpět → FA
+    z maxima seance. Pod v5 brána není (beze změny).
+    """
+    engine_runtime, _publisher, settings = build_runtime(tmp_path, RisingVolumeStreamer())
+    engine_runtime.flow_alpha = 0.25
+    tracker = CumDeltaTracker(
+        multiplier=50.0, source=SOURCE_AGGRESSOR if mechanics == "v6" else SOURCE_MIDPOINT
+    )
+    engine_runtime.cum_delta = tracker
+    substitute = _tasty_chain(list(engine_runtime.contracts))
+    minutes = [TS + dt.timedelta(minutes=offset) for offset in range(3)]
+    for minute in minutes:
+        fallback = minute == minutes[1]
+        engine_runtime.chain_fallback = (lambda _specs: substitute) if fallback else None
+        _sample(tracker, running=True)
+        await engine_runtime.run_cycle(minute, SPOT, [])
+
+    base = settings.derived_dir / "ES" / "20260716"
+    day = TS.date().isoformat()
+    expected = minutes if mechanics == "v5" else [minutes[0], minutes[2]]
+    for series in ("levelsfa", "gexprofilefa"):
+        frame = pd.read_parquet(base / series / f"{day}.parquet")
+        assert sorted(frame["ts_min"].unique().tolist()) == expected, series
+    if mechanics == "v6":
+        oiest = pd.read_parquet(base / "oiest" / f"{day}.parquet")
+        last = oiest[oiest["ts_min"] == minutes[2]]
+        c = _spec(7600.0, "C")
+        side = last[(last["strike"] == c.strike) & (last["right"] == c.right)]
+        assert side["oi_est"].tolist() == [1000.0 + 0.25 * tracker.session_volume(c)]
 
 
 class DyingVolumeStreamer(RisingVolumeStreamer):

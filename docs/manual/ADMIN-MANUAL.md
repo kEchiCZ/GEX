@@ -455,7 +455,9 @@ PDC v `api/briefing.previousSessionRange` s hranicí `settleMs` — protějšek 
     v settle drží maximum sekundáru. Znaménko toku nevstupuje, odhad je na každé
     obchodované straně ≥ měřené OI (zavírání pozic model nevidí). Jediná funkce
     zůstává `compute/flowoi.oi_estimate` (FA levels, FA Dyn GEX, řada `oiest`).
-    Minutu s mezerou trade větve FA dál nepíše (ADR-0057 bod 4).
+    FA se píše jen v minutě, kdy řetěz nesl objem IBKR. Mezera trade větve ji nezastaví,
+    fallback řetězu na tasty (`volume` NULL) je mezera FA místo zmrzlého V (ADR-0061
+    doplněk 24. 10., ADR-0057 bod 4).
   - **Kalibrace ρ** (`storage/fa_calibration._collect_rho`) po finálním OI archivu
     jako α: řetěz, který byl **celou seanci D sekundárem** (první expirace po D,
     #1580; D+2 ho nenahradí), ΔOI jen ze stran změřených po publikaci v D i D+1
@@ -506,8 +508,8 @@ PDC v `api/briefing.previousSessionRange` s hranicí `settleMs` — protějšek 
       nejdelší mezera, strany bez objemu u řezu), medián bez pravidla mezery,
       srovnání s #1612 a body, které `--apply` přepíše.
     - `--apply` (po potvrzení `ano` nebo `--yes`) zapíše body do `fa_alpha_history`
-      (upsert podle symbolu a dne, takže bod midpointu téhož dne přepíše) a stav
-      `fa_alpha` se `source = 'volume'`. Opakovaný běh zapíše totéž.
+      (upsert podle symbolu a dne, takže bod midpointu téhož dne přepíše; Rozhodnuto
+      24. 10. = a) a stav `fa_alpha` se `source = 'volume'`. Opakovaný běh zapíše totéž.
     - **Pořadí v pauze s bumpem:** záloha PG (`scripts/backup-postgres.ps1`) →
       nasazení enginu v6 → `--apply`. Dřív ne: engine pod v5 zdroj stavu nečte,
       vzal by ρ jako α pro `α·net` a ranní job v5 by na něj navázal EMA a stav
@@ -598,7 +600,7 @@ Od ADR-0029 (v1.2) se **`snapshots/` a `derived/` nemažou nikdy** (`GEXLENS_KEE
 | `trades/{sym}/{YYYY-MM-DD}.parquet` | **Surové opční TimeAndSale printy z dxFeed** (#795): ts, streamer_symbol, price, size, aggressorSide, spread_leg, eth. Mimo retenci; podklad budoucí klasifikace agresora (#615). Flag `GEXLENS_TASTY_TRADES_RECORD` (default true) |
 | `derived/{sym}/{expiry}/netflow/{date}.parquet` | Kumulativní klasifikovaný net objem per strana; sloupec `source` nese zdroj znaménka jako `flow/` (`midpoint` v5, `aggressor` v6, NULL = partice před #1460 = midpoint), navázání po restartu bere jen řádky zdroje běžícího enginu (#1460) — podklad FA odhadu OI a ranní kalibrace α pod v5 (pod v6 FA bere objem seance, ADR-0061, a netflow zůstává jen pro audit, #1667). Řádek má každá sledovaná strana, i s netem 0 (#1582): explicitní 0 = naměřená nula, chybějící řádek = strana se nesleduje. Od mechaniky v6 minuta s mezerou trade větve CumΔ (ADR-0057 bod 3) netflow řádky nemá vůbec — net v ní ještě nese tisky částečné minuty; čtenáři berou poslední měřený řádek strany. Píše **aktivní i sekundární řetěz** (#1182): aktivní ES/NQ je vždy 0DTE bez ΔOI do D+1, kalibrace proto bere netflow sekundáru (expirace po dni netflow, od mechaniky v6 jen řetěz, který byl sekundárem celou seanci D, #1580); `fa_alpha_history.expiry` říká, ze kterého řetězu bod vznikl. |
 | `derived/{sym}/{expiry}/netgap/{date}.parquet` | **Minuty mezery trade větve** řetězu (#1460, ADR-0057 bod 6; jen mechanika v6): `ts_min` cyklu, ve kterém aktivní nebo sekundární řetěz za otevřeného trhu neměřil tisky — netflow se tehdy nepíše. Den bez mezery partici nemá. Do ADR-0061 podle ní kalibrace α z tisků vynechávala den s mezerou; kalibrace ρ (v6) ji nečte, platný den pozná ze snímků (#1665, spotřebitele řeší #1667). |
-| `derived/{sym}/{expiry}/oiest/{date}.parquet` | FA odhad OI (#232): v5 OI + α·netflow, v6 OI + ρ·objem seance (ADR-0061) |
+| `derived/{sym}/{expiry}/oiest/{date}.parquet` | FA odhad OI (#232): v5 OI + α·netflow, v6 OI + ρ·objem seance (ADR-0061); pod v6 jen minuty, kdy řetěz nesl objem IBKR |
 | `derived/{sym}/{expiry}/gexprofile(fa)/…` + `gexfield(fa)/…` | Dyn profily/pole; `…fa` varianty nad FA odhadem |
 | `derived/{sym}/{expiry}/charmprofile/…`, `vannaprofile/…` (+ `…field`) | Dyn Charm/Vanna plochy (#204) |
 | `derived/{sym}/{expiry}/greekssource/{date}.parquet` | Zdroj greeks per minutu (model/computed, #547) |
