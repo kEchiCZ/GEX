@@ -9,11 +9,19 @@ Medián přes strany s dostatečným |net| je robustní vůči ATM churnu (net �
 Buy/sell mediány se počítají zvlášť jen pro AUDIT (uložené v historii) —
 aplikuje se jedna společná α, dokud data jasně neukážou asymetrii
 (rozhodnutí uživatele 6. 8.). Sběr dat a uložení dělá `storage.fa_calibration`.
+
+Pod mechanikou v6 (ADR-0061) se místo α kalibruje ρ: medián ΔOI/V, kde V je
+objem strany za seanci (maximum kumulativu ze snímků do řezu). Rozbor #1612
+ukázal, že OI roste i na stranách s převahou prodeje, takže znaménko toku
+ΔOI neurčuje. Platný den a objem stran pozná `session_volume_coverage`.
 """
 
+import datetime as dt
 import statistics
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+
+from gexlens_engine.compute.marketclock import is_market_closed
 
 Key = tuple[float, str]
 
@@ -29,9 +37,22 @@ EMA_LAMBDA = 0.3
 # model; nad 1 by odhad tvrdil víc otevřeného zájmu, než kolik se zobchodovalo
 ALPHA_MIN = 0.0
 ALPHA_MAX = 1.0
-# Pod tisky (mechanika v6, ADR-0057 bod 6) je FA vrstva vypnutá, dokud α nemá
-# aspoň tolik platných dnů kalibrace z tisků — jinak by jela na nekalibrované α
+# Pod v6 (ADR-0057 bod 6, ADR-0061 bod 4) je FA vrstva vypnutá, dokud ρ nemá
+# aspoň tolik platných dnů kalibrace z objemu — jinak by jela nekalibrovaná
 FA_MIN_DAYS = 5
+# Minimální objem strany za seanci pro bod ρ (ADR-0061 bod 2) — práh převzatý
+# z |net| kalibrace α; pod ním poměr ΔOI/V dominuje šum
+MIN_VOLUME = 25.0
+# Platný den ρ (ADR-0061 bod 3): nejdelší úsek minut otevřeného trhu bez snímku
+# řetězu v seanci. Sekundár píše jen každý `next_expiry_sweep_every`. cyklus
+# (3 → běžná mezera 2 minuty, v datech 25. 9.–22. 10. 2026 nejvýš 7); delší úsek
+# je výpadek sběru
+SNAPSHOT_GAP_MAX_MIN = 10
+# Konec dne: poslední snímek řetězu i poslední objem strany nejvýš tolik minut
+# před řezem (po rollu v settle je řetěz aktivní a píše každou minutu)
+SNAPSHOT_END_TOLERANCE_MIN = 5
+
+_MINUTE = dt.timedelta(minutes=1)
 
 
 @dataclass(frozen=True)
@@ -92,3 +113,132 @@ def update_alpha(
     if previous is None:
         return target
     return previous + ema_lambda * (target - previous)
+
+
+def calibrate_rho(
+    volumes: Mapping[Key, float],
+    doi: Mapping[Key, float],
+    *,
+    min_volume: float = MIN_VOLUME,
+    min_samples: int = MIN_SAMPLES,
+) -> AlphaCalibrationPoint | None:
+    """Denní bod ρ z map (strike, right) → objem seance V a → skutečné ΔOI (ADR-0061 bod 2).
+
+    Medián ΔOI/V přes strany s V ≥ `min_volume`, které mají ΔOI. Strana bez
+    ΔOI (neměřená po publikaci) nebo bez V (objem u řezu neznámý) se
+    přeskakuje — chybějící měření není nula (#1172). Znaménko toku nevstupuje,
+    `ratio_buy` a `ratio_sell` zůstávají None. Pod `min_samples` stran None.
+    """
+    ratios = [
+        float(doi[key]) / float(volume)
+        for key, volume in volumes.items()
+        if volume >= min_volume and key in doi
+    ]
+    if len(ratios) < min_samples:
+        return None
+    return AlphaCalibrationPoint(
+        samples=len(ratios),
+        ratio_median=statistics.median(ratios),
+        ratio_buy=None,
+        ratio_sell=None,
+    )
+
+
+@dataclass(frozen=True)
+class SessionVolumeCoverage:
+    """Objem stran řetězu za seanci ze snímků a pokrytí seance (ADR-0061 bod 3)."""
+
+    #: Konec obchodu seance do řezu 16:00 CT: řez, při zkrácené seanci nebo
+    #: svátku začátek zavřeného trhu před ním (12:15 / 12:00 CT)
+    close: dt.datetime
+    #: V strany = maximum kumulativního objemu v seanci do řezu; jen strany,
+    #: jejichž poslední objem leží nejvýš `SNAPSHOT_END_TOLERANCE_MIN` před `close`
+    volumes: dict[Key, float]
+    #: Strany se snímkem v seanci bez objemu v posledním úseku před řezem —
+    #: „nevíme“, ne 0 ani starší maximum (#1668)
+    unknown: frozenset[Key]
+    #: Poslední minuta se snímkem řetězu do řezu; None = seance bez snímku
+    last: dt.datetime | None
+    #: Nejdelší úsek minut otevřeného trhu bez snímku od začátku seance
+    #: do posledního snímku a jeho první minuta
+    longest_gap: int
+    gap_start: dt.datetime | None
+
+    def problem(
+        self,
+        *,
+        gap_max: int = SNAPSHOT_GAP_MAX_MIN,
+        end_tolerance: int = SNAPSHOT_END_TOLERANCE_MIN,
+    ) -> str | None:
+        """Proč den bod nedá (seance bez snímku, konec před řezem, mezera); None = platný."""
+        if self.last is None:
+            return "seance bez snímku řetězu"
+        if self.last < self.close - dt.timedelta(minutes=end_tolerance):
+            return f"snímky končí {self.last:%H:%M}, obchod do {self.close:%H:%M} UTC"
+        if self.longest_gap > gap_max and self.gap_start is not None:
+            return (
+                f"mezera snímků {self.longest_gap} min od {self.gap_start:%d. %m. %H:%M} UTC "
+                f"(tolerance {gap_max} min)"
+            )
+        return None
+
+
+def session_volume_coverage(
+    rows: Iterable[tuple[dt.datetime | None, float, str, float | None]],
+    start: dt.datetime,
+    cutoff: dt.datetime,
+    *,
+    end_tolerance: int = SNAPSHOT_END_TOLERANCE_MIN,
+) -> SessionVolumeCoverage:
+    """Objem stran a pokrytí seance [start, řez] z řádků snímků (ts, strike, right, volume).
+
+    V je maximum denního kumulativu IBKR (pokles a návrat feedu ho nezvětší,
+    #1602); kumulativ přes mezeru uprostřed seance nic neztratí, chybí jen
+    objem za úsekem, který snímky nepokryly. Strana, jejíž poslední objem
+    (ne-NULL) je starší než `end_tolerance` před řezem, je „nevíme“ — strana
+    bez objemu z tasty fallbacku i strana, která vypadla z pásma. Mezera
+    se počítá jen v minutách otevřeného trhu (`marketclock.is_market_closed`);
+    konec obchodu před řezem (zkrácená seance, svátek) posune i kontrolu konce.
+    """
+    peak: dict[Key, float] = {}
+    last_volume: dict[Key, dt.datetime] = {}
+    seen: set[Key] = set()
+    minutes: set[dt.datetime] = set()
+    for ts, strike, right, volume in rows:
+        if ts is None or ts < start or ts > cutoff:
+            continue
+        minutes.add(ts)
+        key = (float(strike), str(right))
+        seen.add(key)
+        if volume is None:
+            continue
+        peak[key] = max(peak.get(key, 0.0), float(volume))
+        if key not in last_volume or ts > last_volume[key]:
+            last_volume[key] = ts
+    close = cutoff
+    while close > start and is_market_closed(close - _MINUTE):
+        close -= _MINUTE
+    fresh = close - dt.timedelta(minutes=end_tolerance)
+    volumes = {key: peak[key] for key, ts in last_volume.items() if ts >= fresh}
+    last = max(minutes) if minutes else None
+    longest, longest_start = 0, None
+    run, run_start = 0, None
+    moment = start
+    while last is not None and moment < last:
+        if moment in minutes or is_market_closed(moment):
+            run = 0
+        else:
+            if run == 0:
+                run_start = moment
+            run += 1
+            if run > longest:
+                longest, longest_start = run, run_start
+        moment += _MINUTE
+    return SessionVolumeCoverage(
+        close=close,
+        volumes=volumes,
+        unknown=frozenset(seen - volumes.keys()),
+        last=last,
+        longest_gap=longest,
+        gap_start=longest_start,
+    )

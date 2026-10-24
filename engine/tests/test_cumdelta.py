@@ -873,6 +873,24 @@ def test_promote_drzi_maximum_sekundaru() -> None:
     assert tracker.take_breakdowns() == {c: BarBreakdown(4.0, 0.0, 4.0)}
 
 
+def test_session_volume_pro_fa_drzi_maximum_seance_i_pres_roll() -> None:
+    """ADR-0061 bod 1: objem strany pro FA = maximum seance, předání v rollu ho drží."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = _secondary_before_roll(tracker)  # sekundár viděl 1000
+    assert tracker.session_volume(c) == 1000.0
+    assert tracker.session_volume(spec("P")) == 0.0  # strana bez objemu
+    tracker.promote()
+    next_cycle(tracker, True)
+    tracker.add_volume(c, 900.0)  # propad feedu po předání
+    assert tracker.session_volume(c) == 1000.0
+    tracker.close_minute(ROLL_M + MIN)
+    next_cycle(tracker, True)
+    tracker.add_volume(c, 1004.0)
+    assert tracker.session_volume(c) == 1004.0
+    with pytest.raises(ValueError, match="jen pod zdrojem tisků"):
+        CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT).session_volume(c)
+
+
 def test_midpoint_pokles_a_navrat_beze_zmeny() -> None:
     """Mechanika v5 do bumpu beze změny (ADR-0057 bod 11): návrat po poklesu
     se započte znovu s midpoint znaménkem, pokles vyprázdní počítadla tisků."""

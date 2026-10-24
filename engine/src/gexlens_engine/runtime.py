@@ -249,9 +249,10 @@ class EngineRuntime:
         self._netflow_seed_pending = secondary._netflow_seed_pending
 
     def fa_alpha(self) -> float:
-        """α FA odhadu: kalibrovaná (`flow_alpha`), jinak pod v5 konfigurace.
+        """Faktor FA odhadu: kalibrovaný (`flow_alpha`), jinak pod v5 konfigurace.
 
-        Pod tisky (ADR-0057 bod 6) bez nastavené α platí 0 = FA vypnutá — po
+        Pod v5 je to α (násobí net), pod tisky ρ (násobí objem seance, ADR-0061).
+        Pod tisky (ADR-0057 bod 6) bez nastaveného ρ platí 0 = FA vypnutá — po
         startu před prvním obnovením α, bez repozitáře i při chybě čtení DB.
         Výchozí α z konfigurace by FA pustila nekalibrovanou.
         """
@@ -446,9 +447,10 @@ class EngineRuntime:
             # zapisuje jen aktivní řetěz, sekundární kumulativ nepoužívá)
             await self._seed_cum_delta(session_day)
         # Verdikt minuty (ADR-0057 bod 3, #1460) jednou za cyklus: rozklad barů,
-        # netflow, FA i uzávěrka minuty čtou týž, i když tisky chodí mezi
-        # awaity. Tisky řeže už vzorek orchestrátoru (`seal`) — co přijde během
-        # cyklu, patří dalšímu řádku. Zdroj midpoint mezeru nezná
+        # netflow i uzávěrka minuty čtou týž, i když tisky chodí mezi awaity
+        # (FA pod v6 ne, odhad tisky nečte — doplněk ADR-0061). Tisky řeže už
+        # vzorek orchestrátoru (`seal`) — co přijde během cyklu, patří dalšímu
+        # řádku. Zdroj midpoint mezeru nezná
         # (`minute_measured` vždy True).
         tracker.begin_cycle()
         now_mono = time.monotonic()
@@ -464,6 +466,8 @@ class EngineRuntime:
         oi_filled_rows: list[OiMissingRow] = []
         oi_present_count = 0
         greeks_computed: list[GreeksSourceRow] = []
+        # Nesl řetěz v cyklu objem IBKR (aspoň jeden kontrakt)? Brána FA pod v6
+        volume_fed = False
         for spec in self.contracts:
             cached = quotes.get(spec)
             if cached is None:
@@ -550,6 +554,7 @@ class EngineRuntime:
             # Pod zdrojem tisků (ADR-0057) bar znaménko nedává, `last` nepotřebuje.
             if snapshot.volume is not None and tracker.prints:
                 tracker.add_volume(spec, cumulative_volume=snapshot.volume)
+                volume_fed = True
             elif snapshot.volume is not None and snapshot.last is not None:
                 tracker.add_bar(
                     spec,
@@ -811,10 +816,11 @@ class EngineRuntime:
         )
 
         # Flow-adjusted vrstva (ADR-0011, #222/#232): OI odhad = ranní OI +
-        # α·čistý objem (buy − sell v kontraktech; v5 z midpoint testu barů, od
-        # v6 jen z tisků se stranou agresora, ADR-0057 bod 1). FA vrstva jen
-        # aktivní řetěz, net měří i sekundár (vstup kalibrace α, #1182);
-        # α = 0 odhad vypíná. Jediný odhad (compute/flowoi.oi_estimate) sdílí
+        # α·čistý objem (buy − sell v kontraktech z midpoint testu barů, v5);
+        # pod tisky (v6, ADR-0061) ranní OI + ρ·objem strany za seanci
+        # (maximum kumulativu, #1602) bez znaménka toku. FA vrstva jen
+        # aktivní řetěz, net měří i sekundár (vstup kalibrace α v5, #1182);
+        # faktor 0 odhad vypíná. Jediný odhad (compute/flowoi.oi_estimate) sdílí
         # FA levels, FA Dyn GEX profil/pole i řadu oiest — TENTÝŽ model.
         alpha = self.fa_alpha()
         fa_oi: dict[OptionContractSpec, float] = {}
@@ -856,8 +862,8 @@ class EngineRuntime:
             )
         elif not tracker.minute_measured:
             # Mezera trade větve (jen zdroj tisků): netflow se nepíše, značka
-            # minuty ano — kalibrace α podle ní vynechá den s mezerou i u
-            # sekundáru, jehož řádek flow se zahazuje (ADR-0057 bod 6, #1460)
+            # minuty ano (ADR-0057 bod 6, #1460). Kalibrace ρ (v6, ADR-0061) ji
+            # nečte, platný den pozná ze snímků; spotřebitele řeší #1667
             await asyncio.to_thread(
                 self.writer.write_netgap,
                 self.symbol,
@@ -903,11 +909,16 @@ class EngineRuntime:
                         ],
                     },
                 )
-        # FA vrstva (oiest, levelsfa, gexprofilefa, gexfieldfa) se v minutě
-        # s mezerou nepíše (ADR-0057 bod 4) — net by nesl cenzurovanou minutu
-        if not self.secondary and alpha > 0.0 and tracker.minute_measured:
+        # FA vrstva (oiest, levelsfa, gexprofilefa, gexfieldfa) se pod v6 píše
+        # jen v minutě, kdy řetěz nesl objem IBKR (ADR-0057 bod 4, doplněk
+        # ADR-0061): při fallbacku řetězu na tasty (volume NULL) by V zmrzlo
+        # bez stáří → mezera. Mezera trade větve odhad nezastaví, V tisky
+        # nenese. Pod v5 brána není (midpoint mezeru nezná, beze změny).
+        fa_measured = volume_fed or not tracker.prints
+        if not self.secondary and alpha > 0.0 and fa_measured:
+            fa_flow = tracker.session_volume if tracker.prints else tracker.net_volume
             fa_oi = {
-                spec: oi_estimate(inp.oi, tracker.net_volume(spec), alpha)
+                spec: oi_estimate(inp.oi, fa_flow(spec), alpha)
                 for inp, spec in zip(gex_inputs, gex_specs, strict=True)
             }
             # Řada oiest (#232): jen strany, kde se odhad liší od měřeného OI —

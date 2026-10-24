@@ -455,10 +455,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         kalibračním bodem je seznam prázdný — engine jede na defaultu
         z konfigurace a UI to přizná („FA α default").
 
-        `source` = zdroj netu kalibrace (ADR-0057 bod 8, NULL ve stavu před #1460
-        = midpoint). Pod tisky (v6) FA jede až od `min_days` dnů kalibrace téhož
-        zdroje, jaký hlásí engine v `/status.cumdelta_source` (bod 6) — frontend
-        z toho ukáže „nekalibrováno n/5" (#1588).
+        `source` = zdroj kalibrace (ADR-0057 bod 8, NULL ve stavu před #1460
+        = midpoint α z netu; `volume` = ρ z objemu seance, ADR-0061). Pod tisky
+        (v6, `/status.cumdelta_source` = aggressor) FA jede až od `min_days` dnů
+        kalibrace zdroje `volume` (ADR-0061 bod 4) — frontend z toho ukáže
+        „nekalibrováno n/5" (#1588, texty ρ #1666).
         """
         try:
             states = alpha_repository().list_all()

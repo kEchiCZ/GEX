@@ -86,7 +86,9 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
      v 17:00 CT je nález #1581.
    - news-engine: chybějící sklon = noha COMBINED nepodporuje (flip může), cyklus nespadne.
    - FA vrstva (oiest, levelsfa, gexprofilefa, gexfieldfa) se v mezeře nepíše; frontend
-     poslední FA profil nedrží a OI matici nepřepíná potichu na měřené.
+     poslední FA profil nedrží a OI matici nepřepíná potichu na měřené. *Revidováno ADR-0061
+     (doplněk 24. 10.): pod v6 FA tisky nečte, takže ji mezera trade větve nezastaví; mezera FA
+     je minuta, kdy řetěz nenesl objem IBKR (fallback řetězu na tasty).*
 5. **Co spotřebitelé dostanou po přepnutí:**
 
    | Spotřebitel | Po přepnutí | Při mezeře |
@@ -301,11 +303,15 @@ vlastníka v epice #1385: z 19. 10. 2026 E-0.12 varianta C a zobrazení hlasu s 
     „nekalibrováno“ zůstává, protože C není kalibrace vah.
 - **Verdikt dne verze 4** (bod 8): pravidla se nemění, verze jen značí zlom vstupu.
   Golden v3 platí pro obě verze.
-- **Kalibrace α pod tisky** (bod 6, `storage/fa_calibration.py`):
+- **Kalibrace α pod tisky** (bod 6, `storage/fa_calibration.py`; *revidováno ADR-0061:*
+  *pod v6 se kalibruje ρ z objemu seance ze snímků, netflow ani značka `netgap` se nečtou,
+  řetěz D+1 zůstává, #1665*):
   - kalibruje se jen řetěz, který byl celou seanci D sekundárem, tedy první expirace
     po D; náhradní řetěz se nehledá (#1580);
   - bere se jen netflow se zdrojem `aggressor`.
-- **Den s mezerou** se pozná ze značky `derived/{sym}/{exp}/netgap/`. Runtime aktivního
+- **Den s mezerou** se pozná ze značky `derived/{sym}/{exp}/netgap/` (*revidováno
+  ADR-0061 bod 3: platný den ρ se pozná ze snímků; značka se dál píše, spotřebitele řeší
+  #1667*). Runtime aktivního
   i sekundárního řetězu do ní zapíše minutu, kterou za otevřeného trhu neměřil.
   - Značka je nutná, protože sekundár řádek `flow` nepíše a jeho netflow chodí jen
     každý N-tý cyklus (u ES ~3 min, mezery 1–5 min). Chybějící netflow tak mezeru
@@ -365,7 +371,8 @@ vlastníka v epice #1385: z 19. 10. 2026 E-0.12 varianta C a zobrazení hlasu s 
   - Pod v5 (midpoint) se nic nepředává. Trasy i vzorky se řídí pozicí a expirací jako
     v části 1a, pásmo začíná kolem spotu a net sekundáru se po rollu navazuje z partice.
 - **Reset α při bumpu je automatický.** `fa_alpha` i `fa_alpha_history` nesou `source`
-  (aditivní sloupec, NULL = midpoint).
+  (aditivní sloupec, NULL = midpoint). *Revidováno ADR-0061 bod 4: zdroj kalibrace pod v6 je
+  `volume` (ρ), FA jede po 5 dnech ρ; zpětný dopočet ρ ji pustí hned od bumpu.*
   - Pod tisky se stav jiného zdroje bere jako nekalibrovaný a první bod jde přímo.
     Ruční `set_state(symbol, 0.0, 0)` z plánu 1a tím odpadá a nemůže se zapomenout.
   - FA vrstva dostane α až po 5 dnech kalibrace z tisků (`FA_MIN_DAYS`), do té doby

@@ -5,11 +5,12 @@ tisky přes trasy (`route_trade`) s bránou orchestrátoru (`_tasty_event`: symb
 bez pipeline jen s čekajícím předáním, `pending_handovers`), cykly runtime
 sekundáru a po rollu aktivního runtime, který převezme tracker sekundáru
 (`EngineRuntime.take_over`), přestavba tras plánem až po vzorku téže iterace
-(`on_pipeline_created` jen probudí plán) a ranní kalibrace α nad zapsanými
-particemi. Tisky mezi posledním zápisem sekundáru a novou pipeline jsou v netu
-a bod α vznikne; restart v rollu je mezera. Plán subskripcí model nemá — řetěz
-čekajícího předání v něm drží `pending_handovers` (test v test_trade_branch.py).
-Mechaniku v6 volí explicitní zdroj trackeru (`SOURCE_AGGRESSOR`).
+(`on_pipeline_created` jen probudí plán). Tisky mezi posledním zápisem sekundáru
+a novou pipeline jsou v netu řetězu D+1 k řezu; restart v rollu je mezera. Plán
+subskripcí model nemá — řetěz čekajícího předání v něm drží `pending_handovers`
+(test v test_trade_branch.py). Mechaniku v6 volí explicitní zdroj trackeru
+(`SOURCE_AGGRESSOR`). Kalibrace FA pod v6 net nečte (ρ z objemu ze snímků,
+ADR-0061, `test_facalibration.py`); test hlídá předání netu a CumΔ.
 """
 
 import datetime as dt
@@ -27,14 +28,8 @@ from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockQuoteStreamer
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
-from gexlens_engine.storage.fa_calibration import (
-    AlphaCalibrationResult,
-    FaAlphaRepository,
-    collect_alpha_calibration,
-    netflow_at_cutoff,
-)
-from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
-from gexlens_engine.storage.parquet_store import SnapshotWriter
+from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.parquet_store import SnapshotWriter, read_netflow_latest
 from gexlens_engine.tasty.trade_branch import (
     TradeBranchMonitor,
     build_routes,
@@ -66,7 +61,6 @@ class RollDay:
     session: dt.date  # den D, jehož settle roluje
     expiry_d1: str  # sekundár celou seanci D = kalibrovaný řetěz (#1580)
     expiry_d2: str
-    today: dt.date  # den ranní kalibrace
 
 
 def streamer_of(spec: OptionContractSpec) -> str:
@@ -106,7 +100,7 @@ async def _simulate(
     *,
     handover: bool = True,
     secondary_at_roll: bool = False,
-) -> tuple[Settings, AlphaCalibrationResult | None]:
+) -> Settings:
     """Den D od pauzy před seancí do řezu 16:00 CT; tisky 100 kontraktů BUY na call stranu.
 
     Tisky: 50 hodinu po openu, 20 minutu před settle, 10 mezi zastavením staré
@@ -118,8 +112,6 @@ async def _simulate(
     db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
     repo = OIEodRepository(db)
     repo.ensure_schema()
-    alpha_repo = FaAlphaRepository(db)
-    alpha_repo.ensure_schema()
 
     session_open = session_bounds(day.session)[0]
     start = session_open - 30 * MIN  # pauza nebo víkend: hranice prvního okna známá
@@ -197,40 +189,22 @@ async def _simulate(
             prints(now, 10.0)
         now += MIN
 
-    for strike in STRIKES:
-        repo.upsert_many(
-            [OIRecord("ES", day.expiry_d1, strike, "C", day.session, 1000.0)],
-            settings.oi_publication_utc(day.session) + dt.timedelta(hours=1),
-        )
-        repo.upsert_many(
-            [OIRecord("ES", day.expiry_d1, strike, "C", day.today, 1040.0)],
-            settings.oi_publication_utc(day.today) + dt.timedelta(hours=1),
-        )
-    result = collect_alpha_calibration(
-        "ES",
-        settings.derived_dir,
-        repo,
-        alpha_repo,
-        day.today,
-        publication_utc=settings.oi_publication_utc,
-        cumdelta_prints=True,
-    )
-    return settings, result
+    return settings
 
 
 ROLL_DAYS = [
     # Pondělí v létě: settle 20:00 UTC, řez 21:00 UTC (roll 19. 10. 2026, open v neděli)
-    RollDay(dt.date(2026, 10, 19), "20261020", "20261021", dt.date(2026, 10, 20)),
+    RollDay(dt.date(2026, 10, 19), "20261020", "20261021"),
     # Středa v létě: seance od denního openu 17:00 CT v úterý po pauze
-    RollDay(dt.date(2026, 10, 21), "20261022", "20261023", dt.date(2026, 10, 22)),
-    # Pátek: D+1 je pondělní expirace, kalibrace v pondělí
-    RollDay(dt.date(2026, 10, 23), "20261026", "20261027", dt.date(2026, 10, 26)),
+    RollDay(dt.date(2026, 10, 21), "20261022", "20261023"),
+    # Pátek: D+1 je pondělní expirace
+    RollDay(dt.date(2026, 10, 23), "20261026", "20261027"),
     # Seance pondělí: open v neděli 22:00 UTC, netflow v nedělní i pondělní partici
-    RollDay(dt.date(2026, 10, 26), "20261027", "20261028", dt.date(2026, 10, 27)),
+    RollDay(dt.date(2026, 10, 26), "20261027", "20261028"),
     # Zimní čas: settle 21:00 UTC, řez 22:00 UTC
-    RollDay(dt.date(2026, 11, 4), "20261105", "20261106", dt.date(2026, 11, 5)),
+    RollDay(dt.date(2026, 11, 4), "20261105", "20261106"),
     # Zkrácená seance po Thanksgiving: settle 13:00 ET = 18:00 UTC, trh do 12:15 CT
-    RollDay(dt.date(2026, 11, 27), "20261130", "20261201", dt.date(2026, 11, 30)),
+    RollDay(dt.date(2026, 11, 27), "20261130", "20261201"),
 ]
 
 
@@ -242,32 +216,29 @@ ROLL_DAYS = [
     ROLL_DAYS,
     ids=["pondeli", "streda", "patek", "nedelni-open", "zimni-cas", "zkracena"],
 )
-async def test_roll_predani_bez_mezery_a_bod_alfa(
+async def test_roll_predani_bez_mezery(
     tmp_path: Path, day: RollDay, secondary_at_roll: bool
 ) -> None:
-    settings, result = await _simulate(tmp_path, day, secondary_at_roll=secondary_at_roll)
+    settings = await _simulate(tmp_path, day, secondary_at_roll=secondary_at_roll)
     exp_dir = settings.derived_dir / "ES" / day.expiry_d1
     assert not (exp_dir / "netgap").exists()
-    netflow = netflow_at_cutoff(
+    netflow = read_netflow_latest(
         exp_dir / "netflow" / f"{day.session.isoformat()}.parquet",
-        day.session,
+        end=daily_close_utc(day.session) + MIN,
         sources=frozenset({SOURCE_AGGRESSOR}),
     )
     assert {key: net for key, net in netflow.items() if key[1] == "C"} == {
         (strike, "C"): 100.0 for strike in STRIKES
     }
-    assert result is not None and result.day == day.session and result.expiry == day.expiry_d1
-    assert result.point.ratio_median == pytest.approx(0.4)
 
 
-async def test_restart_v_rollu_je_mezera_a_bod_neda(tmp_path: Path) -> None:
+async def test_restart_v_rollu_je_mezera(tmp_path: Path) -> None:
     """Bez předání (restart procesu, pipeline nevznikla hned po rollu) je první minuta mezera.
 
     Tisky mezi zastavením a založením orchestrátor nedoručí (symbol bez pipeline
     i bez čekajícího předání), nový tracker je nezná.
     """
     day = ROLL_DAYS[0]
-    settings, result = await _simulate(tmp_path, day, handover=False)
+    settings = await _simulate(tmp_path, day, handover=False)
     netgap = settings.derived_dir / "ES" / day.expiry_d1 / "netgap"
     assert netgap.exists()
-    assert result is None
