@@ -302,6 +302,19 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-24 — model předpokládal znaménko ΔOI = znaménko toku a data ho tři týdny neověřila (#1612, #1665).**
+  FA odhad `OI + α·net` (ADR-0011) bral čistý nákup jako otevírání pozic a čistý prodej jako
+  zavírání. Zpětná validace měřila jen |ΔOI| proti objemu bez znaménka, takže předpoklad nikdo
+  nezměřil. Od 1. 10. 2026 vycházel medián ΔOI/net u NQ v 7 z 10 bodů ≤ 0 a α NQ stála.
+  Opravy mezitím řešily filtry stran (#1172, #1314, #1605) a zdroj znaménka (ADR-0057), ne model.
+  Rozbor stran #1612 ukázal, že OI roste na 94 % (NQ) a 88 % (ES) stran s převahou prodeje
+  a stabilní je jen ΔOI/objem (NQ 0,34, ES 0,25). Nahradil ho model `OI + ρ·objem seance`
+  (ADR-0061).
+  → U kalibrovaného modelu nejdřív ověřit jeho strukturní předpoklad, tedy znaménko a tvar
+  vztahu na jednotlivých stranách, a teprve pak ladit filtry vstupu. Stojí-li kalibrace na ≤ 0
+  víc dnů za sebou, rozložit strany podle znaménka vstupu × znaménka výsledku, než se přidá
+  další filtr.
+
 - **2026-10-23 — výběr řetězu podle existence souboru, ne podle obsahu (#1452).**
   `em_respect` bral levels z první expirace ≥ seance, která měla jakýkoli soubor dne D−1 nebo D.
   NQ 17. 9. tak dostal `20260917/levels/2026-09-16.parquet` bez jediné minuty seance a podíl

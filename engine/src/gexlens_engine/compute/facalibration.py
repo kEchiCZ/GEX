@@ -45,7 +45,8 @@ FA_MIN_DAYS = 5
 MIN_VOLUME = 25.0
 # Platný den ρ (ADR-0061 bod 3): nejdelší úsek minut otevřeného trhu bez snímku
 # řetězu v seanci. Sekundár píše jen každý `next_expiry_sweep_every`. cyklus
-# (3 → běžná mezera 2 minuty, občas 3–6); delší úsek je výpadek sběru
+# (3 → běžná mezera 2 minuty, v datech 25. 9.–22. 10. 2026 nejvýš 7); delší úsek
+# je výpadek sběru
 SNAPSHOT_GAP_MAX_MIN = 10
 # Konec dne: poslední snímek řetězu i poslední objem strany nejvýš tolik minut
 # před řezem (po rollu v settle je řetěz aktivní a píše každou minutu)
