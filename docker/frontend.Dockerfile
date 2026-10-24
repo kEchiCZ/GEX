@@ -1,5 +1,5 @@
 # Frontend: Vite build → nginx.
-FROM node:24-slim AS build
+FROM node:25-slim AS build
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
