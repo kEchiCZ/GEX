@@ -57,7 +57,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=gexlens-python
             org.opencontainers.image.description=GEXLens engine / api / news-engine (jeden image, tři služby)
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/python.Dockerfile
@@ -88,7 +88,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=gexlens-frontend
             org.opencontainers.image.description=GEXLens frontend (statický bundle za nginx, /api proxy)
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/frontend.Dockerfile
