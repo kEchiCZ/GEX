@@ -263,7 +263,9 @@ def write_open_bars(data_dir: Path, symbol: str, day: dt.date, start_price: floa
 
 def test_truncated_deferred_premeri_useknute_okno_a_je_idempotentni(tmp_path: Path) -> None:
     """#1574: odložená reakce změřená 2 min po nedělním otevření (okno 60 useknuté)
-    se přeměří celým oknem; druhý běh ji už nenajde. Celé okno se nepřeměřuje."""
+    se přeměří celým oknem; druhý běh ji už nenajde. Celé okno se nepřeměřuje.
+    Kandidát je i měření do minuty po konci okna — poslední bar mohl být
+    provizorní (`DEFERRED_SETTLE_MARGIN` jako job; 24. 10. 81 párů v 23:00:04)."""
     engine = make_engine(tmp_path)
     data = tmp_path / "data"
     for symbol in ("ES", "NQ"):
@@ -271,6 +273,7 @@ def test_truncated_deferred_premeri_useknute_okno_a_je_idempotentni(tmp_path: Pa
         write_open_bars(data, symbol, dt.date(2026, 10, 18), 7100.0)
     open_ts = dt.datetime(2026, 10, 18, 22, 0, tzinfo=dt.UTC)
     truncated = add_event(engine, dt.datetime(2026, 10, 16, 21, 4, tzinfo=dt.UTC), "Pá po close")
+    edge = add_event(engine, dt.datetime(2026, 10, 16, 21, 10, tzinfo=dt.UTC), "Pá na hraně")
     whole = add_event(engine, dt.datetime(2026, 10, 16, 21, 30, tzinfo=dt.UTC), "Pá později")
     for symbol in ("ES", "NQ"):
         common = {"deferred_min": True, "closure_open_ts": open_ts, "ret_60": 1.0}
@@ -282,14 +285,22 @@ def test_truncated_deferred_premeri_useknute_okno_a_je_idempotentni(tmp_path: Pa
             computed_at_min=open_ts + dt.timedelta(minutes=2),
         )
         add_reaction(
-            engine, whole, symbol, **common, computed_at_min=open_ts + dt.timedelta(hours=2)
+            engine,
+            edge,
+            symbol,
+            **common,
+            computed_at_min=open_ts + dt.timedelta(minutes=60, seconds=4),
+        )
+        add_reaction(
+            engine, whole, symbol, **common, computed_at_min=open_ts + dt.timedelta(minutes=61)
         )
 
     gaps = list(script.truncated_deferred(engine))
-    assert [(gap.event_id, gap.missing) for gap in gaps] == [(truncated, frozenset({"ES", "NQ"}))]
+    both = frozenset({"ES", "NQ"})
+    assert [(gap.event_id, gap.missing) for gap in gaps] == [(truncated, both), (edge, both)]
     after = dt.datetime(2026, 10, 20, 12, 0, tzinfo=dt.UTC)  # okna dávno uzavřená
     dry = script.run(engine, data, apply=False, now=after, truncated=True)
-    assert sum(dry.filled.values()) == 2
+    assert sum(dry.filled.values()) == 4
     assert reaction(engine, truncated, "ES")["ret_60"] == 1.0  # dry-run nic nezapíše
 
     applied = script.run(engine, data, apply=True, now=after, truncated=True)
@@ -297,5 +308,6 @@ def test_truncated_deferred_premeri_useknute_okno_a_je_idempotentni(tmp_path: Pa
     row = reaction(engine, truncated, "ES")
     base, last = 7000.0 + 1259 / 100, 7100.0 + 1379 / 100  # pá 20:59 a ne 22:59 UTC
     assert row["ret_60"] == pytest.approx((last - base) / base * 10_000)
+    assert reaction(engine, edge, "ES")["ret_60"] != 1.0  # hrana rezervy přeměřena
     assert reaction(engine, whole, "ES")["ret_60"] == 1.0  # celé okno se nepřepisuje
     assert list(script.truncated_deferred(engine)) == []
