@@ -21,9 +21,11 @@ den po dni nad čistou paměťovou DB a porovná výsledek s produkcí:
   `captured_ts` je nepozná; počty vyřazených stran jdou do logu (INFO);
 - α se počítá od nuly v pořadí dnů (EMA); dny bez netflow partice (retence)
   bod nemají, report ukáže starou i novou α a počet dnů;
-- přehrání počítá zdrojem mechaniky kódu (`cumdelta.LIVE_SOURCE`, #1460), proto
-  se srovnává jen s body a stavem α téhož zdroje (#1590): bod midpointu před
-  bumpem v6 není „starý bod“ tiskové α a `--apply` ho nechá beze změny.
+- přehrání počítá zdrojem kalibrace mechaniky kódu (`calibration_source`: v5
+  α z midpointu, v6 ρ z objemu, ADR-0061), proto se srovnává jen s body
+  a stavem téhož zdroje (#1590): bod midpointu před bumpem v6 není „starý bod“
+  ρ a `--apply` ho nechá beze změny. ρ před bumpem dopočítá
+  `scripts/recompute_fa_rho.py`.
 
 Režimy:
 - **výchozí je dry-run**: report jako markdown do `{data}/reports/` (nebo
@@ -49,13 +51,15 @@ from pathlib import Path
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.compute.cumdelta import LIVE_SOURCE, SOURCE_MIDPOINT, stored_sources
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT
 from gexlens_engine.compute.facalibration import AlphaCalibrationPoint
 from gexlens_engine.compute.favalidation import FaValidationPoint
 from gexlens_engine.compute.settle import is_trading_session
+from gexlens_engine.compute.setups import CUMDELTA_PRINTS
 from gexlens_engine.config import Settings
 from gexlens_engine.storage.fa_calibration import (
     FaAlphaRepository,
+    calibration_source,
     collect_alpha_calibration,
     fa_alpha_history_table,
 )
@@ -91,6 +95,12 @@ class SymbolReplay:
     new_alpha: float | None = None
     new_days: int = 0
     memory: Engine | None = None
+
+
+def own_sources() -> frozenset[str | None]:
+    """Hodnoty `source` bodů a stavu, které přehrání počítá (NULL = midpoint před #1460)."""
+    source = calibration_source(prints=CUMDELTA_PRINTS)
+    return frozenset({source, None}) if source == SOURCE_MIDPOINT else frozenset({source})
 
 
 def published_days(
@@ -142,6 +152,7 @@ def replay_symbol(
             alpha_memory,
             day,
             publication_utc=settings.oi_publication_utc,
+            snapshots_dir=settings.snapshots_dir,
         )
         result.replayed.append(day)
 
@@ -152,7 +163,7 @@ def replay_symbol(
                 select(fa_validation_table).where(fa_validation_table.c.symbol == symbol)
             )
         }
-        own = stored_sources(LIVE_SOURCE)
+        own = own_sources()
         old_history = {
             row.day: (row.ratio_median, row.samples)
             for row in conn.execute(
