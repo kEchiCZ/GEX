@@ -127,6 +127,30 @@ settle) a 17. 9. — expirace 20260917 živě aktivní nebyla (pipeline z 202609
 rolovala rovnou na 20260918), seance je proto mezera, ne minuty 16. 9.
 pod cizím datem.
 
+**Doplněk 25. 10. 2026 (#1641, #1642) — hranice okna podle kódu rollu a bar
+cesty s vlastním razítkem.** Bod 1 doplňku 22. 10. („minuta settle E patří už
+další expiraci“) živému rollu neodpovídá. Roll v `__main__` proběhne až po
+cyklu minuty settle: ten je posledním cyklem vypršelé pipeline a nová
+pipeline (s vlastním `SetupEngine`) vzniká nejdřív v minutě po něm. Na
+produkci začínají levels E v den předchozího settle ve 20:01 a v den settle E
+končí minutou 20:00 (ES i NQ 20.–23. 10.). Platí proto:
+
+1. **Seance E = rozhodovací minuty (settle předchozí expirace, settle E]**
+   (`active_window`). Minuta settle E nese bar končící v settle (19:59 v
+   letním čase USA). Nový setup v ní nevznikne (`born_after_settle`), otevřený
+   skončí timeoutem za close tohoto baru a `closed` = settle, shodně se živým
+   enginem (`test_engine_timeout_za_close_v_settle_ne_za_cenu_cyklu`).
+2. **Cesta ceny hodnotí bar rozhodovací minuty N s jeho razítkem N − 1**
+   (`path_bar`, totéž dělal replay sond). Dřív šel bar s razítkem N: bar 19:59
+   se nehodnotil vůbec, timeout bral close baru 19:58 a zásah úrovně měl
+   `closed` o minutu později než živě.
+3. **Replay sond T9 (`--probes`) bere totéž okno.** Dřív počítal začátek
+   z kalendářního dne před expirací, takže pondělní expirace přišla o páteční
+   hodinu po settle a expirace po svátku začínala až večer svátku.
+
+Dopad na replay (stejné parametry, mechanika v5, všechny uzavřené expirace
+v `derived/`): MĚŘENÍ_DOPLNIT.
+
 ## Důsledky
 
 - Noční běh: `scripts/walkforward-nightly.ps1` (Task Scheduler nebo ručně)
