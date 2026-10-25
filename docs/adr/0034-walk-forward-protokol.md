@@ -148,8 +148,30 @@ končí minutou 20:00 (ES i NQ 20.–23. 10.). Platí proto:
    z kalendářního dne před expirací, takže pondělní expirace přišla o páteční
    hodinu po settle a expirace po svátku začínala až večer svátku.
 
-Dopad na replay (stejné parametry, mechanika v5, všechny uzavřené expirace
-v `derived/`): MĚŘENÍ_DOPLNIT.
+Dopad na replay (měření 25. 10., výchozí `SetupParams`, mechanika v5,
+posledních 25 uzavřených expirací 21. 9.–23. 10. 2026, před = skript
+z `main`, po = oprava; rozhodnutí v #1385;
+`scripts/measure_replay_bar_1641.py --before 82bcefc --to 20261023 --db …`):
+
+| | setupy | ΣR | timeout | bez konce |
+|---|---|---|---|---|
+| ES | 298 → 299 | +18,7 → +24,2 | 20 → 21 | 3 → 1 |
+| NQ | 300 → 305 | +48,4 → +53,5 | 19 → 19 | 0 → 0 |
+
+- Timeout bere close jiného baru: R se změnilo u 20 setupů ES a 19 NQ.
+- `closed` o minutu dřív posune konec cooldownu a blokace směru
+  (`direction_block_minutes`, `max_stops_per_direction`). Vznik dalšího
+  setupu se posune o 1–8 minut, nebo setup přibude či zmizí: ES 18 setupů jen
+  před a 19 jen po, NQ 4 a 9; kromě jednoho jde o `trend_continuation`.
+  Největší kaskáda je NQ 19. 10.: čtvrtý long stop skončil ve 13:30 místo
+  13:31, blokace 90 min skončila v 15:00 a long z 15:00 vyšel (+1,46 R). Výhra
+  smazala počítadlo stopů, takže večer vznikly další 4 setupy, které dřív
+  blokace zakázala; den dává +3,35 R z rozdílu +5,1 R.
+- Minuta 19:59: setup ES 28. 9. dřív zůstal bez konce, teď končí timeoutem za
+  close baru 19:59 (−0,11 R). Setup ES 29. 9. z 19:59 nevznikne, protože
+  minuta 19:59 hodnotí bar 19:58.
+- Zbylý setup bez konce (ES 9. 10., z 8:00) leží v expiraci, jejíž minuty
+  končí ve 14:18; je to mezera v datech, oprava ji nemění.
 
 ## Důsledky
 

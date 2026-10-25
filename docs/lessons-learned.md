@@ -321,6 +321,9 @@ chyb**, hlavně diagnostických a provozních.
   settle vyřadilo. Replay sond to dělal správně (`bar_of`), dvě cesty k téže konvenci se rozešly
   a test parity s živým `SetupEngine` porovnával jen vznik setupů. Odhalila to kontrola okna
   #1464 proti živému rollu: cyklus minuty settle je poslední cyklus vypršelé pipeline (`__main__`).
+  Minuta rozdílu v `closed` nebyla kosmetická. Posouvá konec blokace směru po sérii stopů, takže
+  na NQ 19. 10. vznikl long v 15:00 místo nic. Ten long vyšel a smazal počítadlo stopů, takže
+  večer vzniklo dalších 4 setupů, celkem +3,35 R za den (ADR-0034, doplněk 25. 10.).
   → Převod rozhodovací minuty na bar dělá jedna funkce (`path_bar`). Test parity s živým enginem
   porovnává i výsledek, čas uzavření a R. Hranici okna offline nástroje odvozuj z kódu rollu.
 
