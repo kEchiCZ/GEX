@@ -607,7 +607,7 @@ chyb**, hlavně diagnostických a provozních.
   Odhalila to kontrola reportů pro ADR-0057: počet OOS dnů rostl o 1 za běh.
   → Seance offline nástroje je **uzavřená, až nastal její settle proti okamžiku běhu** v UTC.
   Rozhoduje okamžik, ne datum adresáře (pozor na týdny posunu času). Okno minut je stejné jako
-  okno živého rollu, tj. [settle předchozí expirace, settle E). Testy: report D končí dnem D
+  okno živého rollu, tj. [settle předchozí expirace, settle E) (oprava 25. 10.: (settle D, settle E], #1641). Testy: report D končí dnem D
   a fold reportu D má v reportu D+1 tutéž ΣR; parita počtu a časů vzniku setupů s živým
   `SetupEngine` na fixture se sekundárními minutami.
 

@@ -78,7 +78,7 @@ def measure(symbol: str, last: int, to: str) -> dict[str, float]:
             r = row["r"] or 0.0
             stats["setups"] += 1
             stats["r_all"] += r
-            if row["created"] < rolled_in or row["created"] >= settle:
+            if row["created"] <= rolled_in or row["created"] > settle:
                 stats["outside"] += 1
                 stats["r_outside"] += r
             if evening_end is not None and row["created"] < evening_end:
