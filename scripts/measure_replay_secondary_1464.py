@@ -94,7 +94,7 @@ def main() -> int:
     parser.add_argument("--to", default="20261007", help="poslední expirace (YYYYMMDD)")
     args = parser.parse_args()
 
-    print(f"Řez: {args.last} expirací do {args.to}, okno = [settle předchozí expirace, settle E)")
+    print(f"Řez: {args.last} expirací do {args.to}, okno = (settle předchozí expirace, settle E]")
     print(
         "| symbol | expirací | setupů | mimo okno | ΣR vše | ΣR mimo okno | minut mimo okno "
         "| večerů před #1331 | minut večera | setupů večera | ΣR večera |"

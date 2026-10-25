@@ -11,7 +11,7 @@ Když kandidát splní všechny zábrany, report obsahuje i tělo pro
 Baseline = platná verze parameter store (tabulka `setup_params`), bez DB
 defaulty kódu. Bloky: per symbol a portfolio (ES+NQ sečtené per seance,
 ADR-0030). Seance = expirace řetězu (0DTE) v okně aktivního řetězu
-[settle předchozí expirace, settle E) jako živý roll od #1331 (dřívější okna
+(settle předchozí expirace, settle E] jako živý roll od #1331 (dřívější okna
 od aktivní kadence, `bt.live_start`); expirace, jejíž
 settle proti času běhu ještě nenastal, se vynechá (ADR-0034 doplněk 22. 10.
 2026, #1464). Kolik minut a expirací padlo mimo, uvádí hlavička reportu.
@@ -147,7 +147,7 @@ def skip_note(symbol: str, skip: bt.WindowSkip, now: dt.datetime) -> str:
     """Řádek hlavičky: co replay vynechal kvůli oknu aktivního řetězu (#1464)."""
     unsettled = ", ".join(skip.unsettled) if skip.unsettled else "žádné"
     return (
-        f"{symbol}: mimo okno aktivního řetězu [settle předchozí expirace, settle E), "
+        f"{symbol}: mimo okno aktivního řetězu (settle předchozí expirace, settle E], "
         f"před 7. 10. 2026 od aktivní kadence, vynecháno {skip.minutes} minut; "
         f"expirace bez settle k {now:%Y-%m-%d %H:%M} UTC "
         f"({len(skip.unsettled)}): {unsettled}"
