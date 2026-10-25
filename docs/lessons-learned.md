@@ -313,6 +313,20 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-25 — replay hodnotil bar N − 1 s razítkem N a okno ten posun převzalo, poslední bar dne se nehodnotil (#1641, #1642).**
+  Decision-time konvence (#794) páruje rozhodovací minutu N s dokončeným barem N − 1. `replay`
+  ale posílal do `walk_setup_path` celou `MinuteInputs` s razítkem N. Bar 19:59 tak nesl 20:00
+  a filtr „bary od settle se nehodnotí“ ho zahodil. Timeout bral close baru 19:58, zásah úrovně
+  měl `closed` o minutu později než živě a okno [settle D, settle E) posun zakrylo tím, že minutu
+  settle vyřadilo. Replay sond to dělal správně (`bar_of`), dvě cesty k téže konvenci se rozešly
+  a test parity s živým `SetupEngine` porovnával jen vznik setupů. Odhalila to kontrola okna
+  #1464 proti živému rollu: cyklus minuty settle je poslední cyklus vypršelé pipeline (`__main__`).
+  Minuta rozdílu v `closed` nebyla kosmetická. Posouvá konec blokace směru po sérii stopů, takže
+  na NQ 19. 10. vznikl long v 15:00 místo nic. Ten long vyšel a smazal počítadlo stopů, takže
+  večer vznikly další 4 setupy, celkem +3,35 R za den (ADR-0034, doplněk 25. 10.).
+  → Převod rozhodovací minuty na bar dělá jedna funkce (`path_bar`). Test parity s živým enginem
+  porovnává i výsledek, čas uzavření a R. Hranici okna offline nástroje odvozuj z kódu rollu.
+
 - **2026-10-24 — model předpokládal znaménko ΔOI = znaménko toku a data ho tři týdny neověřila (#1612, #1665).**
   FA odhad `OI + α·net` (ADR-0011) bral čistý nákup jako otevírání pozic a čistý prodej jako
   zavírání. Zpětná validace měřila jen |ΔOI| proti objemu bez znaménka, takže předpoklad nikdo
@@ -596,7 +610,7 @@ chyb**, hlavně diagnostických a provozních.
   Odhalila to kontrola reportů pro ADR-0057: počet OOS dnů rostl o 1 za běh.
   → Seance offline nástroje je **uzavřená, až nastal její settle proti okamžiku běhu** v UTC.
   Rozhoduje okamžik, ne datum adresáře (pozor na týdny posunu času). Okno minut je stejné jako
-  okno živého rollu, tj. [settle předchozí expirace, settle E). Testy: report D končí dnem D
+  okno živého rollu, tj. [settle předchozí expirace, settle E) (oprava 25. 10.: (settle D, settle E], #1641). Testy: report D končí dnem D
   a fold reportu D má v reportu D+1 tutéž ΣR; parita počtu a časů vzniku setupů s živým
   `SetupEngine` na fixture se sekundárními minutami.
 

@@ -110,8 +110,9 @@ def test_replay_setup_otevreny_v_settle_konci_timeoutem() -> None:
     ]
     rows = module.replay(minutes, SetupParams(), EXPIRY, "ES")
     assert [(row["outcome"], row["closed"]) for row in rows] == [("closed_timeout", SETTLE)]
-    # Close baru 19:59 (končí v settle) = 100 + 9 × 0,2; risk 5 b
-    assert rows[0]["r"] == pytest.approx(9 * 0.2 / 5)
+    # Close baru 19:59 (končí v settle) nese rozhodovací minuta 20:00 = 100 + 10 × 0,2;
+    # risk 5 b. Do #1641 bral replay close minuty 19:59 = baru 19:58
+    assert rows[0]["r"] == pytest.approx(10 * 0.2 / 5)
 
 
 def test_replay_kvartalni_patek_tydenni_serie_do_odpoledne() -> None:
@@ -133,7 +134,8 @@ def test_replay_kvartalni_patek_tydenni_serie_do_odpoledne() -> None:
 
 def test_replay_stop_za_dirou_v_datech() -> None:
     """Díra v minutách (trh běžel, bar chybí) se offline přejde a spočítá;
-    stop po díře platí s časem svého baru."""
+    stop po díře platí s časem svého baru — rozhodovací minuta 14:05 nese
+    bar 14:04 (#1641; dřív replay hlásil 14:05, o minutu později než živě)."""
     module = _load()
     created = dt.datetime(2026, 9, 17, 14, 0, tzinfo=dt.UTC)
     _one_setup_at(module, created)
@@ -145,7 +147,7 @@ def test_replay_stop_za_dirou_v_datech() -> None:
     ]
     rows = module.replay(minutes, SetupParams(), EXPIRY, "ES")
     assert rows[0]["outcome"] == "closed_stop"
-    assert rows[0]["closed"] == created + dt.timedelta(minutes=5)
+    assert rows[0]["closed"] == created + dt.timedelta(minutes=4)
     assert rows[0]["gaps"] == 1
 
 
@@ -224,9 +226,9 @@ def test_walkforward_predava_symbol_do_replaye(
     _one_setup_at(bt, created)
 
     day = dt.date(2026, 9, 18)
-    # Timeout za close baru 19:59 = 100 + 9 × 0,2; risk 5 b
+    # Timeout za close baru 19:59 (rozhodovací minuta 20:00) = 100 + 10 × 0,2; risk 5 b
     assert module.daily_series("ES", {"baseline": SetupParams()}, None) == {
-        "baseline": {day: pytest.approx(9 * 0.2 / 5)}
+        "baseline": {day: pytest.approx(10 * 0.2 / 5)}
     }
     assert module.daily_series("ESU6", {"baseline": SetupParams()}, None) == {
         "baseline": {day: 0.0}
@@ -327,24 +329,27 @@ def _at(day: int, hh: int, mm: int, month: int = 10) -> dt.datetime:
     return dt.datetime(2026, month, day, hh, mm, tzinfo=UTC)
 
 
-def test_build_minutes_sekundarni_minuty_pred_rollem_a_od_settle_neprehrava(
+def test_build_minutes_sekundarni_minuty_pred_rollem_a_po_settle_neprehrava(
     tmp_path: Path,
 ) -> None:
     """Středa 21. 10.: sekundár psal E už 20. 10. odpoledne (kadence 3 min), živý
-    engine ji má od settle 20261020 (20:00 UTC, roll #1331) do vlastního settle."""
+    engine ji má po rollu v settle 20261020 (20:00 UTC, #1331) do vlastního settle.
+    Cyklus minuty settle je poslední cyklus vypršelé pipeline (#1641): 20:00 20. 10.
+    patří ještě 20261020, 20:00 21. 10. je poslední minuta E (nese bar 19:59)."""
     module = _load()
     module.set_data_root(str(tmp_path))
-    secondary = [_at(20, 14, 0), _at(20, 14, 3), _at(20, 14, 6)]
-    active = [_at(20, 20, 0), _at(20, 20, 1), _at(21, 19, 58), _at(21, 19, 59)]
-    after = [_at(21, 20, 0), _at(21, 20, 1)]
+    secondary = [_at(20, 14, 0), _at(20, 14, 3), _at(20, 14, 6), _at(20, 20, 0)]
+    active = [_at(20, 20, 1), _at(20, 20, 2), _at(21, 19, 58), _at(21, 19, 59), _at(21, 20, 0)]
+    after = [_at(21, 20, 1), _at(21, 20, 2)]
     _partitions(tmp_path, {"20261021": secondary + active + after})
     assert module.active_window("ES", "20261021") == (_at(20, 20, 0), _at(21, 20, 0))
     skip = module.WindowSkip()
     minutes = module.build_minutes("ES", "20261021", None, skip=skip)
     assert [m.ts for m in minutes] == active
     assert skip.minutes == len(secondary) + len(after)
-    # Čas do expirace i timeout dál podle settle E
-    assert minutes[-1].minutes_to_expiry == pytest.approx(1.0)
+    # Čas do expirace i timeout dál podle settle E; minuta settle už čas nemá
+    assert minutes[-2].minutes_to_expiry == pytest.approx(1.0)
+    assert minutes[-1].minutes_to_expiry is None
 
 
 def test_okno_pondelni_expirace_od_patku_a_po_svatku() -> None:
@@ -674,30 +679,19 @@ def _crossing(history: list[MinuteInputs], params: SetupParams) -> list[SetupCan
     ]
 
 
-async def test_replay_vcerejska_ma_tytez_setupy_jako_zivy_engine(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Regresní parita #1464: replay expirace E (`build_minutes` + `replay`) dá
-    tytéž setupy (počet a časy vzniku) jako živý `SetupEngine`, který E dostane
-    až po rollu v settle předchozí expirace. Sekundární minuty 20. 10. odpoledne
-    by v replayi otevřely setup, který živě nikdy nevznikl, a zablokoval šablonu."""
-    module = _load()
-    module.set_data_root(str(tmp_path))
-    expiry = "20261021"
-    roll, settle = _at(20, 20, 0), _at(21, 20, 0)
-    pattern = (100.0, 106.0, 110.0, 101.0)
+def _utc(value: object) -> dt.datetime | None:
+    return None if value is None else pd.to_datetime(value, utc=True).to_pydatetime()
 
-    def close(ts: dt.datetime) -> float:
-        return pattern[int((ts - roll) / MINUTE) % len(pattern)]
 
-    secondary = [_at(20, 14, 0) + 3 * i * MINUTE for i in range(20)]
-    active = [roll + i * MINUTE for i in range(48)] + [
-        settle - (30 - i) * MINUTE for i in range(30)
-    ]
-    _partitions(tmp_path, {expiry: secondary + active + [settle]}, close)
-    monkeypatch.setattr(module, "detect_all", _crossing)
-    monkeypatch.setattr(live_setups, "detect_all", _crossing)
+async def _live_rows(
+    tmp_path: Path,
+    expiry: str,
+    cycles: list[dt.datetime],
+    close: Callable[[dt.datetime], float],
+) -> list[tuple[object, ...]]:
+    """Živý `SetupEngine` pipeline E nad cykly: bar N − 1 + stav N (decision-time).
 
+    Řádek = šablona, směr, vznik, výsledek, uzavření, R — totéž, co vrací `replay`."""
     repository = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 's.sqlite'}"))
     repository.ensure_schema()
     oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
@@ -712,20 +706,182 @@ async def test_replay_vcerejska_ma_tytez_setupy_jako_zivy_engine(
     fake = FakeRuntime()
     fake.expiry = expiry
     runtime = cast(EngineRuntime, fake)
-    for now in active:  # pipeline E běží od rollu: bar N − 1 + stav N
+    for now in cycles:
         price = close(now)
         bar = Bar(ts=now - MINUTE, open=price, high=price, low=price, close=price, volume=1.0)
         await engine.on_minute(now, price, [bar], runtime)
-    live = sorted(
+    return sorted(
         (
             row["template"],
             row["direction"],
-            pd.to_datetime(row["created_ts"], utc=True).to_pydatetime(),
+            _utc(row["created_ts"]),
+            row["status"],
+            _utc(row["closed_ts"]),
+            None if row["outcome_r"] is None else round(float(row["outcome_r"]), 9),
         )
         for row in repository.list_for("ES")
     )
 
+
+def _replay_rows(module: Any, expiry: str) -> list[tuple[object, ...]]:
     rows = module.replay(module.build_minutes("ES", expiry, None), SetupParams(), expiry, "ES")
-    replayed = sorted((row["template"], row["direction"], row["created"]) for row in rows)
+    return sorted(
+        (
+            row["template"],
+            row["direction"],
+            row["created"],
+            row["outcome"],
+            row["closed"],
+            None if row["r"] is None else round(row["r"], 9),
+        )
+        for row in rows
+    )
+
+
+async def test_replay_vcerejska_ma_tytez_setupy_jako_zivy_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regresní parita #1464 a #1641: replay expirace E (`build_minutes` + `replay`)
+    dá tytéž setupy jako živý `SetupEngine` — vznik, výsledek, čas uzavření i R.
+    Pipeline E vzniká až po cyklu minuty settle předchozí expirace (roll v
+    `__main__`), první cyklus E je 20:01. Sekundární minuty 20. 10. odpoledne by
+    v replayi otevřely setup, který živě nikdy nevznikl, a zablokoval šablonu."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    expiry = "20261021"
+    roll, settle = _at(20, 20, 0), _at(21, 20, 0)
+    pattern = (100.0, 106.0, 110.0, 101.0)
+
+    def close(ts: dt.datetime) -> float:
+        return pattern[int((ts - roll) / MINUTE) % len(pattern)]
+
+    secondary = [_at(20, 14, 0) + 3 * i * MINUTE for i in range(20)] + [roll]
+    active = [roll + i * MINUTE for i in range(1, 48)] + [
+        settle - (30 - i) * MINUTE for i in range(31)
+    ]
+    assert active[-1] == settle
+    _partitions(tmp_path, {expiry: secondary + active}, close)
+    monkeypatch.setattr(module, "detect_all", _crossing)
+    monkeypatch.setattr(live_setups, "detect_all", _crossing)
+
+    live = await _live_rows(tmp_path, expiry, active, close)
     assert len(live) >= 4
-    assert replayed == live
+    # Cíl zasáhne bar další minuty: uzavření nese ts baru, ne minutu rozhodnutí.
+    # Setup z 19:30 (vstup 110, cíl 111) skončí v settle za close baru 19:59
+    assert all(row[4] == row[2] for row in live if row[3] == "closed_target")
+    assert [row[4:] for row in live if row[3] == "closed_timeout"] == [(settle, -0.5)]
+    assert _replay_rows(module, expiry) == live
+
+
+@pytest.mark.parametrize(
+    ("last_close", "outcome", "closed", "r"),
+    [
+        (102.0, "closed_timeout", _at(21, 20, 0), 2.0 / 5),  # timeout za close baru 19:59
+        (94.0, "closed_stop", _at(21, 19, 59), -1.0),  # stop v posledním baru dne
+    ],
+)
+async def test_replay_posledni_bar_pred_settle_jako_zivy_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    last_close: float,
+    outcome: str,
+    closed: dt.datetime,
+    r: float,
+) -> None:
+    """#1641: bar 19:59 (končí v settle) přijde v rozhodovací minutě 20:00. Živý
+    engine ho hodnotí: timeout bere jeho close a stop v něm platí s ts 19:59.
+    Replay ho dřív nesl s razítkem 20:00 a `walk_setup_path` ho zahodil (bary od
+    settle se nehodnotí) — timeout bral close baru 19:58 a stop neviděl."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    expiry = "20261021"
+    settle = _at(21, 20, 0)
+    created = settle - 10 * MINUTE
+
+    def close(ts: dt.datetime) -> float:
+        return last_close if ts == settle else 100.0 + 0.2 * ((ts - created) / MINUTE)
+
+    def one_long(history: list[MinuteInputs], params: SetupParams) -> list[SetupCandidate]:
+        if history[-1].ts != created:
+            return []
+        candidate = SetupCandidate(
+            template=SetupTemplate.WALL_BOUNCE,
+            direction=Direction.LONG,
+            entry=100.0,
+            target=110.0,
+            stop=95.0,
+            confidence=50,
+            reason="test",
+        )
+        return [candidate]
+
+    cycles = [settle - (15 - i) * MINUTE for i in range(16)]
+    _partitions(tmp_path, {expiry: cycles}, close)
+    monkeypatch.setattr(module, "detect_all", one_long)
+    monkeypatch.setattr(live_setups, "detect_all", one_long)
+
+    live = await _live_rows(tmp_path, expiry, cycles, close)
+    assert [row[3:] for row in live] == [(outcome, closed, round(r, 9))]
+    assert _replay_rows(module, expiry) == live
+
+
+def _probe_partitions(root: Path, expiry: str, decisions: list[dt.datetime]) -> None:
+    """Bary ES (bar N − 1 rozhodovací minuty N) a jeden Dyn profil expirace pro sondy."""
+    derived = root / "derived" / "ES"
+    bars = pd.DataFrame(
+        {
+            "ts_min": [ts - MINUTE for ts in decisions],
+            "open": 150.0,
+            "high": 150.0,
+            "low": 150.0,
+            "close": 150.0,
+        }
+    )
+    for day, part in bars.groupby(bars["ts_min"].dt.strftime("%Y-%m-%d")):
+        _write(derived / "bars" / f"{day}.parquet", part)
+    profile = _profile(decisions[0])
+    _write(
+        derived / expiry / "gexprofile" / "profile.parquet",
+        pd.DataFrame(
+            {
+                "ts_min": [profile.ts_min],
+                "grid_start": [profile.grid_start],
+                "grid_step": [profile.grid_step],
+                "values": [list(profile.values)],
+            }
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("expiry", "before", "inside", "after"),
+    [
+        # Pondělní expirace: aktivní od pátečního settle, ne od nedělních 20:00 UTC
+        (
+            "20261019",
+            [_at(16, 19, 59), _at(16, 20, 0)],
+            [_at(16, 20, 1), _at(16, 20, 59), _at(18, 22, 1), _at(19, 20, 0)],
+            [_at(19, 20, 1)],
+        ),
+        # Úterý po Labor Day (7. 9.): od pátku 4. 9., ne od pondělních 20:00 UTC
+        (
+            "20260908",
+            [_at(4, 20, 0, month=9)],
+            [_at(4, 20, 30, month=9), _at(7, 15, 0, month=9), _at(8, 20, 0, month=9)],
+            [_at(8, 20, 1, month=9)],
+        ),
+    ],
+)
+def test_replay_sond_okno_aktivniho_retezu_jako_setupy(
+    tmp_path: Path,
+    expiry: str,
+    before: list[dt.datetime],
+    inside: list[dt.datetime],
+    after: list[dt.datetime],
+) -> None:
+    """#1642: replay sond bere okno `active_window` (settle předchozí expirace,
+    settle E] jako replay setupů — dřív (settle kalendářního dne před E, settle E]."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    _probe_partitions(tmp_path, expiry, before + inside + after)
+    assert [m.ts for m in module.build_probe_minutes("ES", expiry)] == inside

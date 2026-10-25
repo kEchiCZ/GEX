@@ -78,7 +78,7 @@ def measure(symbol: str, last: int, to: str) -> dict[str, float]:
             r = row["r"] or 0.0
             stats["setups"] += 1
             stats["r_all"] += r
-            if row["created"] < rolled_in or row["created"] >= settle:
+            if row["created"] <= rolled_in or row["created"] > settle:
                 stats["outside"] += 1
                 stats["r_outside"] += r
             if evening_end is not None and row["created"] < evening_end:
@@ -94,7 +94,7 @@ def main() -> int:
     parser.add_argument("--to", default="20261007", help="poslední expirace (YYYYMMDD)")
     args = parser.parse_args()
 
-    print(f"Řez: {args.last} expirací do {args.to}, okno = [settle předchozí expirace, settle E)")
+    print(f"Řez: {args.last} expirací do {args.to}, okno = (settle předchozí expirace, settle E]")
     print(
         "| symbol | expirací | setupů | mimo okno | ΣR vše | ΣR mimo okno | minut mimo okno "
         "| večerů před #1331 | minut večera | setupů večera | ΣR večera |"

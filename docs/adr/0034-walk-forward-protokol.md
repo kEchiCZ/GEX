@@ -127,6 +127,52 @@ settle) a 17. 9. — expirace 20260917 živě aktivní nebyla (pipeline z 202609
 rolovala rovnou na 20260918), seance je proto mezera, ne minuty 16. 9.
 pod cizím datem.
 
+**Doplněk 25. 10. 2026 (#1641, #1642) — hranice okna podle kódu rollu a bar
+cesty s vlastním razítkem.** Bod 1 doplňku 22. 10. („minuta settle E patří už
+další expiraci“) živému rollu neodpovídá. Roll v `__main__` proběhne až po
+cyklu minuty settle: ten je posledním cyklem vypršelé pipeline a nová
+pipeline (s vlastním `SetupEngine`) vzniká nejdřív v minutě po něm. Na
+produkci začínají levels E v den předchozího settle ve 20:01 a v den settle E
+končí minutou 20:00 (ES i NQ 20.–23. 10.). Platí proto:
+
+1. **Seance E = rozhodovací minuty (settle předchozí expirace, settle E]**
+   (`active_window`). Minuta settle E nese bar končící v settle (19:59 v
+   letním čase USA). Nový setup v ní nevznikne (`born_after_settle`), otevřený
+   skončí timeoutem za close tohoto baru a `closed` = settle, shodně se živým
+   enginem (`test_engine_timeout_za_close_v_settle_ne_za_cenu_cyklu`).
+2. **Cesta ceny hodnotí bar rozhodovací minuty N s jeho razítkem N − 1**
+   (`path_bar`, totéž dělal replay sond). Dřív šel bar s razítkem N: bar 19:59
+   se nehodnotil vůbec, timeout bral close baru 19:58 a zásah úrovně měl
+   `closed` o minutu později než živě.
+3. **Replay sond T9 (`--probes`) bere totéž okno.** Dřív počítal začátek
+   z kalendářního dne před expirací, takže pondělní expirace přišla o páteční
+   hodinu po settle a expirace po svátku začínala až večer svátku.
+
+Dopad na replay (měření 25. 10., výchozí `SetupParams`, mechanika v5,
+posledních 25 uzavřených expirací 21. 9.–23. 10. 2026, před = skript
+z `main`, po = oprava; rozhodnutí v #1385;
+`scripts/measure_replay_bar_1641.py --before 82bcefc --to 20261023 --db …`):
+
+| | setupy | ΣR | timeout | bez konce |
+|---|---|---|---|---|
+| ES | 298 → 299 | +18,7 → +24,2 | 20 → 21 | 3 → 1 |
+| NQ | 300 → 305 | +48,4 → +53,5 | 19 → 19 | 0 → 0 |
+
+- Timeout bere close jiného baru: R se změnilo u 20 setupů ES a 19 NQ.
+- `closed` o minutu dřív posune konec cooldownu a blokace směru
+  (`direction_block_minutes`, `max_stops_per_direction`). Vznik dalšího
+  setupu se posune o 1–8 minut, nebo setup přibude či zmizí: ES 18 setupů jen
+  před a 19 jen po, NQ 4 a 9; kromě jednoho jde o `trend_continuation`.
+  Největší kaskáda je NQ 19. 10.: čtvrtý long stop skončil ve 13:30 místo
+  13:31, blokace 90 min skončila v 15:00 a long z 15:00 vyšel (+1,46 R). Výhra
+  smazala počítadlo stopů, takže večer vznikly další 4 setupy, které dřív
+  blokace zakázala; den dává +3,35 R z rozdílu +5,1 R.
+- Minuta 19:59: setup ES 28. 9. dřív zůstal bez konce, teď končí timeoutem za
+  close baru 19:59 (−0,11 R). Setup ES 29. 9. z 19:59 nevznikne, protože
+  minuta 19:59 hodnotí bar 19:58.
+- Zbylý setup bez konce (ES 9. 10., z 8:00) leží v expiraci, jejíž minuty
+  končí ve 14:18; je to mezera v datech, oprava ji nemění.
+
 ## Důsledky
 
 - Noční běh: `scripts/walkforward-nightly.ps1` (Task Scheduler nebo ručně)
