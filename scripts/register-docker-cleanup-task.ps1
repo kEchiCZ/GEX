@@ -3,7 +3,8 @@
 # Úloha „GEXLens docker úklid": sobota 08:00 (trh zavřený od pátku 23:00 do
 # neděle 23:00), jen když PC běží; zmeškaný start se dožene (StartWhenAvailable).
 # Skript maže jen rollback tagy, starou build cache a osiřelé image; při
-# nedostatku místa pošle alert do zvonku. Výstup jde do data/logs/docker-cleanup.log.
+# nedostatku místa pošle alert do zvonku. Výstup jde do
+# %LOCALAPPDATA%\GEXLens\logs\docker-cleanup.log (mimo repo, #1638).
 # Spustit jednou pod účtem, který má docker: pwsh scripts/register-docker-cleanup-task.ps1
 # Odregistrace: Unregister-ScheduledTask -TaskName 'GEXLens docker úklid' -Confirm:$false
 [CmdletBinding()]
@@ -13,11 +14,13 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\LocalTrigger.ps1')
+. (Join-Path $PSScriptRoot 'lib\DockerHost.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 $script = Join-Path $repo 'scripts\docker-cleanup.ps1'
-$log = Join-Path $repo 'data\logs\docker-cleanup.log'
 if (-not (Test-Path $script)) { throw "Nenalezen $script" }
-New-Item -ItemType Directory -Force (Split-Path -Parent $log) | Out-Null
+# Log mimo repo: D:\Documents chrání Řízený přístup ke složkám a pwsh má povolení jen
+# pro konkrétní verzi ze Store (lessons-learned 2026-09-10, #1638)
+$log = Join-Path (Get-OpsLogDir) 'docker-cleanup.log'
 
 # Plná cesta k pwsh: Task Scheduler pod Řízeným přístupem ke složkám (Defender)
 # spouští jen známé binárky s plnou cestou (ADMIN manuál kap. 13.6)

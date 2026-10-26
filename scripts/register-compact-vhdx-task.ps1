@@ -23,14 +23,16 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\LocalTrigger.ps1')
+. (Join-Path $PSScriptRoot 'lib\DockerHost.ps1')
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Registrace elevované úlohy vyžaduje správce — spusť pwsh jako správce.'
 }
 $repo = Split-Path -Parent $PSScriptRoot
 $script = Join-Path $repo 'scripts\compact-docker-vhdx.ps1'
-$log = Join-Path $repo 'data\logs\compact-vhdx.log'
 if (-not (Test-Path $script)) { throw "Nenalezen $script" }
-New-Item -ItemType Directory -Force (Split-Path -Parent $log) | Out-Null
+# Log mimo repo: D:\Documents chrání Řízený přístup ke složkám a pwsh má povolení jen
+# pro konkrétní verzi ze Store (lessons-learned 2026-09-10, #1638)
+$log = Join-Path (Get-OpsLogDir) 'compact-vhdx.log'
 
 # Plná cesta pwsh — Task Scheduler nepoužívá PATH uživatele (10. 9. 2026: 0x80070002)
 # Stabilní alias pwsh (App Execution Alias), ne cesta do WindowsApps s číslem

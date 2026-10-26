@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -276,6 +277,30 @@ def test_walkforward_v6_odmitne_from_pred_stinem(monkeypatch: pytest.MonkeyPatch
     module = _walkforward(monkeypatch)
     with pytest.raises(SystemExit):
         module.main(["--db", "sqlite://", "--mechanics", "6", "--from", "2026-09-18"])
+
+
+def test_walkforward_retence_maze_jen_starsi_reporty_walkforwardu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1638: retenci reportů dělá Python, pwsh do repa pod Řízeným přístupem ke
+    složkám nezapisuje. Smaže jen `walkforward-*.md` starší než limit (mtime)."""
+    module = _walkforward(monkeypatch)
+    now = 1_800_000_000.0
+    old = tmp_path / "walkforward-2026-07-01.md"
+    fresh = tmp_path / "walkforward-2026-07-30.md"
+    other = tmp_path / "sentiment-episodes-2026-07-01.md"
+    for path, age_days in ((old, 91), (fresh, 89), (other, 91)):
+        path.write_text("x", encoding="utf-8")
+        os.utime(path, (now - age_days * 86_400, now - age_days * 86_400))
+    assert module.prune_reports(tmp_path, 90, now) == [old]
+    assert not old.exists() and fresh.exists() and other.exists()
+
+
+def test_walkforward_keep_days_bez_out_odmitne(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retence bez --out by neměla složku — chyba, ne tiché ignorování."""
+    module = _walkforward(monkeypatch)
+    with pytest.raises(SystemExit):
+        module.main(["--db", "sqlite://", "--keep-days", "90"])
 
 
 # ── Okno aktivního řetězu (#1464) ───────────────────────────────────────────
