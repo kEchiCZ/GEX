@@ -2814,3 +2814,89 @@ async def test_den_jen_s_tasty_radky_bez_zapisu_ibkr_obnovi_ulozenou_alfu(
     # Výchozí MockOIFetcher nevrací nic → 0 zapsáno
     assert await archive_pass(pipeline, day, dt.datetime(2026, 7, 16, 0, 1, tzinfo=dt.UTC))
     assert pipeline.runtime.flow_alpha == pytest.approx(0.27)
+
+
+def _forward_computed_ts(settings: Settings, day: dt.date) -> object:
+    path = settings.derived_dir / "ES" / "gexforward" / f"{day.isoformat()}.parquet"
+    return pd.read_parquet(path)["computed_ts"].iloc[0]
+
+
+async def test_forward_gex_po_finalite_prepocita_po_obnove_tasty_kridel(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1607: po finalitě už IBKR průchod nepřijde. Obnova tasty křídel
+    (`wide_oi_pass` po výpadku tasty přes publikaci) proto Forward GEX přepočítá
+    sama, jinak by pole zůstalo do rollu na předchozí publikaci."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    day = dt.date(2026, 7, 16)  # den před expirací řetězu 20260717
+    repository.upsert_many(
+        [
+            OIRecord("ES", c.expiry, c.strike, c.right, day, 400.0, iv=0.2)
+            for c in pipeline.runtime.contracts
+        ],
+        dt.datetime(2026, 7, 16, 12, 30, tzinfo=dt.UTC),
+    )
+    now = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
+    pipeline.oi_final, pipeline._oi_day = True, day
+    await pipeline._write_forward_field(day)
+    first = _forward_computed_ts(settings, day)
+
+    assert await pipeline.refresh_forward_after_tasty(3, now) is True
+    assert _forward_computed_ts(settings, day) != first
+
+
+@pytest.mark.parametrize(
+    ("label", "written", "final", "oi_day"),
+    [
+        ("tasty nic nezapsalo", 0, True, dt.date(2026, 7, 16)),
+        ("před finalitou přepočítá další IBKR průchod", 3, False, dt.date(2026, 7, 16)),
+        ("finalita patří včerejšku", 3, True, dt.date(2026, 7, 15)),
+    ],
+)
+async def test_forward_gex_bez_finality_ani_zapisu_se_neprepocita(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+    written: int,
+    final: bool,
+    oi_day: dt.date,
+) -> None:
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    calls: list[dt.date] = []
+
+    async def record(today: dt.date) -> None:
+        calls.append(today)
+
+    monkeypatch.setattr(pipeline, "_write_forward_field", record)
+    pipeline.oi_final, pipeline._oi_day = final, oi_day
+    now = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
+    assert await pipeline.refresh_forward_after_tasty(written, now) is False, label
+    assert calls == [], label
+
+
+async def test_forward_gex_po_tasty_pocka_na_bezici_joby_po_archivu(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Joby po archivu (FA, Forward GEX) zapisují týž soubor a řetěz čtou dřív —
+    přepočet po tasty jde až po nich, jinak by ho přepsaly starším stavem."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    order: list[str] = []
+
+    async def jobs() -> None:
+        await asyncio.sleep(0.05)
+        order.append("joby")
+
+    async def record(today: dt.date) -> None:
+        order.append("forward")
+
+    monkeypatch.setattr(pipeline, "_write_forward_field", record)
+    day = dt.date(2026, 7, 16)
+    pipeline.oi_final, pipeline._oi_day = True, day
+    pipeline._oi_jobs_task = asyncio.create_task(jobs())
+    now = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
+    assert await pipeline.refresh_forward_after_tasty(5, now) is True
+    assert order == ["joby", "forward"]
