@@ -28,7 +28,10 @@ Vrať nejvýš ~40 řádků nálezů seřazených podle závažnosti (soubor:ř�
 6. Relevance dat: look-ahead (budoucí minuty v minulém bodě, replay/playback jen s daty dostupnými
    v čase t); časová pásma a letní čas (ET / CEST / UTC); OI podle času publikace a settle podle
    trading class; zmrzlá čísla bez viditelného stáří; forward-fill nebo interpolace místo mezery;
-   odhad neoznačený jako odhad; směšování zdrojů nebo jednotek; zaokrouhlení měnící rozhodnutí.
+   odhad neoznačený jako odhad; směšování zdrojů nebo jednotek; zaokrouhlení měnící rozhodnutí;
+   stav plněný ze streamu mimo minutový cyklus a reset na hranici seance (17:00 CT): kam padnou
+   tisky přijaté mezi openem a resetem v prvním cyklu? Reset smí smazat jen data staré seance
+   (#1460, #1603).
 7. Výkon: čtení particí bez cache (bind mount ~20 ms/soubor), práce v minutovém cyklu enginu
    úměrná historii, RAM (WSL 6 GB), překreslování heatmapy navíc, velikost WS payloadu, PG dotaz
    bez indexu.
