@@ -13,6 +13,7 @@ nad rámec COMPACT rozbalení (typ, pole dle EVENT_FIELDS).
 
 import asyncio
 import contextlib
+import datetime as dt
 import json
 import logging
 import time
@@ -140,6 +141,10 @@ class DxLinkStream:
         self.rate_entries_s = self._rate_max
         self._tokens = SUBSCRIPTION_BURST_ENTRIES
         self._tokens_ts = time.monotonic()
+        #: Dokončení plné subskripce po posledním (re)connectu (UTC, #1604);
+        #: None = spojení není, nebo subskripce ještě běží. Čtecí smyčka do té
+        #: doby nic neodbaví, takže ticho univerz se dřív měřit nesmí.
+        self.subscribed_at: dt.datetime | None = None
 
     async def _bucket_wait(self, entries: int) -> None:
         """Počká, až bucket má `entries` tokenů; burst projde hned, zbytek tempem."""
@@ -432,6 +437,7 @@ class DxLinkStream:
             ping_timeout=PING_TIMEOUT_S,
         ) as ws:
             self._ws = ws
+            self.subscribed_at = None
             try:
                 # Handshake je sdílený s backfillem svíček (#617) — jedna
                 # implementace, ať se dvě kopie nerozejdou
@@ -447,6 +453,7 @@ class DxLinkStream:
                         self._pause_s,
                         self.rate_entries_s,
                     )
+                    self.subscribed_at = dt.datetime.now(dt.UTC)
 
                 self._last_keepalive = time.monotonic()
                 while not stop.is_set():
@@ -508,6 +515,7 @@ class DxLinkStream:
                         logger.info("DXLink neznámá zpráva %s: %s", msg_type, message)
             finally:
                 self._ws = None
+                self.subscribed_at = None
 
     def _dispatch(self, data: list[object]) -> None:
         for index in range(0, len(data) - 1, 2):

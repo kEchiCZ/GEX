@@ -186,6 +186,8 @@ from gexlens_engine.tasty.trades_recorder import TradesRecorder
 from gexlens_engine.tasty.watchdog import (
     SilentStreamWatchdog,
     SilentUniverseWatchdog,
+    UniverseSample,
+    check_universes,
     silent_alert_message,
     silent_universe_alert_message,
 )
@@ -2264,50 +2266,46 @@ async def main() -> None:
                             },
                         )
                     return  # přepojení přihlásí i všechna univerza
-                for symbol, routes in list(trade_routes.items()):
-                    pipe = pipelines.get(symbol)
-                    if pipe is None or pipe.runtime.expiry != routes.active_expiry:
-                        # Zastaralé trasy po rollu: univerzum expirované řady mlčí
-                        # z definice, měří se až nad obnoveným plánem (nová expirace)
-                        continue
-                    watchdog = universe_watchdogs.setdefault(
-                        symbol, SilentUniverseWatchdog(symbol=symbol)
-                    )
-                    universe_action = watchdog.check(
-                        now,
-                        connected=tasty_stream.connected,
-                        expiry=routes.active_expiry,
-                        last_event_at=tasty_cache.last_event_among(routes.active),
-                    )
-                    if universe_action is None:
-                        continue
+                universe_actions = check_universes(
+                    now,
+                    universe_watchdogs,
+                    [
+                        UniverseSample(symbol, routes.active_expiry, frozenset(routes.active))
+                        for symbol, routes in trade_routes.items()
+                    ],
+                    running_expiry={
+                        symbol: pipe.runtime.expiry for symbol, pipe in pipelines.items()
+                    },
+                    last_event_among=tasty_cache.last_event_among,
+                    connected=tasty_stream.connected,
+                    subscribed_at=tasty_stream.subscribed_at,
+                    stream_last_event_at=tasty_cache.last_event_at,
+                )
+                for universe, universe_action in universe_actions:
                     logger.warning("Hlídač opčního univerza (#1604): %s", universe_action.reason)
+                    reason = f"mlčící univerzum {universe.symbol} (#1604)"
                     if universe_action.remedy == "resubscribe":
                         task = asyncio.create_task(
-                            tasty_stream.resubscribe(
-                                routes.active, f"mlčící univerzum {symbol} (#1604)"
-                            )
+                            tasty_stream.resubscribe(universe.streamers, reason)
                         )
                         pending_resubscribes.add(task)
                         task.add_done_callback(pending_resubscribes.discard)
                     else:
-                        await tasty_stream.force_reconnect(f"mlčící univerzum {symbol} (#1604)")
+                        await tasty_stream.force_reconnect(reason)
                     if universe_action.alert:
                         await publisher.publish(
                             "alerts",
                             {
                                 "kind": "feed_silent",
-                                "symbol": symbol,
+                                "symbol": universe.symbol,
                                 "message": silent_universe_alert_message(
-                                    symbol,
+                                    universe.symbol,
                                     universe_action.silence_s,
                                     cumdelta_prints=CUMDELTA_PRINTS,
                                 ),
                                 "ts": dt.datetime.now(dt.UTC).timestamp(),
                             },
                         )
-                    if universe_action.remedy == "reconnect":
-                        return  # přepojení obnoví i ostatní univerza
 
             tasty_silence_tick = _tasty_silence_tick
 

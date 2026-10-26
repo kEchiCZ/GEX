@@ -5,12 +5,15 @@ to je zavřený trh, ne porucha; hlídač nesmí přepojit ani alertovat.
 """
 
 import datetime as dt
+from collections.abc import Mapping
 
 import pytest
 
 from gexlens_engine.tasty.watchdog import (
     SilentStreamWatchdog,
     SilentUniverseWatchdog,
+    UniverseSample,
+    check_universes,
     silent_alert_message,
     silent_universe_alert_message,
 )
@@ -109,17 +112,31 @@ def test_univerzum_rth_resubskripce_pak_reconnect_a_jeden_alert() -> None:
     assert third is not None and third.remedy == "resubscribe" and not third.alert
 
 
-def test_univerzum_resubskripce_pomohla_epizoda_konci() -> None:
+def test_univerzum_resubskripce_pomohla_epizoda_konci_az_po_zivem_useku() -> None:
+    """Epizoda končí až živým úsekem delším než práh od zásahu, pak nové ticho = nový alert."""
     dog = SilentUniverseWatchdog(symbol="ES")
     dog.check(RTH, connected=True, expiry=EXPIRY, last_event_at=RTH)
     action = dog.check(minutes(RTH, 3), connected=True, expiry=EXPIRY, last_event_at=RTH)
     assert action is not None and action.remedy == "resubscribe"
-    # Univerzum po resubskripci zase dodává → bez přepojení, epizoda končí
-    fresh = minutes(RTH, 4)
-    assert dog.check(fresh, connected=True, expiry=EXPIRY, last_event_at=fresh) is None
-    # Nové ticho je nová epizoda: zase od resubskripce a s alertem (po backoffu)
-    again = dog.check(minutes(RTH, 10), connected=True, expiry=EXPIRY, last_event_at=fresh)
+    for n in range(4, 7):  # univerzum po resubskripci zase dodává
+        now = minutes(RTH, n)
+        assert dog.check(now, connected=True, expiry=EXPIRY, last_event_at=now) is None
+    last = minutes(RTH, 6)
+    again = dog.check(minutes(RTH, 9), connected=True, expiry=EXPIRY, last_event_at=last)
     assert again is not None and again.remedy == "resubscribe" and again.alert
+
+
+def test_univerzum_jen_snimek_po_resubskripci_eskaluje_bez_alertu() -> None:
+    """DXLink může po re-add poslat snímek posledních hodnot. Ten epizodu neukončí:
+    když univerzum dál mlčí, přijde přepojení a žádný nový alert."""
+    dog = SilentUniverseWatchdog(symbol="ES")
+    dog.check(RTH, connected=True, expiry=EXPIRY, last_event_at=RTH)
+    first = dog.check(minutes(RTH, 3), connected=True, expiry=EXPIRY, last_event_at=RTH)
+    assert first is not None and first.alert
+    snapshot = minutes(RTH, 3)
+    assert dog.check(minutes(RTH, 4), connected=True, expiry=EXPIRY, last_event_at=snapshot) is None
+    second = dog.check(minutes(RTH, 6), connected=True, expiry=EXPIRY, last_event_at=snapshot)
+    assert second is not None and second.remedy == "reconnect" and not second.alert
 
 
 def test_univerzum_globex_tolerance_10_min() -> None:
@@ -204,3 +221,82 @@ def test_text_alertu_univerza(cumdelta_prints: bool) -> None:
     text = silent_universe_alert_message("NQ", 185.0, cumdelta_prints=cumdelta_prints)
     assert text.startswith("Opční řetěz NQ z tastytrade mlčel 3 min, podklad tiká")
     assert ("CumΔ NQ z tisků má od prahu ticha mezeru" in text) is cumdelta_prints
+
+
+# ── Orchestrace tiku (`check_universes`) ────────────────────────────────────
+
+
+def _universes() -> list[UniverseSample]:
+    return [
+        UniverseSample("ES", EXPIRY, frozenset({"./ES1"})),
+        UniverseSample("NQ", EXPIRY, frozenset({"./NQ1"})),
+    ]
+
+
+def _tick(
+    dogs: dict[str, SilentUniverseWatchdog],
+    now: dt.datetime,
+    events: Mapping[str, dt.datetime | None],
+    *,
+    subscribed_at: dt.datetime | None = RTH,
+    stream_last: dt.datetime | None = None,
+    running: dict[str, str] | None = None,
+) -> list[tuple[str, str, bool]]:
+    actions = check_universes(
+        now,
+        dogs,
+        _universes(),
+        running_expiry=running if running is not None else {"ES": EXPIRY, "NQ": EXPIRY},
+        last_event_among=lambda streamers: events[next(iter(streamers))],
+        connected=True,
+        subscribed_at=subscribed_at,
+        stream_last_event_at=stream_last if stream_last is not None else now,
+    )
+    return [(u.symbol, a.remedy, a.alert) for u, a in actions]
+
+
+def test_tik_jen_mlcici_instrument_s_alertem_a_symbolem() -> None:
+    dogs: dict[str, SilentUniverseWatchdog] = {}
+    _tick(dogs, RTH, {"./ES1": RTH, "./NQ1": RTH})
+    now = minutes(RTH, 3)
+    assert _tick(dogs, now, {"./ES1": RTH, "./NQ1": now}) == [("ES", "resubscribe", True)]
+
+
+def test_tik_mlci_oba_jeden_reconnect_a_nove_mereni_od_subskripce() -> None:
+    """Ověřovatel #1604: dva instrumenty nesmí přepojovat jeden po druhém a přerušit subskripci."""
+    dogs: dict[str, SilentUniverseWatchdog] = {}
+    silent = {"./ES1": RTH, "./NQ1": RTH}
+    _tick(dogs, RTH, silent)
+    assert _tick(dogs, minutes(RTH, 3), silent) == [
+        ("ES", "resubscribe", True),
+        ("NQ", "resubscribe", True),
+    ]
+    assert _tick(dogs, minutes(RTH, 4), silent) == [("ES", "reconnect", False)]
+    # Plná subskripce po přepojení ještě běží → nic
+    assert _tick(dogs, minutes(RTH, 5), silent, subscribed_at=None) == []
+    # Hotová subskripce: ticho obou se měří od ní, NQ znovu nepřepojí hned
+    done = minutes(RTH, 6)
+    assert _tick(dogs, minutes(RTH, 7), silent, subscribed_at=done) == []
+    # Pořád mlčí i po nové subskripci: táž epizoda (bez nových alertů), ES po
+    # backoffu znovu resubskripce, NQ eskaluje na přepojení
+    assert _tick(dogs, minutes(RTH, 9), silent, subscribed_at=done) == [
+        ("ES", "resubscribe", False),
+        ("NQ", "reconnect", False),
+    ]
+
+
+def test_tik_mlci_cely_stream_nechava_hlidaci_1228() -> None:
+    """Mlčí i podklad: zásah patří globálnímu hlídači (i v jeho backoffu), ne univerzům."""
+    dogs: dict[str, SilentUniverseWatchdog] = {}
+    silent = {"./ES1": RTH, "./NQ1": RTH}
+    _tick(dogs, RTH, silent, stream_last=RTH)
+    for n in range(3, 10):
+        assert _tick(dogs, minutes(RTH, n), silent, stream_last=RTH) == []
+
+
+def test_tik_zastarale_trasy_po_rollu_preskoci() -> None:
+    dogs: dict[str, SilentUniverseWatchdog] = {}
+    silent = {"./ES1": RTH, "./NQ1": RTH}
+    running = {"ES": "20260918", "NQ": EXPIRY}  # ES už běží na nové expiraci, trasy staré
+    _tick(dogs, RTH, silent, running=running)
+    assert _tick(dogs, minutes(RTH, 3), silent, running=running) == [("NQ", "resubscribe", True)]

@@ -909,10 +909,11 @@ Při zavřeném trhu podle rozvrhu CME se spot nepřepíná a po otevření se t
 měří od okamžiku otevření (#1307, kap. 5 „Provozní upozornění při zavřeném trhu“).
 
 Řetěz se spouští **verdiktem křížové kontroly**, ne vlastním prahem — dědí tak
-kalibraci měřenou na 3 016 minutách místo nového odhadu. Návrat vyžaduje
-`state == "ok" AND streak == 0`: samotné `ok` nestačí, protože detektor ho
-vrací i pro minutu nad prahem, která zatím nenaplnila sérii do alertu. Stavy
-`quiet` a `insufficient` sérii jen nulují — tichý trh není důkaz uzdravení.
+kalibraci měřenou na 3 016 minutách místo nového odhadu. Návrat počítá jen
+minuty, kdy IBKR dodává (`ibkr_healthy` verdiktu): obě strany čerstvé, nebo mlčí
+jen tasty (#1604). Samotné `ok` nestačí, protože detektor ho vrací i pro minutu
+s IBKR nad prahem, která zatím nenaplnila sérii do alertu. Stavy `quiet`
+a `insufficient` sérii jen nulují — tichý trh není důkaz uzdravení.
 
 **Co fallback vědomě NEdodá: kumulativní denní objem.** Tasty ho ve stejné
 sémantice nemá, a dosadit nulu by znamenalo skokový záporný přírůstek přes celý
@@ -973,14 +974,14 @@ spojení s IBKR, nebo Gateway vyhozená souběhem s mobilem — API port odmít�
   OTM strike nezměněný 20 min je při živém univerzu aktuální. Do #1604 se měřil
   poslední event celého streamu. Front future ale jde týmž streamem a tiká dál,
   takže mlčící opce dostaly stáří ~0 s a do snímku šly zmrzlé kotace. Mlčící
-  univerzum teď dá mezeru ve snímku.
+  univerzum teď dá mezeru ve snímku. Kontrakt bez dxFeed Greeks
+  dostane BS greeks z mid (`greekssource = computed`), bid 0 zůstává ve snímku
+  (limitně nulové greeks) — jinak ze strike profilu mizelo OI těch striků.
 - **Návrat na IBKR** po `GEXLENS_TASTY_CHAIN_RECOVER_MINUTES` minutách, kdy IBKR
   dodává (`ibkr_healthy` verdiktu křížové kontroly): obě strany čerstvé, nebo mlčí
   jen tasty (#1604). Jinak by mlčící opce obou instrumentů držely fallback, a tedy
   mezeru, i po návratu IBKR. Série IBKR nad prahem, ticho obou ani málo kontraktů
-  návrat nespustí. Kontrakt bez dxFeed Greeks
-  dostane BS greeks z mid (`greekssource = computed`), bid 0 zůstává ve snímku
-  (limitně nulové greeks) — jinak ze strike profilu mizelo OI těch striků.
+  návrat nespustí.
 - **IBKR volání mají stropy**: discovery podkladu 3×30 s, discovery řetězu
   30 s, kvalifikace kontraktu 20 s a po timeoutu 60 s fail-fast (do 14. 9.
   `qualifyContractsAsync` bez stropu držel OI archiv i celý orchestrátor).
@@ -1045,7 +1046,7 @@ Pipeline se založí sama, jakmile se spojení objeví. Restart enginu není pot
 | V logu není ani řádek `tasty` | Chybí grant v `.env` (`GEXLENS_TASTY_CLIENT_SECRET`, `_REFRESH_TOKEN`) nebo je vypnutý `GEXLENS_TASTY_ENABLED` (od #763; zastaralý `GEXLENS_TASTY_SHADOW`, je-li nastaven, ho přebíjí a engine to hlásí varováním), viz kap. 11. |
 | `Error 200, reqId 5/6` po startu | Známé (#734): `BRFUPDN` a `DJ` nemají celofeedovou pásku. Není to porucha, zprávy tečou z `BRFG` a `DJNL`. |
 | Zvonek `greeks_bs_fallback` / vysoké `greeks_bs_share` ve /status | TWS přestala dodávat model greeks a engine je dopočítává BS modelem z mid (#547) — data tečou dál, jen z jiného modelu (přesně bouře #862: 29 h na BS, vyléčil až restart TWS). `/status.greeks_bs_share` nese podíl per symbol; alert přijde po 15 min epizody nad 20 %. Při plném fallbacku (>80 % ≥ 30 min) zasáhne engine sám (#877, varianta C): 1. pokus vynucená obnova subskripcí (bez díry), 2. pokus reconnect — **výhradně mimo US RTH**; každý pokus hlásí zvonek. Vypnutí zásahů: `GEXLENS_BS_FALLBACK_RECONNECT=false` (alert zůstává). Nepomůže-li ani reconnect, restartuj TWS. |
-| `Hlídač tasty streamu (#1228)` nebo `Hlídač opčního univerza (#1604)` v logu, alert `feed_silent` | Při otevřeném trhu mlčí tastytrade nad práh (US RTH 3 min, Globex 10 min, `GEXLENS_TASTY_SILENT_WATCHDOG`). **Celý stream** včetně podkladu (`symbol` `*`): vynucené přepojení, backoff 5 min. **Jen opční řetěz jednoho instrumentu**, podklad tiká (`symbol` ES/NQ, #1604): napřed `DXLink: cílená resubskripce N symbolů` jen univerza aktivního řetězu (bez díry ve futures a druhém instrumentu); když při dalším tiku pořád mlčí, vynucené přepojení; pak backoff 5 min. Alert jen na začátku epizody. Měří se poslední event univerza (`TastyChainCache.last_event_among`, týž predikát `watchdog.universe_silence` jako trade větev CumΔ) od openu seance a po rollu od změny expirace; zastaralé trasy po rollu se přeskočí do obnovy plánu. Opakuje-li se zásah každých 5 min, tasty univerzum nedodává ani po přepojení — zkontroluj `tasty_symbol_breakdown` a odmítnutí ve `tasty_stream_last_error`. |
+| `Hlídač tasty streamu (#1228)` nebo `Hlídač opčního univerza (#1604)` v logu, alert `feed_silent` | Při otevřeném trhu mlčí tastytrade nad práh (US RTH 3 min, Globex 10 min, `GEXLENS_TASTY_SILENT_WATCHDOG`). **Celý stream** včetně podkladu (`symbol` `*`): vynucené přepojení, backoff 5 min. **Jen opční řetěz jednoho instrumentu**, podklad tiká (`symbol` ES/NQ, #1604): napřed `DXLink: cílená resubskripce N symbolů` jen univerza aktivního řetězu (bez díry ve futures a druhém instrumentu); když při dalším tiku pořád mlčí, vynucené přepojení; pak backoff 5 min. Alert jen na začátku epizody; epizoda končí, až eventy univerza chodí aspoň práh po posledním zásahu (snímek po resubskripci nestačí). Měří se poslední event univerza (`TastyChainCache.last_event_among`, týž predikát `watchdog.universe_silence` jako trade větev CumΔ) od openu seance, po rollu od změny expirace a po (re)connectu až od dokončení plné subskripce (`DXLink subskripce kompletní`, během ní se eventy neodbavují). Mlčí-li i podklad, zasahuje jen hlídač #1228 (i v jeho backoffu). Po přepojení v tiku další instrumenty nezasahují; zastaralé trasy po rollu se přeskočí do obnovy plánu. Opakuje-li se zásah každých 5 min, tasty univerzum nedodává ani po přepojení — zkontroluj `tasty_symbol_breakdown` a odmítnutí ve `tasty_stream_last_error`. |
 | `DXLink ERROR … subscription rate is too high` v logu | Server odmítl dávku subskripcí a odmítnuté symboly by tiše mlčely. Od #863 se engine léčí sám: rozestup dávek se zdvojí (0,25 s → strop 2 s) a po 10 s klidu pošle znovu — od #936 **jen mlčící symboly** (`cache.silent_symbols`, event starší 10 min nebo žádný; typicky jednotky dávek), plný resubscribe jen když mlčí většina (výpadek); plný heal za RTH trhal limit znovu a nekonvergoval (79 healů / 2 h, 5 881 rate limitů / den). Rozestup se po 120 s klidu vrací k základu. `/status.tasty_rate_limited` počítá odmítnutí, `tasty_heals` healy; roste-li trvale i s pomalým tempem, je problém jinde (kapacita účtu — nebo strop položek, viz `size_exceeded`). Transportní `ping_timeout` je 120 s (#916): default 20 s byl kratší než plná subskripce na stropu rozestupu (~44 dávek à 2 s ≈ 90 s) a klient spojení zabil dřív, než doběhla → smyčka reconnectů a fallback #614 bez dat; mrtvé spojení hlídá protokolový KEEPALIVE (60 s) + backoff. |
 | `tasty_symbols` výrazně nad plán ADR-0025 | `/status.tasty_symbol_breakdown` nese rozpad per účel (`chain` / `extended` / `wide` / `underlying` / `total`) — podle něj se pozná, která složka přerostla (typicky souběh řetězů více expirací během dne; v noci klesá). |
 | Chyby 354/300 s `neznámý kontrakt` v subscription_error_recent | Do 27. 8. anonymní: náhrobky reqId vzorkovaly jen `mktData`, kdežto tick-by-tick hot zóny se registruje pod `AllLast`/`BidAsk`. Nově nesou popisek i `[tickType]` — podle něj poznáš rotaci hot zóny (ATM se pohnul) od výpadku kotací. |

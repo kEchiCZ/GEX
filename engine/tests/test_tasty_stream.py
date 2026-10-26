@@ -351,3 +351,49 @@ async def test_resubscribe_bez_spojeni_nic_neposle() -> None:
     sent.clear()
     assert await stream.resubscribe({"./A"}, "test") == 0
     assert sent == []
+
+
+async def test_subscribed_at_az_po_plne_subskripci(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1604: hlídač univerza měří ticho až od dokončení plné subskripce po (re)connectu.
+
+    Během handshaku a subskripce čtecí smyčka nic neodbaví; po pádu spojení
+    razítko zmizí, aby se ticho neměřilo od staré subskripce.
+    """
+    import datetime as dt
+
+    import websockets
+
+    import gexlens_engine.tasty.stream as stream_module
+
+    stream, _sent = make_stream()
+    stop = asyncio.Event()
+    observed: dict[str, object] = {}
+
+    class _Ws:
+        async def recv(self) -> str:
+            observed["read"] = stream.subscribed_at
+            stop.set()
+            raise TimeoutError
+
+    class _Connect:
+        def __init__(self, url: str, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> _Ws:
+            return _Ws()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def fake_handshake(ws: object, token: str, fields: object) -> None:
+        observed["handshake"] = stream.subscribed_at
+
+    monkeypatch.setattr(websockets, "connect", _Connect)
+    monkeypatch.setattr(stream_module, "handshake", fake_handshake)
+    stream.subscribed_at = dt.datetime(2026, 10, 26, 12, 0, tzinfo=dt.UTC)  # z minulého spojení
+
+    await stream._connect_and_read(stop)
+
+    assert observed["handshake"] is None
+    assert isinstance(observed["read"], dt.datetime)
+    assert stream.subscribed_at is None
