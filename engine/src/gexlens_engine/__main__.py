@@ -815,6 +815,24 @@ def _bs_fallback_status(running: Sequence[InstrumentPipeline]) -> dict[str, obje
     return {"greeks_bs_share": shares} if shares else {}
 
 
+def _wide_oi_status(running: Sequence[InstrumentPipeline]) -> dict[str, object]:
+    """Stáří tasty křídel OI per symbol (#1611) z posledního cyklu; klíče chybí bez stavu."""
+    states = {
+        pipeline.symbol: pipeline.wide_oi_state
+        for pipeline in running
+        if pipeline.wide_oi_state is not None
+    }
+    if not states:
+        return {}
+    return {
+        "wide_oi_last_change_ts": {
+            symbol: last.isoformat() if last is not None else None
+            for symbol, (last, _) in states.items()
+        },
+        "wide_oi_published": {symbol: fresh for symbol, (_, fresh) in states.items()},
+    }
+
+
 def _map_state_status(running: Sequence[InstrumentPipeline]) -> dict[str, object]:
     """Stav mapy per symbol (#1245): thin + důvody + změřené podmínky."""
     states = {
@@ -2816,7 +2834,7 @@ async def main() -> None:
             Běží v kadenci extended smyčky; jádro je `wide_oi_pass` (#1605):
             pokryté jsou jen striky s IBKR řádkem dne (dotaz na archiv, takže
             se znalost obálky nemusí protahovat přes engine), tasty řádky se
-            během dne obnovují (publikace CME ~12:00 UTC) a zapisuje se jen
+            během dne obnovují (tasty nese publikaci CME ~01:45–02:30 UTC, #1626) a zapisuje se jen
             změněná hodnota. IBKR řádek tasty nikdy nepřepíše (stráž v SQL).
             """
             if not settings.tasty_wide_oi:
@@ -3524,6 +3542,8 @@ async def main() -> None:
                 **_bs_fallback_status(run_list),
                 # Stav „tenká mapa" per symbol (#1245) — klíč chybí, když kolektor neběží
                 **_map_state_status(run_list),
+                # Stáří tasty křídel OI per symbol (#1611) — jen s širokým OI z tasty
+                **_wide_oi_status(run_list),
                 # Obsazení disku (#773) — plní i patičku UI, která do teď
                 # ukazovala `disk — / —`; klíče chybí do prvního měření
                 **disk_watch.status_fields(int(settings.disk_limit_gb * 1024**3)),

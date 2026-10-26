@@ -391,12 +391,13 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         "oi",
         "app",
         "ops",
-        ("oi_missing", "oi_refresh_failed"),
+        ("oi_missing", "oi_refresh_failed", "wide_oi_stale"),
         "Chybí OI",
         "Open Interest dne chybí nebo je zastaralý.",
         (
             "OI z IBKR nedorazilo nebo selhala archivace",
             "Obnova OI po publikačním okně selhala",
+            "Křídla OI z tasty se po publikaci neobnovila",
         ),
     ),
     PushTopic(
