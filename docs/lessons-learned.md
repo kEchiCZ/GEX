@@ -44,7 +44,8 @@ chyb**, hlavně diagnostických a provozních.
   souběžné se sweepem by sčítalo market data lines (100, ADR-0001 bod 4). → Práce, která čte IBKR,
   jde po dávkách do zbytku minuty na konci iterace (`advance_oi_archives`, jen když se dávka vejde);
   co IBKR nečte, jde na pozadí (`BackgroundJob`, task jako #1208). Hledat díry v minutových řadách
-  v rytmu jobu (à 31 min = 30 cyklů + vynechaná minuta) a měřit délku iterace, ne jen sweep.
+  v rytmu jobu (à 31 min = 30 cyklů + vynechaná minuta) a měřit délku iterace, ne jen sweep. Povýšeno
+  na pravidlo v AGENTS.md „Kritická pravidla“ (vlastník 22. 10.).
 
 - **2026-10-14 — epika se rozjela do bočních issues (#1385).** Za týden od schválení: 44 PR, z nich
   18 (41 %) v pořadí plánu, 13 na Fázi 6 před její bránou, 13 bočních; 44 nových bočních issues
