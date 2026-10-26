@@ -336,8 +336,11 @@ def make_pipeline(
     underlying = Underlying(symbol=symbol, sec_type="FUT", exchange="CME", con_id=1)
     band = select_band(info.strikes, spot, settings.strike_range_points)
     contracts = build_contracts(underlying, info, band)
+    # IBKR snímek dne z čtení od 00:00 UTC (`captured_ts`, #463); o přeskočení
+    # čtení rozhoduje jen IBKR snímek, tasty řádky ne (#1609)
     oi_repository.upsert_many(
-        [OIRecord(symbol, info.expiry, c.strike, c.right, TS.date(), 500.0) for c in contracts]
+        [OIRecord(symbol, info.expiry, c.strike, c.right, TS.date(), 500.0) for c in contracts],
+        dt.datetime.combine(TS.date(), dt.time(0, 5), tzinfo=dt.UTC),
     )
     runtime = EngineRuntime(
         settings=settings,
@@ -1449,7 +1452,7 @@ async def test_kalibrace_alfa_po_oi_archivu_nastavi_runtime(
     today = TS.date()
     prev = today - dt.timedelta(days=1)
     # Archivy obou dnů s IBKR měřením po publikaci (#1605; make_pipeline zapisuje
-    # dnešní OI 500 bez času pořízení): ΔOI = +40 per strana
+    # dnešní OI 500 z čtení ve 00:05 UTC, tedy před publikací): ΔOI = +40 per strana
     contracts = list(pipeline.runtime.contracts)
     oi_repository.upsert_many(
         [OIRecord("ES", "20260717", c.strike, c.right, prev, 460.0) for c in contracts],
@@ -2702,3 +2705,112 @@ async def test_v6_stav_mapy_a_t6_dostanou_zivou_cenu(
     pipeline.spot_age_gate = False
     await pipeline.run_minute(TS + dt.timedelta(minutes=2))
     assert map_state.spots[-1] == t6.spots[-1] == pipeline.spot
+
+
+def _tasty_rows(pipeline: InstrumentPipeline, repository: OIEodRepository, day: dt.date) -> None:
+    """Řádky dne jen z tasty Summary (#828): `tasty_captured_ts`, bez IBKR `captured_ts`."""
+    repository.upsert_many(
+        [
+            OIRecord(pipeline.symbol, c.expiry, c.strike, c.right, day, 321.0)
+            for c in pipeline.runtime.contracts
+        ],
+        tasty_captured_ts=dt.datetime.combine(day, dt.time(0, 0, 10), tzinfo=dt.UTC),
+    )
+
+
+async def test_den_jen_s_tasty_radky_cte_ibkr_od_pulnoci_a_zapise_forward(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1609: tasty zapíše řádky nového UTC dne ve 00:00:10 dřív než cyklus. O
+    přeskočení čtení rozhoduje jen IBKR snímek (`captured_ts`), takže čtení od
+    00:00 proběhne i před publikací a Forward GEX dne vznikne (dřív `days: []`
+    až do obnovy po publikaci)."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    day = dt.date(2026, 7, 16)  # den před expirací řetězu 20260717
+    _tasty_rows(pipeline, repository, day)
+    assert day in repository.days("ES") and repository.captured_at("ES", day) is None
+
+    specs = pipeline.runtime.contracts
+    pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
+    forward: list[dt.date] = []
+
+    async def record_forward(today: dt.date) -> None:
+        forward.append(today)  # pole samo testuje compute/gexforward (mock nemá IV)
+
+    monkeypatch.setattr(pipeline, "_write_forward_field", record_forward)
+    midnight = dt.datetime(2026, 7, 16, 0, 1, tzinfo=dt.UTC)  # otevřený trh, před publikací
+    assert pipeline._oi_refresh_due(midnight) is False
+    assert await archive_pass(pipeline, day, midnight) is True
+    assert repository.captured_at("ES", day) is not None  # IBKR řádky dne
+    assert repository.get_oi("ES", day, specs[0].strike, specs[0].right) == 500.0
+    assert forward == [day]  # Forward GEX dne po čtení od 00:00, ne až po publikaci
+
+    # S IBKR snímkem dne se před publikací znovu nečte (beze změny)
+    await pipeline.start_oi_archive(day, midnight + dt.timedelta(minutes=30))
+    assert pipeline._oi_pass is None
+
+
+async def test_den_jen_s_tasty_radky_selhani_po_okne_hlasi_obnovu_ne_chybejici_oi(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1609: den s tasty řádky má OI (tasty Summary), takže selhání IBKR po
+    publikaci je neúspěšná obnova („starší snímek“), ne „GEX/OI vrstvy bez OI“."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    day = dt.date(2026, 7, 16)
+    _tasty_rows(pipeline, repository, day)
+
+    class ExplodingFetcher(MockOIFetcher):
+        async def fetch_snapshot(
+            self, spec: OptionContractSpec, timeout_s: float
+        ) -> ContractSnapshot | OIMiss:
+            raise RuntimeError("mock: výpadek IBKR")
+
+    pipeline.archiver = OIArchiver(repository, ExplodingFetcher(), settings)
+    po_okne = settings.oi_publication_utc(day) + dt.timedelta(minutes=5)
+    assert await archive_pass(pipeline, day, po_okne) is True
+    kinds = [d["kind"] for ch, d in publisher.messages if ch == "alerts"]
+    assert kinds == ["oi_refresh_failed"]
+
+
+async def test_novy_utc_den_v_sobotu_s_tasty_radky_otevre_pruchod(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1609 na produkčním případu: víkendové UTC dny mají dnes jen tasty řádky
+    (ne 25. 10. 2026 tasty 00:00:10, cyklus pozdě). Nový UTC den v sobotu 00:00
+    (zavřený trh, `new_day`) otevře průchod z minutového cyklu i tak."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    saturday = dt.datetime(2026, 7, 18, 0, 0, tzinfo=dt.UTC)
+    assert is_market_closed(saturday)
+    _tasty_rows(pipeline, repository, saturday.date())
+    pipeline._oi_day = saturday.date() - dt.timedelta(days=1)  # běžel páteční UTC den
+
+    await pipeline.run_minute(saturday)
+    assert pipeline._oi_pass is not None
+    assert pipeline._oi_pass.day == saturday.date()
+    assert pipeline._oi_pass.has_snapshot is True  # alerty berou tasty řádky jako OI dne
+
+
+async def test_den_jen_s_tasty_radky_bez_zapisu_ibkr_obnovi_ulozenou_alfu(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1609 (ověřovatel): dřív zkratka na dni jen s tasty řádky propsala uloženou
+    α (`_run_fa_jobs` → `_restore_alpha`). Průchod, který z IBKR nic nezapíše
+    (sobota přes den), joby po archivu nespustí — α se musí propsat i tak."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    alpha_repo = FaAlphaRepository(
+        create_engine(f"sqlite+pysqlite:///{settings.data_dir.parent / 'alpha1609.sqlite'}")
+    )
+    alpha_repo.ensure_schema()
+    alpha_repo.set_state("ES", 0.27, 12)
+    pipeline.alpha_repository = alpha_repo
+    day = dt.date(2026, 7, 16)
+    _tasty_rows(pipeline, repository, day)
+
+    # Výchozí MockOIFetcher nevrací nic → 0 zapsáno
+    assert await archive_pass(pipeline, day, dt.datetime(2026, 7, 16, 0, 1, tzinfo=dt.UTC))
+    assert pipeline.runtime.flow_alpha == pytest.approx(0.27)
