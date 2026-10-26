@@ -352,7 +352,7 @@ function MainContent() {
   )
   // FA zdroj OI (#232): opt-in přepínač per symbol. Minuta bez FA řad je
   // mezera, ne tichý přechod na měřené (ADR-0057 bod 4, #1632) — i den bez
-  // FA (vypnutá do kalibrace z tisků). Bez FA matice (Daily) jede měřené.
+  // FA (vypnutá do kalibrace ρ, ADR-0061). Bez FA matice (Daily) jede měřené.
   const faActive = oiSource === 'fa' && rawDay.rawFa !== null
   // FA mezery 1m osy (minuta se snímkem bez FA řad) — podklad, pole a GEX
   // křivka profilu přes ně poslední FA profil nedrží

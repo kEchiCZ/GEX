@@ -124,7 +124,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Řádek přepínačů</strong></td>
-<td>Dropdown <strong>Dyn plocha</strong> (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; <strong>výchozí je Dyn GEX</strong> (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Dropdown <strong>Vrstvy (n)</strong> (v1.16, #1084) — multi-výběr vrstev v grafu: <strong>GEX Levels</strong> (flip/centroid/Max Pain + <strong>OI zdi</strong>, viz kap. 5), <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), <strong>Zdi</strong> (call/put wall linie), <strong>2. zeď</strong> (druhá nejsilnější koncentrace strany, tečkovaně), <strong>FA levels</strong> (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI). Dropdown <strong>Panely (n)</strong> (v1.16, #1084) — multi-výběr spodních panelů v pořadí, jak se kreslí shora dolů: <strong>Vol / Opt Vol / Δ Flow C/P / Evo OI / Cum Δ / Sentiment</strong>; panel Sentiment má vlastní položku, nezávislou na checkboxu News. Závorka u obou dropdownů ukazuje počet zapnutých („žádný“ = nic). Checkboxy přímo v liště: <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong> (markery zpráv) s dropdownem <strong>Významné/Vše</strong> (výchozí Významné — stejná definice jako upozornění na zprávy, kap. 14), dropdown <strong>Signály</strong> (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá.</td>
+<td>Dropdown <strong>Dyn plocha</strong> (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; <strong>výchozí je Dyn GEX</strong> (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Dropdown <strong>Vrstvy (n)</strong> (v1.16, #1084) — multi-výběr vrstev v grafu: <strong>GEX Levels</strong> (flip/centroid/Max Pain + <strong>OI zdi</strong>, viz kap. 5), <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), <strong>Zdi</strong> (call/put wall linie), <strong>2. zeď</strong> (druhá nejsilnější koncentrace strany, tečkovaně), <strong>FA levels</strong> (flow-adjusted flip/walls z odhadu OI: od v6 ranní OI + ρ·objem strany, do v6 + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI). Dropdown <strong>Panely (n)</strong> (v1.16, #1084) — multi-výběr spodních panelů v pořadí, jak se kreslí shora dolů: <strong>Vol / Opt Vol / Δ Flow C/P / Evo OI / Cum Δ / Sentiment</strong>; panel Sentiment má vlastní položku, nezávislou na checkboxu News. Závorka u obou dropdownů ukazuje počet zapnutých („žádný“ = nic). Checkboxy přímo v liště: <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong> (markery zpráv) s dropdownem <strong>Významné/Vše</strong> (výchozí Významné — stejná definice jako upozornění na zprávy, kap. 14), dropdown <strong>Signály</strong> (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá.</td>
 </tr>
 <tr>
 <td><strong>Chipy stavu trhu</strong></td>
@@ -1705,7 +1705,7 @@ běží CumΔ dál z tisků tastytrade a tyto setupy stojí jen při mezeře tis
 </tr>
 <tr>
 <td><strong>FA validace</strong></td>
-<td>Kalibrační bod FA vrstvy: po finálním OI archivu dne (dvě shodná čtení po publikaci CME) engine porovná klasifikovaný volume posledního obchodního dne s ΔOI na stranách změřených po publikaci v obou dnech (dnešní strana jen z IBKR měření po dnešní publikaci, předchozí z IBKR nebo z tasty řádku obnoveného po publikaci toho dne; open-ratio ≈ α, korelace), a bod uloží pro kalibraci — čistě informační. Strany bez takového měření se nepočítají (#1314, #1605). Jen v obchodní den; v pondělí páteční volume proti ΔOI pátek → pondělí (#1309)</td>
+<td>Kalibrační bod FA vrstvy: po finálním OI archivu dne (dvě shodná čtení po publikaci CME) engine porovná klasifikovaný volume posledního obchodního dne s ΔOI na stranách změřených po publikaci v obou dnech (dnešní strana jen z IBKR měření po dnešní publikaci, předchozí z IBKR nebo z tasty řádku obnoveného po publikaci toho dne; open-ratio ≈ α, od v6 ≈ ρ, korelace), a bod uloží pro kalibraci — čistě informační. Strany bez takového měření se nepočítají (#1314, #1605). Jen v obchodní den; v pondělí páteční volume proti ΔOI pátek → pondělí (#1309)</td>
 <td>Diagnostika modelu (vyp.)</td>
 </tr>
 <tr>
@@ -2116,8 +2116,9 @@ kalibračních dnů, v tooltipu jeho význam.<ul>
 <li>Do mechaniky v6 <strong>„FA α=0.34 · 12 dní“</strong>: α čistého toku z midpoint testu; do první
 kalibrace jede engine na defaultu 0,4 a badge se nekreslí.</li>
 <li>Od v6 (#1403, ADR-0061) <strong>„FA ρ=0.27 · 16 dní“</strong>: ρ = podíl objemu strany za seanci,
-který se ráno propíše do OI. Engine ho každé ráno kalibruje z řetězu zítřejší expirace
-proti skutečnému ΔOI (medián přes strany, EMA přes dny). Den s mezerou snímků řetězu
+který se ráno propíše do OI. Engine ho každé ráno kalibruje z řetězu další expirace
+proti skutečnému ΔOI (medián přes strany, EMA přes dny); pro aktivní 0DTE řetěz, který
+se nekalibruje, je to proxy. Den s mezerou snímků řetězu
 za otevřeného trhu bod nedá. Díky zpětné kalibraci FA jede od bumpu hned.</li>
 <li>Bez 5 platných dnů ρ je FA vypnutý a badge ukáže <strong>„FA nekalibrováno n/5“</strong>. α z čistého
 toku je jiná veličina a počítá se jako 0 dnů, bez stavu „0/5“ (ne default α);

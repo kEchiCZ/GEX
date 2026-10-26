@@ -1,4 +1,4 @@
-/** Badge kalibrované FA α ve stavové liště (#232 fáze 2, ADR-0057 bod 6, #1632). */
+/** Badge kalibrované FA α / ρ ve stavové liště (#232 fáze 2, ADR-0057 bod 6, #1632, ADR-0061 #1666). */
 import { act, render, screen } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'

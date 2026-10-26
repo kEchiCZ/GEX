@@ -83,6 +83,10 @@ describe('obsah legendy', () => {
     expect(optVol.how).toMatch(/První minuta po mezeře v objemu .* je 0/)
     const fa = allItems.find((item) => item.name === 'Zdroj OI: FA odhad')!
     expect(fa.how).toMatch(/nekalibrováno n\/5/)
+    // #1666: model pod v6 a jeho limity (ADR-0061)
+    expect(fa.what).toMatch(/ρ·objem strany/)
+    expect(fa.how).toMatch(/jen přibývá/)
+    expect(fa.how).toMatch(/proxy/)
   })
 
   test('barvy ukázek jsou sdílené s grafem, ne opsané', () => {

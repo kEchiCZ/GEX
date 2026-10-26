@@ -30,7 +30,7 @@ export interface FaAlphaPayload {
   minDays: number | null
 }
 
-/** Co ukáže badge: kalibrovaná α, nebo FA vypnutá do kalibrace z tisků. */
+/** Co ukáže badge: kalibrovaná α / ρ, nebo FA vypnutá do kalibrace ρ (v6). */
 export type FaAlphaBadge =
   | { kind: 'calibrated'; alpha: number; days: number; source: FaAlphaSource }
   | { kind: 'uncalibrated'; days: number; minDays: number }
