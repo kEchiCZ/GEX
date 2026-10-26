@@ -5,8 +5,8 @@ jednoho instrumentu. Trasy (streamer symbol → spec) staví smyčka plánu
 subskripcí z kontraktů obou runtime; tisk jde do trackeru toho řetězu.
 
 Trade větev řetězu „běží" = připojený stream ∧ trasy doručují tisky do jeho
-trackeru ∧ univerzum nemlčí déle než práh hlídače ticha (`SILENT_RTH_S` /
-`SILENT_GLOBEX_S`, bez nové konstanty). Pod tisky trasy nesou tracker svého
+trackeru ∧ univerzum nemlčí déle než práh hlídače ticha (predikát
+`watchdog.universe_silence`, týž jako hlídač univerza #1604). Pod tisky trasy nesou tracker svého
 řetězu (#1460, varianta C): roll v settle předá tracker sekundáru D+1 novému
 aktivnímu runtime, takže mu sekundární část tras patří i před obnovou plánu
 a tisky D+1 tečou bez přerušení i mezi zastavením staré a založením nové
@@ -28,10 +28,9 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
-from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
-from gexlens_engine.compute.settle import session_bounds, trading_session_date
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.ibkr.discovery import OptionContractSpec
-from gexlens_engine.tasty.watchdog import SILENT_GLOBEX_S, SILENT_RTH_S
+from gexlens_engine.tasty.watchdog import universe_silence
 
 #: Stav trade větve aktivního řetězu v `/status` (ADR-0057 bod 10, jen API):
 #: běží · mezera (otevřený trh, větev neběží) · trh zavřený · bez tasty větve.
@@ -195,10 +194,9 @@ def trade_branch_running(
     """
     if not (connected and owned):
         return False
-    session_open = session_bounds(trading_session_date(now))[0]
-    reference = session_open if last_event_at is None else max(last_event_at, session_open)
-    limit = SILENT_GLOBEX_S if outside_us_rth(now) else SILENT_RTH_S
-    return (now - reference).total_seconds() < limit
+    # Týž predikát jako hlídač univerza (#1604) — jediný zdroj prahů i začátku ticha
+    silence, limit = universe_silence(now, last_event_at)
+    return silence < limit
 
 
 class TradeBranchMonitor:
