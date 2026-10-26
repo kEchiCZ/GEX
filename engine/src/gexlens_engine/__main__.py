@@ -2827,7 +2827,7 @@ async def main() -> None:
                 pipe = pipelines.get(symbol)
                 if pipe is None or not pipe.runtime.contracts:
                     continue  # bez běžící pipeline není podle čeho poznat obálku
-                written += await wide_oi_pass(
+                count = await wide_oi_pass(
                     oi_repository,
                     chain,
                     symbol=symbol,
@@ -2836,6 +2836,9 @@ async def main() -> None:
                     oi_lookup=summary_oi,
                     now=now,
                 )
+                written += count
+                # Forward GEX po obnově křídel po finalitě (#1607); dřív až s rollem
+                await pipe.refresh_forward_after_tasty(count, now)
             return written
 
         async def extended_snapshot_loop() -> None:
