@@ -15,6 +15,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
@@ -139,6 +141,10 @@ def session_ranges(
     ≥ `since` (#1296: upozornění před releasem čte jen posledních ~45 dní);
     seance začíná večer předchozího UTC dne, proto se čte i partice `since − 1`
     a neúplná seance před `since` se zahodí.
+
+    Minuty partice se seancím přiřazují vektorově přes `session_bounds` a
+    `settle_ts` (#1701): smyčka v Pythonu přes ~800 tis. barů historie držela
+    GIL ~17 s CPU na symbol a sběrač na pozadí by brzdil sweep i dávky OI.
     """
     bars_dir = data_dir / "derived" / symbol / "bars"
     if not bars_dir.exists():
@@ -146,7 +152,6 @@ def session_ranges(
     first_partition = since - dt.timedelta(days=1) if since is not None else None
     highs: dict[dt.date, float] = {}
     lows: dict[dt.date, float] = {}
-    settles: dict[dt.date, dt.datetime] = {}
     for path in sorted(bars_dir.glob("*.parquet")):
         if first_partition is not None:
             try:
@@ -159,16 +164,24 @@ def session_ranges(
         except Exception:
             logger.exception("Bars partice %s nečitelná — přeskočena", path)
             continue
-        for record in table.to_pylist():
-            ts = record["ts_min"]
-            if ts is None:
-                continue
-            session = trading_session_date(ts)
-            boundary = settles.setdefault(session, settle_ts(session))
-            if ts > boundary:
-                continue
-            highs[session] = max(highs.get(session, float(record["high"])), float(record["high"]))
-            lows[session] = min(lows.get(session, float(record["low"])), float(record["low"]))
+        ts = table.column("ts_min")
+        bounds = pc.min_max(ts).as_py()
+        if bounds["min"] is None:
+            continue
+        # Partice jednoho UTC dne nese minuty nejvýš dvou seancí (ADR-0023)
+        session = trading_session_date(bounds["min"])
+        last = trading_session_date(bounds["max"])
+        while session <= last:
+            # Minuta patří seanci v [open, open příští) a počítá se jen do settle
+            opened = pa.scalar(session_bounds(session)[0], type=ts.type)
+            boundary = pa.scalar(settle_ts(session), type=ts.type)
+            mask = pc.and_(pc.greater_equal(ts, opened), pc.less_equal(ts, boundary))
+            high = pc.max(pc.filter(table.column("high"), mask)).as_py()
+            low = pc.min(pc.filter(table.column("low"), mask)).as_py()
+            if high is not None and low is not None:
+                highs[session] = max(highs.get(session, float(high)), float(high))
+                lows[session] = min(lows.get(session, float(low)), float(low))
+            session += dt.timedelta(days=1)
     return [(day, highs[day] - lows[day]) for day in sorted(highs) if since is None or day >= since]
 
 

@@ -16,6 +16,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-26 — sběrače „jednou po settle“ v minutovém cyklu: potřetí stejný vzorec (#1701, po #1337 a #1646).**
+  Gamma útes (`_fill_next_metrics`) a volatilitní režim čtou partice barů celé historie
+  (`session_ranges`, 703 souborů). Běžely přes `await asyncio.to_thread` v cyklu instrumentu, takže
+  ES i NQ každý všední den od nejméně 14. 10. ztrácely minuty 20:06–20:07 UTC (~68 s na symbol). Na
+  díru se přišlo až při kontrole „minuty v levels“ u rollu (#1674), protože žádný alert minutu po
+  settle nehlídá. Samotný přesun na pozadí by nestačil: smyčka v Pythonu přes ~800 tis. barů držela
+  GIL ~17 s CPU na symbol a ve vlákně by brzdila sweep i dávky OI jako #1695. → Práci, která cyklus
+  zdržuje, nejdřív změřit (wall i `process_time`). CPU-bound smyčku převést na vektorové operace
+  pyarrow a teprve pak ji pustit z cyklu (`_settle_jobs_task`, vzor `_oi_jobs_task`). Výsledek
+  ověřit shodou se starou funkcí na produkčních datech. Díry v minutových řadách hledat i v pevném
+  denním čase, nejen v rytmu jobu.
 - **2026-10-26 — čtení OI od 00:00 UTC se přeskakovalo, protože „den má řádky“ počítalo i tasty (#1609).**
   Zkratka „platný snímek dne“ se ptala `days()`, které původ nerozlišuje. Tasty (#828) zapíše řádky dne v první
   minutě UTC dne, takže IBKR čtení od půlnoci proběhlo z 28 dnů jen u ES 13× a u NQ 5×. Sekundár
