@@ -65,19 +65,17 @@ if (-not $dbUrl) {
     Write-Step 'DB URL složena z GEXLENS_PG_PASSWORD (port 55432)'
 }
 
-$dir = Join-Path $repo 'data/reports'
-New-Item -ItemType Directory -Force $dir | Out-Null
-$out = Join-Path $dir "walkforward-$(Get-Date -Format 'yyyy-MM-dd').md"
+# Do data/reports zapisuje jen Python — report, složku i retenci (#1638): repo chrání
+# Defender „Řízený přístup ke složkám" a pwsh tam má povolení jen pro konkrétní
+# verzi ze Store (po aktualizaci „Could not find file"), Python z .venv zápis má.
+$out = Join-Path $repo "data/reports/walkforward-$(Get-Date -Format 'yyyy-MM-dd').md"
 
 Write-Step "Walk-forward $Symbols (IS $InSample / OOS $OutSample, $Metric) -> $out"
 uv run python scripts/walkforward_setups.py --db $dbUrl --symbols $Symbols --in-sample $InSample `
-    --out-sample $OutSample --metric $Metric --out $out
+    --out-sample $OutSample --metric $Metric --out $out --keep-days $KeepDays
 if ($LASTEXITCODE -ne 0) { throw "walkforward_setups.py skončil s kódem $LASTEXITCODE" }
 
 # Verdikt do konzole (řádky souhrnné tabulky), ať je vidět bez otevírání souboru
 Get-Content $out | Select-String -Pattern '^\| (ES|NQ|portfolio)' | ForEach-Object { $_.Line }
 
-Get-ChildItem $dir -Filter 'walkforward-*.md' |
-    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$KeepDays) } |
-    Remove-Item -Force
 Write-Step 'Hotovo.'

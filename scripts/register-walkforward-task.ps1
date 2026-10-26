@@ -4,7 +4,8 @@
 # zmeškaný start se dožene při nejbližší příležitosti (StartWhenAvailable).
 # Skript sám ověří, že běží aplikace (PG kontejner) a že je trh zavřený (#1568),
 # jinak tiše skončí.
-# Výstup se připisuje do data/reports/walkforward-nightly.log.
+# Výstup se připisuje do %LOCALAPPDATA%\GEXLens\logs\walkforward-nightly.log (mimo repo,
+# #1638); do data/reports zapisuje jen Python (report a retence).
 # Spustit jednou pod účtem, který má docker i uv: pwsh scripts/register-walkforward-task.ps1
 # Odregistrace: Unregister-ScheduledTask -TaskName 'GEXLens walk-forward' -Confirm:$false
 [CmdletBinding()]
@@ -14,11 +15,13 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\LocalTrigger.ps1')
+. (Join-Path $PSScriptRoot 'lib\DockerHost.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 $script = Join-Path $repo 'scripts\walkforward-nightly.ps1'
-$log = Join-Path $repo 'data\reports\walkforward-nightly.log'
 if (-not (Test-Path $script)) { throw "Nenalezen $script" }
-New-Item -ItemType Directory -Force (Split-Path -Parent $log) | Out-Null
+# Log mimo repo: D:\Documents chrání Řízený přístup ke složkám a pwsh má povolení jen
+# pro konkrétní verzi ze Store (lessons-learned 2026-09-10, #1638)
+$log = Join-Path (Get-OpsLogDir) 'walkforward-nightly.log'
 
 # Stabilní alias pwsh (App Execution Alias), ne cesta do WindowsApps s číslem
 # verze: po aktualizaci Store balíčku (7.6.5 → 7.6.6, 9. 9. 2026) stará cesta

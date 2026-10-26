@@ -27,7 +27,7 @@ Použití (z hostitele je compose PG na portu 55432, ne na URL z .env — viz
         [--symbols ES,NQ] [--grid configs/walkforward_grid.json]
         [--in-sample 20] [--out-sample 5] [--metric sharpe|sum_r]
         [--mechanics 5|6] [--from 2026-09-21]
-        [--out data/reports/walkforward-2026-09-09.md] [--json]
+        [--out data/reports/walkforward-2026-09-09.md [--keep-days 90]] [--json]
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ import glob
 import json
 import os
 import sys
+import time
 from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
@@ -176,6 +177,23 @@ def proposal_payload(
     }
 
 
+def prune_reports(directory: Path, keep_days: int, now: float) -> list[Path]:
+    """Smaže reporty `walkforward-*.md` ve `directory` starší než `keep_days` dní (mtime).
+
+    Retence žije tady, ne v `walkforward-nightly.ps1` (#1638): repo leží v `D:\\Documents`
+    pod Řízeným přístupem ke složkám Defenderu, který pwsh povoluje po verzích (každá
+    aktualizace ze Store má novou cestu) — Python z `.venv` zápis má. Adresář reportů
+    je mimo retention job enginu. Selhání mazání je výjimka, ne tichý konec.
+    """
+    cutoff = now - keep_days * 86_400
+    removed = []
+    for path in sorted(directory.glob("walkforward-*.md")):
+        if path.stat().st_mtime < cutoff:
+            path.unlink()
+            removed.append(path)
+    return removed
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -188,6 +206,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-sample", type=int, default=WalkForwardParams.out_sample_days)
     parser.add_argument("--metric", choices=("sharpe", "sum_r"), default=WalkForwardParams.metric)
     parser.add_argument("--out", help="soubor pro markdown report (default stdout)")
+    parser.add_argument(
+        "--keep-days",
+        type=int,
+        help="po zápisu smazat reporty walkforward-*.md ve složce --out starší než N dní",
+    )
     parser.add_argument("--json", action="store_true", help="místo markdownu JSON (folds, řady)")
     parser.add_argument(
         "--mechanics",
@@ -203,6 +226,10 @@ def main(argv: list[str] | None = None) -> int:
         help=f"první seance (pod v6 výchozí a nejdřív {bt.SHADOW_FROM.isoformat()})",
     )
     args = parser.parse_args(argv)
+    if args.keep_days is not None and not args.out:
+        parser.error("--keep-days jen s --out (retence složky reportů)")
+    if args.keep_days is not None and args.keep_days < 1:
+        parser.error("--keep-days aspoň 1 (0 by smazalo i právě zapsaný report)")
     if not args.db:
         parser.error("--db nebo GEXLENS_DATABASE_URL (Max Pain z OI archivu + baseline ze store)")
     prints = args.mechanics >= 6
@@ -308,9 +335,13 @@ def main(argv: list[str] | None = None) -> int:
             text += "Žádný kandidát nesplnil zábrany ADR-0034 — parametry se nemění.\n"
 
     if args.out:
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out).write_text(text, encoding="utf-8")
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
         print(f"zapsáno: {args.out}")
+        if args.keep_days is not None:
+            removed = prune_reports(out.parent, args.keep_days, time.time())
+            print(f"retence {args.keep_days} dní: smazáno {len(removed)} starších reportů")
     else:
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         sys.stdout.write(text)

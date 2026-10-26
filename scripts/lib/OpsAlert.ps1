@@ -1,7 +1,7 @@
 # Provozní upozornění MIMO Docker (#1279, #1284) — pro skripty, které Docker zastavují
 # (kompaktace VHDX, rollback deploye): když stack po nich nenaběhne, zvonek
 # aplikace ani push z API nejdou poslat, protože API běží v Dockeru. Kanály:
-#   1) výstup skriptu (Write-Warning) → log úlohy v data/logs/ — vždy;
+#   1) výstup skriptu (Write-Warning) → log úlohy v %LOCALAPPDATA%\GEXLens\logs\ (#1638) — vždy;
 #   2) Telegram, když ho povoluje Nastavení → Notifikace a jsou v prostředí nebo
 #      v .env repa GEXLENS_PUSH_TELEGRAM_TOKEN a GEXLENS_PUSH_TELEGRAM_CHAT_ID
 #      (tytéž klíče jako push z API).

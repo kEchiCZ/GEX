@@ -121,7 +121,7 @@ if ($vhdx) {
         if ($compactTask -and -not $WhatIf) {
             try {
                 Start-ScheduledTask -TaskName 'GEXLens compact-vhdx'
-                Write-Step "VHDX $vhdxGB GB nad prahem $MaxVhdxGB GB — spuštěna úloha „GEXLens compact-vhdx“ (běží jen při zavřeném trhu; log data/logs/compact-vhdx.log)."
+                Write-Step "VHDX $vhdxGB GB nad prahem $MaxVhdxGB GB — spuštěna úloha „GEXLens compact-vhdx“ (běží jen při zavřeném trhu; log %LOCALAPPDATA%\GEXLens\logs\compact-vhdx.log)."
             } catch { $problems += "VHDX Dockeru má $vhdxGB GB (práh $MaxVhdxGB GB) a úlohu compact-vhdx se nepodařilo spustit: $_" }
         } elseif ($compactTask) {
             Write-Step "WhatIf: VHDX $vhdxGB GB nad prahem — spustila by se úloha „GEXLens compact-vhdx“."

@@ -114,6 +114,16 @@ chyb**, hlavně diagnostických a provozních.
   mimo skript: Windows Defender „Řízený přístup ke složkám" blokoval `pwsh.exe` (event 1123).
   Poznávací znak: `Out-File`/`New-Item` selže i pro existující adresář, zatímco bash/docker/git zapisují.
   → Bezpečnostní nastavení mění jen uživatel; do té doby deploy ručně přes bash.
+  **Opakovalo se 19.–24. 10. 2026 (#1638):** povolení v Řízeném přístupu ke složkám platí pro přesnou
+  cestu a pwsh ze Store ji má s číslem verze (`…\Microsoft.PowerShell_7.6.7.0_x64__…\pwsh.exe`), takže
+  každá aktualizace pwsh povolení tiše zruší. Seznam povolených měl 7.6.4–7.6.7, každou zvlášť.
+  Store novou verzi nejdřív připraví a aktivuje ji později (7.6.7 stažena 14. 10., první blok 19. 10.;
+  7.6.9 připravena 25. 10. a čeká), takže blok nepřijde v den aktualizace. Walk-forward, kompaktace
+  VHDX i docker úklid končily kódem 1, protože přesměrování `*>>` do `data\` selhalo dřív,
+  než skript začal. → Úlohy Task Scheduleru logují do `%LOCALAPPDATA%\GEXLens\logs` (`Get-OpsLogDir`)
+  a do repa zapisuje jen Python; hlídá to `engine/tests/test_ops_task_registration.py` (potřetí
+  stejný vzorec → kontrola). Při podezření nejdřív zjistit událost 1123 (blok) a 5007 (změna
+  povolení) v `Microsoft-Windows-Windows Defender/Operational`.
 - **2026-09-10 — engine OOM o půlnoci v DiskWatch (#1105).** `rglob("*")` přes celý datový strom
   v okamžiku, kdy news-engine po nočních jobech narostl a VM neměla rezervu.
   → Nikdy nematerializovat celý strom partic každý tick; po nočních jobech uvolnit paměť; při
