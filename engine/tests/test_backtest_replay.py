@@ -297,10 +297,13 @@ def test_walkforward_retence_maze_jen_starsi_reporty_walkforwardu(
 
 
 def test_walkforward_keep_days_bez_out_odmitne(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Retence bez --out by neměla složku — chyba, ne tiché ignorování."""
+    """Retence bez --out by neměla složku a 0 by smazala i nový report — chyba,
+    ne tiché ignorování."""
     module = _walkforward(monkeypatch)
     with pytest.raises(SystemExit):
         module.main(["--db", "sqlite://", "--keep-days", "90"])
+    with pytest.raises(SystemExit):
+        module.main(["--db", "sqlite://", "--out", "x.md", "--keep-days", "0"])
 
 
 # ── Okno aktivního řetězu (#1464) ───────────────────────────────────────────

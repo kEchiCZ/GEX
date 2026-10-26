@@ -228,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.keep_days is not None and not args.out:
         parser.error("--keep-days jen s --out (retence složky reportů)")
+    if args.keep_days is not None and args.keep_days < 1:
+        parser.error("--keep-days aspoň 1 (0 by smazalo i právě zapsaný report)")
     if not args.db:
         parser.error("--db nebo GEXLENS_DATABASE_URL (Max Pain z OI archivu + baseline ze store)")
     prints = args.mechanics >= 6

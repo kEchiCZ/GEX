@@ -1313,7 +1313,7 @@ mají absolutní cesty ke složce repa, k `pwsh.exe` a k logům. Skripty navíc 
 tohoto PC (krok 2 postupu). Proto se úlohy musí **znovu zaregistrovat**, když se aplikace přenese na jiný PC,
 když se přesune složka repa nebo po reinstalaci Windows. Na Linux serveru (#1094) se nahrazují jinak
 (poslední sloupec tabulky). Stav k 15. 10. 2026 (`Get-ScheduledTask -TaskName 'GEXLens*'`), backup-postgres od #1566 (23. 10.),
-logy compact-vhdx, docker úklid a walk-forward mimo repo od #1638 (26. 10.; starší historie zůstává
+logy compact-vhdx, docker úklid a walk-forward mimo repo od jejich přeregistrace po #1638 (starší historie zůstává
 v `data\logs\` a `data\reports\walkforward-nightly.log`):
 
 | Úloha | K čemu | Rozvrh (místní čas) | Registrace | Log | Linux server (#1094) |
@@ -1360,14 +1360,17 @@ Dumpy leží na D:, stejně jako VHDX — selhání disku D: přežije jen kopie
    Plocha), proces mimo povolené aplikace do repa nezapíše (`Could not find file`, událost 1123). Povolení
    platí pro přesnou cestu a pwsh ze Store má cestu s číslem verze
    (`C:\Program Files\WindowsApps\Microsoft.PowerShell_<verze>_x64__…\pwsh.exe`), takže každá aktualizace
-   pwsh povolení zruší (19.–24. 10. 2026 tak neběžel walk-forward ani kompaktace, #1638). Proto pwsh do repa
+   pwsh povolení zruší (19.–24. 10. 2026 tak neběžel walk-forward, kompaktace ani docker úklid, #1638).
+   Store novou verzi nejdřív připraví a aktivuje ji až později (7.6.7 stažena 14. 10., blok od 19. 10.).
+   Proto pwsh do repa
    nezapisuje: **všechny úlohy logují do `%LOCALAPPDATA%\GEXLens\logs`** (`Get-OpsLogDir`) a do `data\reports\`
    zapisuje jen Python walk-forwardu (report i retence `--keep-days`). Mezi povolenými aplikacemi musí být
    `uv.exe` a skutečný `python.exe` interpretu, ze kterého je `.venv` (u uv
    `%APPDATA%\uv\python\cpython-3.12.<patch>-windows-x86_64-none\python.exe`; po nové patch verzi Pythonu
-   přidat i ji). Nový pwsh povolovat netřeba. Ruční skripty, které pwsh do repa píšou (`deploy-engine-offhours.ps1`
-   do `data\logs\`, `build-manual.ps1` do `docs\manual\`), povolení dál potřebují, nebo je spusť přes bash
-   či Windows PowerShell 5.1.
+   přidat i ji). Nový pwsh povolovat netřeba. Ruční skripty, které pwsh do repa píšou (např.
+   `deploy-engine-offhours.ps1` do `data\logs\`, `build-manual.ps1` do `docs\manual\` (#1683),
+   `init-secrets.ps1` do `.env`, `start-dev.ps1` do `data-dev\`), povolení dál potřebují, nebo je spusť
+   přes bash či Windows PowerShell 5.1. Kontrola registrací: `engine/tests/test_ops_task_registration.py`.
 7. Bez správce zaregistruj docker-watchdog, docker úklid, walk-forward a backup-postgres. V terminálu **jako správce**
    (Win+X → Terminál (správce)) update-offhours a compact-vhdx.
 8. Úlohy běží pod účtem, který je zaregistroval, a jen když je ten účet přihlášený
