@@ -12,7 +12,13 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from gexlens_engine.compute.settle import ET_TZ, session_time_utc, settle_ts
+from gexlens_engine.compute.settle import (
+    ET_TZ,
+    is_trading_session,
+    session_time_utc,
+    settle_ts,
+    us_open_ts,
+)
 from gexlens_engine.compute.setups import gex_regime, max_pain_strike
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository
@@ -198,9 +204,21 @@ class T6Collector:
     def __post_init__(self) -> None:
         self._evaluated_for: dt.date | None = None
 
-    async def on_minute(self, now: dt.datetime, spot: float, runtime: EngineRuntime) -> None:
+    async def on_minute(self, now: dt.datetime, spot: float | None, runtime: EngineRuntime) -> None:
+        """Kandidát dne z ceny `spot`; None = živá cena chybí (pod v6, #1657)."""
         today = now.date()
         if self._evaluated_for == today or now < evaluate_after_utc(today):
+            return
+        if not is_trading_session(today):
+            # Bez US seance (víkend, svátek NYSE) není premarket (AGENTS.md „Obchodní
+            # den", #1657): v sobotu by páteční pokles dal kandidáta nad cenou
+            # zavřeného trhu
+            self._evaluated_for = today
+            return
+        if spot is None and now < us_open_ts(today):
+            # Rozhodnuto 26. 10. A (#1657): bez živé ceny další pokus v příští
+            # minutě, nejdéle do US openu — kandidát je premarket vzorec (start
+            # enginu až po openu s živou cenou ho dál vyhodnotí, nález #1686)
             return
         self._evaluated_for = today  # jeden pokus denně i při chybě — žádné bušení
 
@@ -208,6 +226,14 @@ class T6Collector:
         if closes is None or not drop_trigger(
             closes.previous_close, closes.last_close, self.trigger_pct
         ):
+            return
+        if spot is None:
+            logger.warning(
+                "T6 %s %s: trigger splněn, ale bez živé ceny do US openu — "
+                "kandidát dne nevzniká (#1657)",
+                self.symbol,
+                today,
+            )
             return
 
         change_pct = (closes.last_close / closes.previous_close - 1) * 100

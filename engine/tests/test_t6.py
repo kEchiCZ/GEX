@@ -2,11 +2,13 @@
 
 import asyncio
 import datetime as dt
+import logging
 from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from sqlalchemy import create_engine, text
 
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
@@ -249,6 +251,109 @@ def test_collector_v_zime_ceka_na_9_25_et(tmp_path: Path) -> None:
         collector.on_minute(dt.datetime(2026, 1, 15, 14, 26, tzinfo=dt.UTC), 7410.0, runtime)
     )
     assert len(repository.list_for("ES")) == 1
+
+
+def _drop_days(tmp_path: Path, previous: dt.date, last: dt.date) -> None:
+    write_bars_day(tmp_path, "ES", previous, pre_settle([7500.0]))
+    write_bars_day(tmp_path, "ES", last, pre_settle([7400.0]))  # −1,33 % → trigger
+
+
+def test_collector_bez_zive_ceny_zkousi_do_openu(tmp_path: Path) -> None:
+    """#1657 (Rozhodnuto 26. 10. A): pod v6 bez živé ceny (None) se den nespotřebuje
+    a kandidát vznikne v první minutě, kdy se cena vrátí — ještě před US openem."""
+    _drop_days(tmp_path, dt.date(2026, 7, 22), dt.date(2026, 7, 23))
+    collector, repository, publisher = make_collector(tmp_path)
+    runtime = cast(EngineRuntime, FakeRuntime())
+
+    asyncio.run(collector.on_minute(MORNING, None, runtime))  # 9:26 ET
+    asyncio.run(collector.on_minute(MORNING + dt.timedelta(minutes=1), None, runtime))
+    assert repository.list_for("ES") == [] and publisher.messages == []
+
+    asyncio.run(collector.on_minute(MORNING + dt.timedelta(minutes=2), 7412.0, runtime))
+    rows = repository.list_for("ES")
+    assert len(rows) == 1 and rows[0]["spot"] == 7412.0
+    assert publisher.messages[0][1]["kind"] == "t6_candidate"
+
+
+def test_collector_bez_zive_ceny_do_openu_den_bez_kandidata(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1657: od US openu (9:30 ET = 13:30 UTC v létě) bez ceny už nečeká — den
+    bez kandidáta a řádek v logu; cena po openu kandidáta nezaloží."""
+    _drop_days(tmp_path, dt.date(2026, 7, 22), dt.date(2026, 7, 23))
+    collector, repository, publisher = make_collector(tmp_path)
+    runtime = cast(EngineRuntime, FakeRuntime())
+    caplog.set_level(logging.WARNING, logger="gexlens_engine.t6")
+
+    for minute in range(4):  # 13:26–13:29 UTC
+        asyncio.run(collector.on_minute(MORNING + dt.timedelta(minutes=minute), None, runtime))
+    assert not caplog.records
+    asyncio.run(collector.on_minute(dt.datetime(2026, 7, 24, 13, 30, tzinfo=dt.UTC), None, runtime))
+    assert any("kandidát dne nevzniká" in r.getMessage() for r in caplog.records)
+
+    asyncio.run(
+        collector.on_minute(dt.datetime(2026, 7, 24, 13, 31, tzinfo=dt.UTC), 7412.0, runtime)
+    )
+    assert repository.list_for("ES") == [] and publisher.messages == []
+
+
+def test_collector_bez_zive_ceny_v_zime_ceka_do_14_30_utc(tmp_path: Path) -> None:
+    """#1657: US open je burzovní čas — v zimě 9:30 ET = 14:30 UTC. Bez ceny ve
+    14:26–14:28 se ještě čeká (s letním 13:30 UTC by den propadl) a cena ve 14:29
+    kandidáta založí."""
+    write_bars_day(tmp_path, "ES", dt.date(2026, 1, 13), [(dt.time(20, 59), 7500.0)])
+    write_bars_day(tmp_path, "ES", dt.date(2026, 1, 14), [(dt.time(20, 59), 7400.0)])
+    collector, repository, _ = make_collector(tmp_path)
+    runtime = cast(EngineRuntime, FakeRuntime())
+    winter = dt.datetime(2026, 1, 15, 14, 26, tzinfo=dt.UTC)  # 9:26 ET
+    for minute in range(3):  # 14:26–14:28 UTC bez ceny
+        asyncio.run(collector.on_minute(winter + dt.timedelta(minutes=minute), None, runtime))
+    asyncio.run(collector.on_minute(winter + dt.timedelta(minutes=3), 7410.0, runtime))
+    assert len(repository.list_for("ES")) == 1
+
+
+def test_collector_bez_triggeru_a_bez_ceny_mlci(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Bez poklesu kandidát nevzniká ani s cenou — chybějící cena se nehlásí."""
+    write_bars_day(tmp_path, "ES", dt.date(2026, 7, 22), pre_settle([7500.0]))
+    write_bars_day(tmp_path, "ES", dt.date(2026, 7, 23), pre_settle([7480.0]))
+    collector, _, publisher = make_collector(tmp_path)
+    caplog.set_level(logging.WARNING, logger="gexlens_engine.t6")
+    asyncio.run(
+        collector.on_minute(
+            dt.datetime(2026, 7, 24, 13, 30, tzinfo=dt.UTC),
+            None,
+            cast(EngineRuntime, FakeRuntime()),
+        )
+    )
+    assert not caplog.records and publisher.messages == []
+
+
+@pytest.mark.parametrize(
+    ("label", "day", "candidate"),
+    [
+        ("sobota", dt.date(2026, 7, 25), False),
+        ("neděle", dt.date(2026, 7, 26), False),
+        ("pondělí proti pátku", dt.date(2026, 7, 27), True),
+        ("svátek NYSE (Den nezávislosti, pá 3. 7.)", dt.date(2026, 7, 3), False),
+    ],
+)
+def test_collector_jen_v_obchodni_den(
+    tmp_path: Path, label: str, day: dt.date, candidate: bool
+) -> None:
+    """#1657, AGENTS.md „Obchodní den": bez US seance není premarket — v sobotu by
+    páteční pokles dal kandidáta nad cenou zavřeného trhu. V pondělí se srovnává
+    pátek proti čtvrtku (partice víkendu nemají bar před settle)."""
+    if day.month == 7 and day.day >= 25:
+        _drop_days(tmp_path, dt.date(2026, 7, 23), dt.date(2026, 7, 24))
+    else:
+        _drop_days(tmp_path, dt.date(2026, 7, 1), dt.date(2026, 7, 2))
+    collector, repository, publisher = make_collector(tmp_path)
+    at = evaluate_after_utc(day) + dt.timedelta(minutes=1)
+    asyncio.run(collector.on_minute(at, 7412.0, cast(EngineRuntime, FakeRuntime())))
+    assert (len(repository.list_for("ES")) == 1) is candidate, label
+    assert bool(publisher.messages) is candidate, label
 
 
 def test_overnight_move_measured_from_settle_close(tmp_path: Path) -> None:
