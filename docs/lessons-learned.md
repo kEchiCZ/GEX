@@ -457,6 +457,20 @@ chyb**, hlavně diagnostických a provozních.
   periody, než ve které je stav, čekají stranou na její začátek, místo aby je reset smazal.
   Test: pád streamu po vzorku a před uzávěrkou; tisk nové seance před rollem.
 
+- **2026-10-26 — CVD podkladu po restartu začínalo od nuly a roll seance mazal tisky po openu: tentýž vzorec v druhém trackeru (#1603, #1633).**
+  `FuturesCvdTracker.restore_cum` měl od #829 (24. 8.) unit test, ale v `engine/src` žádného
+  volajícího. Restart uprostřed seance proto shodil linku CVD svisle k nule. Restart v pauze
+  (aktualizace Docker Desktop ve 21:10 UTC 21. a 22. 10.) psal nulu do celé pauzy a Daily, který bere
+  poslední stav seance, by kreslil 0 místo úrovně z konce obchodování. `on_event` přičítal tisk rovnou
+  do kumulativu a roll smazal i rozdělanou minutu, takže zahodil tisky od openu do prvního cyklu
+  nové seance, u NQ až do rollu v cyklu ES. Stejnou chybu opravil 18. 10. #1460 v trackeru opcí
+  (záznam výše), u CVD zůstala.
+  → Kumulativ se plní až uzávěrkou minuty a reset na hranici seance maže jen kumulativ. Rozdělaná
+  minuta přejde do nové seance, jen když ji instrument od začátku pauzy uzavřel; jinak nese tok
+  staré seance (front future bez běžící pipeline). Navázání po restartu potřebuje test runtime
+  (nový runtime nad particí → první řádek), unit test metody nestačí. Test: restart v pauze, tisk
+  nové seance před rollem pro instrument, za který roluje jiný runtime.
+
 - **2026-10-18 — přírůstek kumulativu přes mezeru v krmení připsán jedné minutě (#1460).**
   `_last_volume` mazal jen roll seance, takže stav objemu kontraktu přežil cykly bez baru
   (fallback řetězu s `volume=None`, kotace nad `quote_max_age_s`) a návratový bar připsal

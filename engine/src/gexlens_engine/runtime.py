@@ -354,9 +354,18 @@ class EngineRuntime:
             self.settings.derived_dir / self.symbol / "flow" / f"{day.isoformat()}.parquet"
             for day in self._session_partition_days(session_day)
         ]
-        base = await asyncio.to_thread(
-            functools.partial(read_last_futures_cvd, paths, start=start, end=end)
-        )
+        try:
+            base = await asyncio.to_thread(
+                functools.partial(read_last_futures_cvd, paths, start=start, end=end)
+            )
+        except Exception:
+            # Nečitelná partice nesmí shodit cyklus každou minutu: CVD začne od
+            # nuly (stav před #1603), viditelně v logu
+            logger.exception(
+                "CVD podkladu %s: navázání z flow partice selhalo — řada začíná od nuly",
+                self.symbol,
+            )
+            base = None
         if cvd.restore_cum(self.symbol, base or 0.0) and base:
             logger.info(
                 "CVD podkladu %s navázán z flow partice (%.0f) — restart uprostřed seance %s",

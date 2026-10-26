@@ -770,6 +770,26 @@ async def test_restart_v_pauze_navaze_cvd_podkladu_z_partice(tmp_path: Path) -> 
     assert engine_runtime.cum_delta.cum_delta == 0.0  # CumΔ beze změny (nulový základ)
 
 
+async def test_necitelna_partice_cvd_neshodi_cyklus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1603: selhání čtení partice při navázání CVD zaloguje výjimku a cyklus doběhne."""
+    tracker = FuturesCvdTracker()
+    engine_runtime, settings = _cvd_runtime(tmp_path, tracker)
+
+    def broken(*_args: object, **_kwargs: object) -> float | None:
+        raise OSError("poškozená partice")
+
+    monkeypatch.setattr("gexlens_engine.runtime.read_last_futures_cvd", broken)
+    _cvd_buy(tracker, 10.0)
+
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    row = _flow_at(settings, PAUSE)
+    assert (row["futures_cvd_delta"], row["futures_cvd"]) == (10.0, 10.0)
+    assert "navázání z flow partice selhalo" in caplog.text
+
+
 async def test_znovu_zalozena_pipeline_cvd_nenavaze_podruhe(tmp_path: Path) -> None:
     """#1603: nový runtime nad sdíleným trackerem (roll expirace v settle) pokračuje bez skoku."""
     tracker = FuturesCvdTracker()

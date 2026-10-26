@@ -5,6 +5,9 @@ import datetime as dt
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 
 TS = dt.datetime(2026, 8, 24, 14, 30, tzinfo=dt.UTC)
+#: Poslední minuta pauzy 24. 8. (CDT) a open seance 25. 8. (17:00 CT = 22:00 UTC)
+PAUSE_END = dt.datetime(2026, 8, 24, 21, 59, tzinfo=dt.UTC)
+OPEN = dt.datetime(2026, 8, 24, 22, 0, tzinfo=dt.UTC)
 FRONT = "/ESU6:XCME"
 
 
@@ -134,18 +137,37 @@ def test_tisk_po_openu_pred_rollem_patri_nove_seanci() -> None:
     t.roll_session(old_day)
     t.on_event("TimeAndSale", trade(FRONT, 40.0, "BUY"))
     t.on_event("TimeAndSale", trade(nq_front, 30.0, "SELL"))
-    t.close_minute("ES", TS)
-    t.close_minute("NQ", TS)
+    t.close_minute("ES", PAUSE_END)
+    t.close_minute("NQ", PAUSE_END)
 
     # 17:00 CT: tisky přijdou dřív, než první cyklus nové seance zavolá roll
     t.on_event("TimeAndSale", trade(FRONT, 3.0, "BUY"))
     t.on_event("TimeAndSale", trade(nq_front, 2.0, "SELL"))
     assert t.roll_session(new_day) is True  # ES roluje za oba
 
-    es = t.close_minute("ES", TS + dt.timedelta(minutes=1))
-    nq = t.close_minute("NQ", TS + dt.timedelta(minutes=1))
+    es = t.close_minute("ES", OPEN)
+    nq = t.close_minute("NQ", OPEN)
     assert (es.cvd_delta, es.cvd, es.aggressor_share) == (3.0, 3.0, 1.0)
     assert (nq.cvd_delta, nq.cvd) == (-2.0, -2.0)
+
+
+def test_roll_zahodi_rozdelanou_minutu_bez_uzaverky_od_pauzy() -> None:
+    """#1603: front future registrovaný bez běžící pipeline (watchlist nad stropem,
+    cooldown) nesmí tok staré seance přenést do první minuty nové."""
+    nq_front = "/NQU6:XCME"
+    t = tracker()
+    t.register("NQ", nq_front)
+    t.roll_session(dt.date(2026, 8, 24))
+    t.on_event("TimeAndSale", trade(nq_front, 30.0, "SELL"))  # NQ bez pipeline
+    t.close_minute("NQ", TS)  # poslední uzávěrka v RTH, pak už žádná
+    t.on_event("TimeAndSale", trade(nq_front, 12.0, "SELL"))  # stará seance
+    t.close_minute("ES", PAUSE_END)  # ES běží
+    t.on_event("TimeAndSale", trade(FRONT, 3.0, "BUY"))  # ES po openu
+
+    assert t.roll_session(dt.date(2026, 8, 25)) is True
+
+    assert t.close_minute("NQ", OPEN).cvd_delta == 0.0
+    assert t.close_minute("ES", OPEN).cvd_delta == 3.0
 
 
 def test_status_fields_odlisi_tri_pricini_nuly() -> None:
