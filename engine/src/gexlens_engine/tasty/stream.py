@@ -268,6 +268,31 @@ class DxLinkStream:
         with contextlib.suppress(Exception):
             await ws.close()
 
+    async def resubscribe(self, symbols: Iterable[str], reason: str) -> int:
+        """Cílená resubskripce zadaných symbolů (#1604), vrátí počet poslaných.
+
+        Idempotentní `add` jen těch symbolů, které stream drží, s jejich
+        eventy — týž mechanismus jako cílený heal po rate limitu (#936), jen ho
+        spouští hlídač mlčícího univerza. Zbytek streamu (podklad, CVD, druhý
+        instrument) zůstane bez díry. Bez spojení nic: reconnect přihlásí vše.
+        """
+        async with self._lock:
+            targets = {symbol: self._subs[symbol] for symbol in symbols if symbol in self._subs}
+            if self._ws is None or not targets:
+                return 0
+            logger.warning("DXLink: cílená resubskripce %d symbolů (%s)", len(targets), reason)
+            try:
+                await self._send_subscription(add=targets)
+            except Exception as error:
+                # Race s reconnectem jako u `set_subscriptions`: reconnect obnoví vše
+                logger.warning(
+                    "Cílená resubskripce selhala (%s: %s) — obnoví ji reconnect",
+                    type(error).__name__,
+                    error,
+                )
+                return 0
+            return len(targets)
+
     # ── vnitřek ────────────────────────────────────────────────────
 
     async def _send(self, payload: dict[str, object]) -> None:

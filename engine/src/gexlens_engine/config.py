@@ -357,6 +357,8 @@ class Settings(BaseSettings):
     # Hlídač mlčícího tasty streamu (#1228): socket žije, eventy ne → při
     # otevřeném trhu force_reconnect (US RTH po 3 min, Globex po 10 min, backoff
     # 5 min) + alert feed_silent. Zavřený trh (víkend, pauza) hlídač ignoruje.
+    # Týž přepínač nese hlídač opčního univerza per instrument (#1604): mlčí
+    # opce a podklad tiká → cílená resubskripce, při dalším tiku reconnect.
     tasty_silent_watchdog: bool = True
     # Konkurenční relace (#495): error 10197 chodí při přetahované session
     # ~2× za minutu (naměřeno 4. 8., viz connection.py) — sdílený práh 5/60 s

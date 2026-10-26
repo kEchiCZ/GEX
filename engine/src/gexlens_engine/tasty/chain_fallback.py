@@ -105,11 +105,14 @@ class ChainFallback:
         if self._source == "ibkr":
             return ChainDecision(source="ibkr")
 
-        # Za fallbacku se vracíme jen po skutečně čisté minutě. `state == "ok"`
-        # samo nestačí: detektor ho vrací i pro minutu NAD prahem, která zatím
-        # nenaplnila sérii do alertu (`streak > 0`) — návrat na takové minutě
-        # by řetěz přepínal přesně v okamžiku, kdy se IBKR zase kazí.
-        if verdict.state == "ok" and verdict.streak == 0:
+        # Za fallbacku se vracíme jen po minutě, kdy IBKR skutečně dodává
+        # (`ibkr_healthy`). `state == "ok"` samo nestačí: detektor ho vrací i pro
+        # minutu s IBKR NAD prahem, která zatím nenaplnila sérii do alertu —
+        # návrat na takové minutě by řetěz přepínal přesně v okamžiku, kdy se
+        # IBKR zase kazí. Naopak minuta „mlčí jen tasty“ čistá je (#1604): bez ní
+        # by mlčící opce obou instrumentů držely fallback, a tedy mezeru ve
+        # snímku, i po návratu IBKR.
+        if verdict.ibkr_healthy:
             self._clean_streak += 1
             if self._clean_streak >= self._recover_minutes:
                 self._source = "ibkr"
@@ -148,6 +151,25 @@ def fallback_alert_message(decision: ChainDecision, *, cumdelta_prints: bool) ->
     )
 
 
+def universe_alive_ts(
+    specs: Sequence[OptionContractSpec], chain: ChainSymbols | None, cache: TastyChainCache
+) -> float | None:
+    """Poslední event univerza řetězu `specs` (UTC ts) — vstup `stream_alive_ts` (#1604).
+
+    Živost se měří na opcích produktu, ne na celém streamu: front future jde
+    týmž streamem a tiká dál, takže při mlčících opcích by globální čas dal
+    zmrzlým kotacím stáří ~0 s. None = univerzum nemá jediný event (pak platí
+    přísné pravidlo stáří per kontrakt a nevrátí se nic).
+    """
+    if chain is None:
+        return None
+    streamers = [
+        streamer for spec in specs if (streamer := chain.streamer_symbol(spec)) is not None
+    ]
+    last = cache.last_event_among(streamers)
+    return last.timestamp() if last is not None else None
+
+
 def tasty_chain_quotes(
     specs: Sequence[OptionContractSpec],
     chain: ChainSymbols | None,
@@ -171,9 +193,10 @@ def tasty_chain_quotes(
     nezměněná 20 min je na živém streamu pořád aktuální. Bez `stream_alive_ts`
     platí přísné pravidlo „hodnota mladší než `max_age_ms`" (14. 9. 2026 tím
     ES při fallbacku ztrácel 44 ze 160 kontraktů a zdi z OI těch striků
-    zmizely). Se `stream_alive_ts` (UTC ts posledního eventu celého streamu)
-    se za stáří bere ŽIVOST STREAMU: mrtvý stream (> max_age) = nic, živý
-    stream = všechny kontrakty s hodnotami, `updated_at` nese stáří streamu,
+    zmizely). Se `stream_alive_ts` (UTC ts posledního eventu univerza řetězu,
+    `universe_alive_ts`, #1604) se za stáří bere ŽIVOST UNIVERZA: mlčící
+    univerzum (> max_age) = nic, tedy mezera ve snímku, i když podklad tiká; živé
+    univerzum = všechny kontrakty s hodnotami, `updated_at` nese jeho stáří,
     takže `stale_age` snímku i práh `quote_max_age_s` dál něco měří.
 
     Greeks: dxFeed Greeks na řídkých / deep OTM sériích nechodí (#810) — se

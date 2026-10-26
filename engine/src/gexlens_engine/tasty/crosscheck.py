@@ -148,6 +148,10 @@ class CrossCheckVerdict:
     #: příznak vedle `state`, protože je to jiná zpráva než `tasty_suspect`
     #: („záloha není k dispozici", ne „data jsou špatná").
     backup_dead: bool = False
+    #: IBKR v této minutě dodává (#1604): obě strany čerstvé, nebo mlčí jen
+    #: tasty. Jen taková minuta smí fallback řetězu vrátit na IBKR — i když
+    #: tasty mlčí, protože pak by fallback dával mezeru místo dat, která IBKR má.
+    ibkr_healthy: bool = False
 
 
 class CrossCheckDetector:
@@ -332,6 +336,7 @@ class CrossCheckDetector:
                     self._may_alert("backup_dead"),
                     message,
                     backup_dead=True,
+                    ibkr_healthy=True,
                 )
             if self._tasty_streak >= self._minutes_threshold:
                 message = (
@@ -346,13 +351,17 @@ class CrossCheckDetector:
                 # vyprší, zatímco IBKR sweep vrací poslední kotaci pořád dokola.
                 # Stav zůstává čitelný v /status a v logu; alertuje až větev
                 # `backup_dead` výš, která tichý trh vyloučí měřením změn.
-                return self._finish("tasty_suspect", tally, self._tasty_streak, False, message)
-            return self._finish("ok", tally, self._tasty_streak, False, "tastytrade zaostává")
+                return self._finish(
+                    "tasty_suspect", tally, self._tasty_streak, False, message, ibkr_healthy=True
+                )
+            return self._finish(
+                "ok", tally, self._tasty_streak, False, "tastytrade zaostává", ibkr_healthy=True
+            )
 
         self._tasty_streak = 0
         self._backup_streak = 0
         self._quiet_rth_streak = 0
-        return self._finish("ok", tally, 0, False, "Oba zdroje dodávají data")
+        return self._finish("ok", tally, 0, False, "Oba zdroje dodávají data", ibkr_healthy=True)
 
     def _may_alert(self, key: str) -> bool:
         """Alert jen na hraně série a nejvýš jednou za cooldown."""
@@ -371,6 +380,7 @@ class CrossCheckDetector:
         message: str,
         *,
         backup_dead: bool = False,
+        ibkr_healthy: bool = False,
     ) -> CrossCheckVerdict:
         if state in ("ok", "quiet") and streak == 0:
             # Uzdravení re-armuje cooldown, ale až po stejně dlouhé čisté sérii,
@@ -388,6 +398,7 @@ class CrossCheckDetector:
             alert=alert,
             message=message,
             backup_dead=backup_dead,
+            ibkr_healthy=ibkr_healthy,
         )
         self.last = verdict
         if alert:
