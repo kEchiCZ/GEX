@@ -492,11 +492,49 @@ def test_replay_bundle_daily_resolution(client: TestClient) -> None:
     assert daily["evo_oi_call"] == pytest.approx(600.0)
     assert daily["evo_oi_put"] == pytest.approx(750.0)
     assert daily["cum_delta"] == pytest.approx(150.0)
+    assert daily["futures_cvd"] is None  # fixture bez tasty větve
     bars = full["bars"]
     assert daily["bar"]["open"] == bars[0]["open"] and daily["bar"]["close"] == bars[-1]["close"]
     assert daily["vol"] == pytest.approx(sum(bar["volume"] for bar in bars))
     # Plný balík se nemění
     assert "daily" not in full and len(full["bars"]) == MINUTES
+
+
+def test_daily_futures_cvd_z_konce_obchodovani() -> None:
+    """#1633: Daily CVD = úroveň z konce obchodování; nula v pauze po restartu
+    enginu (do #1603) ani NULL minuta bez streameru ji nepřepíše."""
+    from gexlens_api.main import daily_futures_cvd
+
+    close = dt.datetime(2026, 7, 16, 21, 0, tzinfo=dt.UTC)  # 16:00 CDT
+    flow = pd.DataFrame(
+        {
+            "ts_min": [close + dt.timedelta(minutes=m) for m in (-2, -1, 0, 20, 59)],
+            "futures_cvd": [4340.0, None, 4360.0, 0.0, 0.0],
+        }
+    )
+    # Štítek 21:00 nese tisky [20:59, 21:00) — poslední minutu obchodování
+    assert daily_futures_cvd(flow) == pytest.approx(4360.0)
+    assert daily_futures_cvd(flow.iloc[:2]) == pytest.approx(4340.0)  # NULL se přeskočí
+    assert daily_futures_cvd(flow.assign(futures_cvd=None)) is None
+    assert daily_futures_cvd(pd.DataFrame()) is None
+
+
+def test_daily_balik_nese_futures_cvd(settings: Settings) -> None:
+    """#1633: `?resolution=daily` nese `daily.futures_cvd` z flow partice dne."""
+    from gexlens_api import main as api_main
+
+    api_main._DAILY_BUNDLE_CACHE.clear()  # uzavřený den z jiného testu by vrátila cache
+    rows = [_Flow(ts(m), 50.0, 50.0 * (m + 1)) for m in range(MINUTES)]
+    for row, cvd in zip(rows, (12.0, None, 30.0), strict=True):
+        row.futures_cvd = cvd
+    SnapshotWriter(settings).write_flow("ES", DAY, rows)
+    url = (
+        f"/replay/ES/20260716/{DAY.isoformat()}?resolution=daily&v={api_main.DAILY_BUNDLE_VERSION}"
+    )
+
+    daily = TestClient(create_app(settings)).get(url).json()["daily"]
+
+    assert daily["futures_cvd"] == pytest.approx(30.0)
 
 
 def test_daily_and_flow_window_with_print_gap(settings: Settings) -> None:
