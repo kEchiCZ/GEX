@@ -601,13 +601,19 @@ class InstrumentPipeline:
     async def _open_oi_archive(self, today: dt.date, now: dt.datetime) -> OIArchivePass | None:
         """Začátek průchodu OI archivu dne; None = platný snímek, číst není co."""
         self._oi_day = today
-        # Platný denní archiv už existuje → případné selhání čtení je jen
-        # neúspěšná OBNOVA, ne ztráta OI (#494) — jede se dál na starším snímku
+        # Den má řádky → případné selhání čtení je jen neúspěšná OBNOVA, ne
+        # ztráta OI (#494) — jede se dál na starším snímku. Platí i pro tasty
+        # řádky (#828): alerty níž proto zůstávají na „den má jakékoli řádky“.
         has_snapshot = today in self.oi_repository.days(self.symbol)
-        if has_snapshot and not self._oi_refresh_due(now):
+        # O čtení ale rozhoduje jen IBKR snímek dne (`captured_ts` nese jen IBKR,
+        # #1609). Tasty zapíše aktivní expiraci ve 00:00:10 a dřív zkratka
+        # přeskočila čtení od 00:00: sekundár a další expirace univerza jely
+        # do obnovy po publikaci na tasty fallbacku a Forward GEX dne nevznikl
+        # (z 27 dnů 8. 9.–26. 10. 2026 četl ES jen 11×, NQ 5×).
+        captured = self.oi_repository.captured_at(self.symbol, today)
+        if captured is not None and not self._oi_refresh_due(now):
             await self._run_fa_jobs(today)
             return None
-        captured = self.oi_repository.captured_at(self.symbol, today)
         if captured is not None and captured < self.settings.oi_publication_utc(captured.date()):
             logger.info(
                 "OI archiv %s %s je z %s UTC, tedy před publikací — obnovuji",
