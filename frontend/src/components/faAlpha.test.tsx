@@ -1,4 +1,4 @@
-/** Badge kalibrované FA α ve stavové liště (#232 fáze 2, ADR-0057 bod 6, #1632). */
+/** Badge kalibrované FA α / ρ ve stavové liště (#232 fáze 2, ADR-0057 bod 6, #1632, ADR-0061 #1666). */
 import { act, render, screen } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
@@ -59,8 +59,29 @@ test('bez kalibračních bodů se badge nekreslí (engine jede na defaultu)', as
   expect(screen.queryByTestId('status-fa-alpha')).toBeNull()
 })
 
-test('pod tisky (v6) ukáže badge „nekalibrováno n/5“ ze stavu z tisků (#1632)', async () => {
-  mockApi([{ symbol: 'ES', alpha: 0.12, days: 2, source: 'aggressor' }], 5)
+test('pod v6 ukáže badge „FA ρ=… · n dní“ ze stavu ρ z objemu (#1666, ADR-0061)', async () => {
+  mockApi([{ symbol: 'ES', alpha: 0.27, days: 16, source: 'volume' }], 5)
+  renderApp()
+  act(() => {
+    const ws = FakeWebSocket.latest()
+    ws.open()
+    ws.push('status', {
+      engine: 'online',
+      cumdelta_source: 'aggressor',
+      cumdelta_coverage: { ES: { printed_share: null, printed_share_total: null } },
+    })
+  })
+
+  const badge = await screen.findByTestId('status-fa-alpha')
+  await vi.waitFor(() => expect(badge.textContent).toBe('FA ρ=0.27 · 16 dní'))
+  const title = badge.getAttribute('title') ?? ''
+  expect(title).toContain('\n• ')
+  expect(title).toContain('ρ·objem strany')
+  expect(title).toContain('zavírání pozic nevidí')
+})
+
+test('pod tisky (v6) ukáže badge „nekalibrováno n/5“ ze stavu ρ (#1632, #1666)', async () => {
+  mockApi([{ symbol: 'ES', alpha: 0.12, days: 2, source: 'volume' }], 5)
   renderApp()
   act(() => {
     const ws = FakeWebSocket.latest()
@@ -83,12 +104,13 @@ const PAYLOAD: FaAlphaPayload = {
   minDays: 5,
   bySymbol: {
     ES: { alpha: 0.34, days: 12, source: 'midpoint' },
-    NQ: { alpha: 0.2, days: 5, source: 'aggressor' },
-    RTY: { alpha: 0.3, days: 4, source: 'aggressor' },
+    NQ: { alpha: 0.2, days: 5, source: 'volume' },
+    RTY: { alpha: 0.3, days: 4, source: 'volume' },
+    YM: { alpha: 0.25, days: 9, source: 'aggressor' },
   },
 }
 
-test('faAlphaBadge: pod v5 beze změny, pod tisky jen stav z tisků s ≥ min_days (#1632)', () => {
+test('faAlphaBadge: pod v5 beze změny, pod tisky jen ρ z objemu s ≥ min_days (#1632, #1666)', () => {
   // v5 (midpoint, i neznámý zdroj = starší engine): uložená α, bez stavu nic
   expect(faAlphaBadge(PAYLOAD, 'ES', 'midpoint', [])).toEqual({
     kind: 'calibrated',
@@ -104,10 +126,21 @@ test('faAlphaBadge: pod v5 beze změny, pod tisky jen stav z tisků s ≥ min_da
     days: 0,
     minDays: 5,
   })
-  expect(faAlphaBadge(PAYLOAD, 'NQ', 'aggressor', ['NQ'])?.kind).toBe('calibrated')
+  expect(faAlphaBadge(PAYLOAD, 'NQ', 'aggressor', ['NQ'])).toEqual({
+    kind: 'calibrated',
+    alpha: 0.2,
+    days: 5,
+    source: 'volume',
+  })
   expect(faAlphaBadge(PAYLOAD, 'RTY', 'aggressor', ['RTY'])).toEqual({
     kind: 'uncalibrated',
     days: 4,
+    minDays: 5,
+  })
+  // α z netu tisků (před ADR-0061) engine pod v6 nebere (`live_alpha`) → 0 dnů
+  expect(faAlphaBadge(PAYLOAD, 'YM', 'aggressor', ['YM'])).toEqual({
+    kind: 'uncalibrated',
+    days: 0,
     minDays: 5,
   })
   // Bez stavu „0/5“, ne default α — ale jen u symbolu s CumΔ trackerem
@@ -123,12 +156,12 @@ test('faAlphaBadge: pod v5 beze změny, pod tisky jen stav z tisků s ≥ min_da
   const noMin = { ...PAYLOAD, minDays: null }
   expect(faAlphaBadge(noMin, 'NQ', 'aggressor', ['NQ'])).toBeNull()
   expect(faAlphaBadge(noMin, 'ES', 'midpoint', ['ES'])?.kind).toBe('calibrated')
-  // Stav z tisků pod v5 (návrat pinem image z v6): FA jede s uloženou α jako live_alpha
+  // Stav ρ pod v5 (návrat pinem image z v6): FA jede s uloženým faktorem jako live_alpha
   expect(faAlphaBadge(PAYLOAD, 'RTY', 'midpoint', ['RTY'])).toEqual({
     kind: 'calibrated',
     alpha: 0.3,
     days: 4,
-    source: 'aggressor',
+    source: 'volume',
   })
 })
 

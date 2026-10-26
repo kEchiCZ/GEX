@@ -324,7 +324,8 @@ function StrikeProfileBase({
             'Odkud jsou čísla v profilu (manuál kap. 5 a 7):\n' +
             '• OI = open interest z ranního archivu CME přes IBKR — jednou denně ráno, ' +
             'přes den se nemění; striky mimo obálku IBKR nesou denní OI z tastytrade\n' +
-            '• FA odhad (přepínač OI) = OI_est = ranní OI + α·klasifikovaný tok — model, ne měření\n' +
+            '• FA odhad (přepínač OI) = ranní OI + ρ·objem strany za seanci (od v6; do v6 ' +
+            'α·klasifikovaný tok) — model, ne měření\n' +
             '• Vol = opční objem dne per strike z živého řetězu; OI Δ = open interest ' +
             'vážený |delta| opce (obě složky Δ-vážené, proto „kontrakty“ ≠ hrubé počty)\n' +
             '• Prémie $ = objem × mid × multiplikátor — kam tekly peníze, ne kolik kontraktů'

@@ -352,7 +352,7 @@ function MainContent() {
   )
   // FA zdroj OI (#232): opt-in přepínač per symbol. Minuta bez FA řad je
   // mezera, ne tichý přechod na měřené (ADR-0057 bod 4, #1632) — i den bez
-  // FA (vypnutá do kalibrace z tisků). Bez FA matice (Daily) jede měřené.
+  // FA (vypnutá do kalibrace ρ, ADR-0061). Bez FA matice (Daily) jede měřené.
   const faActive = oiSource === 'fa' && rawDay.rawFa !== null
   // FA mezery 1m osy (minuta se snímkem bez FA řad) — podklad, pole a GEX
   // křivka profilu přes ně poslední FA profil nedrží
@@ -2020,8 +2020,10 @@ function MainContent() {
             className="fa-badge"
             data-testid="fa-badge"
             title={[
-              'OI vrstvy, Dyn GEX podklad i GEX křivka profilu jedou z FA odhadu OI_est = ranní OI + α·čistý tok (ADR-0011) — je to model, ne měření.',
-              '• minuta bez FA řad (mezera tisků, FA vypnutá do kalibrace) je mezera, ne měřené OI (ADR-0057)',
+              'OI vrstvy, Dyn GEX podklad i GEX křivka profilu jedou z FA odhadu OI — je to model, ne měření.',
+              '• od mechaniky v6 OI_est = ranní OI + ρ·objem strany za seanci, bez znaménka toku; zavírání pozic nevidí (ADR-0061)',
+              '• do v6 OI_est = ranní OI + α·čistý tok z midpoint testu (ADR-0011)',
+              '• minuta bez FA řad (od v6 bez měřeného objemu IBKR, FA vypnutá do kalibrace) je mezera, ne měřené OI',
               '• OI Δ složka pravého profilu zůstává měřená',
               ...(faDayEmpty
                 ? [

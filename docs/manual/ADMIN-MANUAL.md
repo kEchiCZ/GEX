@@ -497,7 +497,7 @@ PDC v `api/briefing.previousSessionRange` s hranicí `settleMs` — protějšek 
     pod v6 bez nastaveného ρ (start před prvním obnovením, chyba DB) platí 0
     (`EngineRuntime.fa_alpha`). Log „FA ES vypnutá do kalibrace ρ z objemu:
     n/5 dnů (ADR-0061)“. Stavová lišta ukáže „FA nekalibrováno n/5“ z `/fa/alpha`
-    (`source`, `min_days`); texty ρ v UI řeší #1666. Frontend v režimu FA kreslí
+    (`source`, `min_days`), s kalibrací badge „FA ρ=… · n dní“ (#1666). Frontend v režimu FA kreslí
     minutu se snímkem bez FA řad (oiest, levelsfa, gexprofilefa) jako mezeru —
     nedrží poslední FA profil ani nepřejde na měřené OI (ADR-0057 bod 4).
   - **Zpětný dopočet ρ** `scripts/recompute_fa_rho.py` (ADR-0061 bod 5): přehraje
