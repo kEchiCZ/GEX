@@ -463,9 +463,8 @@ class OIEodRepository:
 
         Jen řádky bez IBKR `captured_ts`: řádek přepsaný z IBKR si nechá starý
         tasty čas, tasty ho už neobnoví (stráž #1605). Tasty zapisuje jen změněnou
-        hodnotu, takže čas je poslední ZMĚNA, ne čerstvost — po publikaci CME se
-        ale většina křídel mění (#1605, Data), takže „změna ≥ publikace“ znamená
-        „křídla nesou dnešní publikaci“.
+        hodnotu, takže čas je poslední ZMĚNA, ne čerstvost; slouží jako klíč, kdy
+        znovu srovnat hodnoty (`wings_changed_vs`).
         """
         stmt = select(func.max(oi_eod_table.c.tasty_captured_ts)).where(
             oi_eod_table.c.symbol == symbol,
@@ -476,6 +475,45 @@ class OIEodRepository:
         with self._engine.connect() as conn:
             changed: dt.datetime | None = conn.execute(stmt).scalar_one_or_none()
         return _as_utc(changed)
+
+    def wings_changed_vs(
+        self, symbol: str, expiry: str, day: dt.date, previous: dt.date
+    ) -> tuple[int, int]:
+        """(společné, změněné) tasty křídla expirace dne proti dni `previous` (#1611).
+
+        Křídla = řádky dne bez IBKR `captured_ts`; protějšek je týž kontrakt
+        (série, strike, strana) dne `previous` libovolného původu. Nová publikace
+        CME změní 22–55 % společných křídel (ES i NQ 19.–26. 10. 2026, i pondělí
+        proti pátku); křídla, která tasty po publikaci neobnovilo, se neliší
+        vůbec. Index PK, ~9 ms pro NQ (582 křídel).
+        """
+        today = oi_eod_table.alias("today")
+        before = oi_eod_table.alias("before")
+        stmt = (
+            select(
+                func.count(),
+                func.count().filter(today.c.oi != before.c.oi),
+            )
+            .select_from(today)
+            .join(
+                before,
+                (before.c.symbol == today.c.symbol)
+                & (before.c.expiry == today.c.expiry)
+                & (before.c.trading_class == today.c.trading_class)
+                & (before.c.strike == today.c.strike)
+                & (before.c.right == today.c.right)
+                & (before.c.date == previous),
+            )
+            .where(
+                today.c.symbol == symbol,
+                today.c.expiry == expiry,
+                today.c.date == day,
+                today.c.captured_ts.is_(None),
+            )
+        )
+        with self._engine.connect() as conn:
+            common, changed = conn.execute(stmt).one()
+        return int(common), int(changed)
 
     def snapshot(
         self, symbol: str, day: dt.date, *, ibkr_only: bool = False

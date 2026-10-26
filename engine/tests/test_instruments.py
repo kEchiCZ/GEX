@@ -2915,71 +2915,136 @@ async def test_forward_gex_po_tasty_pocka_na_bezici_joby_po_archivu(
     assert pipeline._oi_jobs_task is None  # slot uvolněn po doběhnutí
 
 
-def _wings(repository: OIEodRepository, day: dt.date, changed: dt.datetime) -> None:
-    """Tasty křídlo aktivní expirace mimo obálku IBKR (#828) se změnou v `changed`."""
+def _wings(
+    repository: OIEodRepository, day: dt.date, changed: dt.datetime, oi: float = 900.0
+) -> None:
+    """Tasty křídla expirace 20260717 mimo obálku IBKR (#828) se změnou v `changed`."""
     repository.upsert_many(
-        [OIRecord("ES", "20260717", 7700.0, "C", day, 900.0)], tasty_captured_ts=changed
+        [
+            OIRecord("ES", "20260717", strike, "C", day, oi + strike - 7700.0)
+            for strike in (7700.0, 7710.0)
+        ],
+        tasty_captured_ts=changed,
     )
 
 
+def _wide(settings: Settings) -> Settings:
+    return settings.model_copy(update={"tasty_enabled": True, "tasty_wide_oi": True})
+
+
 @pytest.mark.parametrize(
-    ("label", "now", "changed", "expected"),
+    ("label", "now", "previous", "previous_oi", "expected"),
     [
-        ("obchodní den po okně, změna po publikaci", dt.datetime(2026, 7, 16, 14, 0), 12, True),
-        ("obchodní den po okně, změna jen v noci", dt.datetime(2026, 7, 16, 14, 0), 0, False),
-        ("před publikačním oknem", dt.datetime(2026, 7, 16, 9, 0), 0, None),
-        ("sobota", dt.datetime(2026, 7, 18, 14, 0), 0, None),
-        ("neděle po otevření", dt.datetime(2026, 7, 19, 22, 30), 0, None),
-        ("svátek NYSE (pá 3. 7.)", dt.datetime(2026, 7, 3, 14, 0), 0, None),
+        ("po okně, křídla jiná než včera", (2026, 7, 16, 14), (2026, 7, 15), 800.0, True),
+        ("po okně, křídla stejná jako včera", (2026, 7, 16, 14), (2026, 7, 15), 900.0, False),
+        ("pondělí proti pátku (víkend se přeskočí)", (2026, 7, 13, 14), (2026, 7, 10), 800.0, True),
+        ("před publikačním oknem", (2026, 7, 16, 9), (2026, 7, 15), 900.0, None),
+        ("sobota", (2026, 7, 18, 14), (2026, 7, 17), 900.0, None),
+        ("neděle po otevření", (2026, 7, 19, 22), (2026, 7, 17), 900.0, None),
+        ("svátek NYSE (pá 3. 7.)", (2026, 7, 3, 14), (2026, 7, 2), 900.0, None),
     ],
 )
 async def test_stari_tasty_kridel_ve_statusu(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
     label: str,
-    now: dt.datetime,
-    changed: int,
+    now: tuple[int, int, int, int],
+    previous: tuple[int, int, int],
+    previous_oi: float,
     expected: bool | None,
 ) -> None:
-    """#1611: `wide_oi_published` = křídla aktivní expirace nesou dnešní publikaci;
-    None, když publikaci dne nečekáme (před oknem, víkend, svátek)."""
+    """#1611 (Rozhodnuto 26. 10., a): `wide_oi_published` = křídla se liší od téže
+    expirace předchozího obchodního dne; None, když publikaci dne nečekáme."""
     settings, writer, repository, publisher = env
-    settings = settings.model_copy(update={"tasty_wide_oi": True})
-    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
-    now = now.replace(tzinfo=dt.UTC)
-    last = now.replace(hour=changed, minute=30)
-    _wings(repository, now.date(), last)
-    await pipeline._watch_wide_oi(now)
+    pipeline = make_pipeline("ES", 7600.0, _wide(settings), writer, repository, publisher)
+    at = dt.datetime(*now, 30, tzinfo=dt.UTC)
+    before = dt.date(*previous)
+    evening = dt.datetime.combine(before, dt.time(20, 1), tzinfo=dt.UTC)
+    _wings(repository, before, evening, previous_oi)
+    if label.startswith("pondělí"):
+        # Sobota a neděle nesou kopii se stejnými hodnotami jako pondělí — srovnání je přeskočí
+        for weekend in (dt.date(2026, 7, 11), dt.date(2026, 7, 12)):
+            _wings(repository, weekend, dt.datetime.combine(weekend, dt.time(0, 1), tzinfo=dt.UTC))
+    last = at.replace(hour=0, minute=1)
+    _wings(repository, at.date(), last)
+    await pipeline._watch_wide_oi(at)
     assert pipeline.wide_oi_state == (last, expected), label
 
 
-async def test_stari_tasty_kridel_bez_kridel_a_bez_siroke_oi_se_nemeri(
+async def test_stari_tasty_kridel_bez_kridel_bez_predchoziho_dne_a_bez_tasty_se_nemeri(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:
-    """Den bez křídel (ad-hoc pohled, tasty od půlnoci mlčí) = neměří se, ne „zastaralé“;
-    bez `tasty_wide_oi` se stav nepočítá vůbec."""
+    """Den bez křídel (ad-hoc pohled) ani expirace bez předchozího obchodního dne
+    nejsou „zastaralé“, ale neměří se; bez tasty se stav nepočítá vůbec."""
     settings, writer, repository, publisher = env
     now = dt.datetime(2026, 7, 16, 14, 0, tzinfo=dt.UTC)
-    pipeline = make_pipeline(
-        "ES",
-        7600.0,
-        settings.model_copy(update={"tasty_wide_oi": True}),
-        writer,
-        repository,
-        publisher,
-    )
+    pipeline = make_pipeline("ES", 7600.0, _wide(settings), writer, repository, publisher)
     await pipeline._watch_wide_oi(now)
     assert pipeline.wide_oi_state == (None, None)
-    off = make_pipeline(
-        "ES",
-        7600.0,
-        settings.model_copy(update={"tasty_wide_oi": False}),
-        writer,
-        repository,
-        publisher,
-    )
-    await off._watch_wide_oi(now)
-    assert off.wide_oi_state is None
+    last = dt.datetime(2026, 7, 16, 0, 1, tzinfo=dt.UTC)
+    _wings(repository, now.date(), last)
+    await pipeline._watch_wide_oi(now)
+    state: object = pipeline.wide_oi_state  # mypy zúžil typ po prvním assertu
+    assert state == (last, None)  # 15. 7. expirace v archivu není
+    for update in ({"tasty_wide_oi": False}, {"tasty_enabled": False}):
+        off = make_pipeline(
+            "ES", 7600.0, settings.model_copy(update=update), writer, repository, publisher
+        )
+        await off._watch_wide_oi(now)
+        assert off.wide_oi_state is None, update
     assert [d for ch, d in publisher.messages if ch == "alerts"] == []
+
+
+def test_posledni_zmena_kridel_pomine_radek_prepsany_z_ibkr(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """Řádek přepsaný z IBKR si nechá starý tasty čas (stráž #1605) — křídlo už to
+    není, a proto `wings_last_change` místo `archive_version[1]`."""
+    settings, writer, repository, publisher = env
+    day = dt.date(2026, 7, 16)
+    _wings(repository, day, dt.datetime(2026, 7, 16, 2, 0, tzinfo=dt.UTC))
+    repository.upsert_many(
+        [OIRecord("ES", "20260717", 7700.0, "C", day, 950.0)],
+        tasty_captured_ts=dt.datetime(2026, 7, 16, 5, 0, tzinfo=dt.UTC),
+    )  # tasty změna 05:00 …
+    repository.upsert_many(
+        [OIRecord("ES", "20260717", 7700.0, "C", day, 960.0)],
+        dt.datetime(2026, 7, 16, 12, 30, tzinfo=dt.UTC),
+    )  # … a pak ho přepsal IBKR (řádek nese oba časy)
+    assert repository.wings_last_change("ES", "20260717", day) == dt.datetime(
+        2026, 7, 16, 2, 0, tzinfo=dt.UTC
+    )
+    assert repository.archive_version("ES", "20260717", day)[1] == dt.datetime(
+        2026, 7, 16, 5, 0, tzinfo=dt.UTC
+    )
+
+
+async def test_srovnani_kridel_jen_pri_nove_zmene(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Podmínka vlastníka (Rozhodnuto 26. 10.): srovnání s předchozím dnem nesmí
+    zatížit cyklus — běží jen při nové změně křídel, jinak jen dotaz na čas změny."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, _wide(settings), writer, repository, publisher)
+    yesterday = dt.datetime(2026, 7, 15, 20, 1, tzinfo=dt.UTC)
+    _wings(repository, dt.date(2026, 7, 15), yesterday, 800.0)
+    _wings(repository, dt.date(2026, 7, 16), dt.datetime(2026, 7, 16, 0, 1, tzinfo=dt.UTC))
+    calls: list[dt.date] = []
+    original = repository.wings_changed_vs
+
+    def counting(symbol: str, expiry: str, day: dt.date, previous: dt.date) -> tuple[int, int]:
+        calls.append(previous)
+        return original(symbol, expiry, day, previous)
+
+    monkeypatch.setattr(repository, "wings_changed_vs", counting)
+    now = dt.datetime(2026, 7, 16, 14, 0, tzinfo=dt.UTC)
+    for minute in range(5):
+        await pipeline._watch_wide_oi(now + dt.timedelta(minutes=minute))
+    assert calls == [dt.date(2026, 7, 15)]
+    later = dt.datetime(2026, 7, 16, 14, 7, tzinfo=dt.UTC)
+    _wings(repository, dt.date(2026, 7, 16), later, 1000.0)
+    await pipeline._watch_wide_oi(now + dt.timedelta(minutes=8))
+    assert len(calls) == 2
 
 
 async def test_alert_kridla_neobnovena_po_publikaci_jednou_za_den(
@@ -2988,41 +3053,54 @@ async def test_alert_kridla_neobnovena_po_publikaci_jednou_za_den(
     """#1611 (Rozhodnuto 26. 10., A): alert v publikace + 60 min, jen při otevřeném
     trhu v obchodní den, nejvýš jednou za den."""
     settings, writer, repository, publisher = env
-    settings = settings.model_copy(update={"tasty_wide_oi": True})
+    settings = _wide(settings)
     pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
     day = dt.date(2026, 7, 16)
-    _wings(repository, day, dt.datetime(2026, 7, 16, 0, 1, tzinfo=dt.UTC))
+    _wings(repository, dt.date(2026, 7, 15), dt.datetime(2026, 7, 15, 20, 1, tzinfo=dt.UTC))
+    _wings(repository, day, dt.datetime(2026, 7, 16, 0, 1, tzinfo=dt.UTC))  # beze změny
     publication = settings.oi_publication_utc(day)
 
     def alerts() -> list[dict[str, object]]:
         return [d for ch, d in publisher.messages if ch == "alerts"]
 
     await pipeline._watch_wide_oi(publication + dt.timedelta(minutes=59))
-    assert alerts() == []  # do 60 min po okně je to běžné zpoždění publikace
+    assert alerts() == []  # do 60 min po okně se nehlásí
     await pipeline._watch_wide_oi(publication + dt.timedelta(minutes=60))
     await pipeline._watch_wide_oi(publication + dt.timedelta(minutes=61))
     assert [a["kind"] for a in alerts()] == ["wide_oi_stale"]
     assert "00:01 UTC" in str(alerts()[0]["message"])
 
 
-@pytest.mark.parametrize(
-    ("label", "now"),
-    [
-        ("denní pauza Globexu", dt.datetime(2026, 7, 16, 21, 10, tzinfo=dt.UTC)),
-        ("sobota", dt.datetime(2026, 7, 18, 15, 0, tzinfo=dt.UTC)),
-        ("nedělní otevření", dt.datetime(2026, 7, 19, 22, 5, tzinfo=dt.UTC)),
-    ],
-)
-async def test_alert_kridel_pri_zavrenem_trhu_ani_o_vikendu_nejde(
+async def test_alert_kridel_v_denni_pauze_nejde(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
-    label: str,
-    now: dt.datetime,
 ) -> None:
-    """AGENTS.md: zavřený trh = žádná upozornění na chybějící data; o víkendu CME
-    nepublikuje, takže „po publikaci“ nenastane."""
+    """AGENTS.md: zavřený trh = žádná upozornění na chybějící data. Denní pauza
+    v obchodní den po okně je jediný zavřený trh, kde `_oi_published` platí."""
     settings, writer, repository, publisher = env
-    settings = settings.model_copy(update={"tasty_wide_oi": True})
-    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
-    _wings(repository, now.date(), now.replace(hour=0, minute=1))
-    await pipeline._watch_wide_oi(now)
-    assert [d for ch, d in publisher.messages if ch == "alerts"] == [], label
+    pipeline = make_pipeline("ES", 7600.0, _wide(settings), writer, repository, publisher)
+    pause = dt.datetime(2026, 7, 16, 21, 10, tzinfo=dt.UTC)
+    assert is_market_closed(pause) and pipeline._oi_published(pause)
+    _wings(repository, dt.date(2026, 7, 15), dt.datetime(2026, 7, 15, 20, 1, tzinfo=dt.UTC))
+    _wings(repository, pause.date(), dt.datetime(2026, 7, 16, 0, 1, tzinfo=dt.UTC))
+    await pipeline._watch_wide_oi(pause)
+    assert pipeline.wide_oi_state is not None and pipeline.wide_oi_state[1] is False
+    assert [d for ch, d in publisher.messages if ch == "alerts"] == []
+
+
+def test_wide_oi_status_serializuje_stav_per_symbol(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """`/status` nese `wide_oi_last_change_ts` (ISO nebo null) a `wide_oi_published`
+    per symbol; pipeline bez stavu klíč nemá a bez stavu vůbec se klíče nepošlou."""
+    from gexlens_engine.__main__ import _wide_oi_status
+
+    settings, writer, repository, publisher = env
+    es = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    nq = make_pipeline("NQ", 24000.0, settings, writer, repository, publisher)
+    assert _wide_oi_status([es, nq]) == {}
+    es.wide_oi_state = (dt.datetime(2026, 7, 16, 2, 0, tzinfo=dt.UTC), False)
+    nq.wide_oi_state = (None, None)
+    assert _wide_oi_status([es, nq]) == {
+        "wide_oi_last_change_ts": {"ES": "2026-07-16T02:00:00+00:00", "NQ": None},
+        "wide_oi_published": {"ES": False, "NQ": None},
+    }

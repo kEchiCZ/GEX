@@ -445,6 +445,10 @@ class InstrumentPipeline:
     #: Stáří tasty křídel OI (#1611): (poslední změna, nesou dnešní publikaci?)
     wide_oi_state: tuple[dt.datetime | None, bool | None] | None = field(default=None, repr=False)
     _wide_oi_alerted_day: dt.date | None = field(default=None, repr=False)
+    #: Poslední srovnání křídel: ((den, čas poslední změny), výsledek) — znovu jen při změně
+    _wide_oi_compared: tuple[tuple[dt.date, dt.datetime], bool | None] | None = field(
+        default=None, repr=False
+    )
     # Stav rozvrhu CME z minulého cyklu (#1307) — z něj hrana otevření trhu.
     # None před prvním cyklem: start v zavřeném trhu (víkend, pauza Globexu =
     # okno nasazení) není hrana zavření a první archiv nezahodí (#1674)
@@ -551,23 +555,35 @@ class InstrumentPipeline:
         """Stáří tasty křídel OI aktivní expirace (#1611): stav pro /status a hranový alert.
 
         Křídla mimo obálku IBKR nesou ~55 % Σ OI 0DTE (#1605) a stojí na nich OI
-        zdi, Max Pain a P/C. Když tasty vypadne přes publikační okno, zůstanou na
+        zdi, Max Pain a P/C. Když tasty vypadne přes příchod publikace, zůstanou na
         předchozí publikaci a nic to neoznačí. `wide_oi_state` = (poslední změna,
         nesou dnešní publikaci?): None = publikaci dne nečekáme (před oknem,
-        víkend, svátek — `_oi_published`) nebo den křídla nemá (ad-hoc pohled,
-        tasty mlčí od půlnoci — to hlásí `feed_silent` #1228 a #1604).
+        víkend, svátek — `_oi_published`) nebo není s čím srovnat (den bez křídel:
+        ad-hoc pohled, tasty mlčí od půlnoci — hlásí `feed_silent` #1228 a #1604;
+        expirace bez předchozího obchodního dne).
+
+        „Nesou dnešní publikaci“ = liší se od téže expirace předchozího obchodního
+        dne aspoň u jednoho křídla (Rozhodnuto 26. 10., a). Ne čas změny: tasty
+        nese publikaci už ~01:45–02:30 UTC (#1626) a v pondělí od soboty, práh
+        07:00 CT by dal falešný alert skoro denně. Srovnání (~9 ms) běží jen při
+        nové změně křídel; každou minutu jen dotaz na poslední změnu (~1,5 ms).
 
         Alert (Rozhodnuto 26. 10., A): v publikace + `WIDE_OI_STALE_AFTER`, jen při
         otevřeném trhu v obchodní den a nejvýš jednou za den (#1307).
         """
-        if not self.settings.tasty_wide_oi:
+        if not (self.settings.tasty_enabled and self.settings.tasty_wide_oi):
             return
         day = now.date()
         last = await asyncio.to_thread(
             self.oi_repository.wings_last_change, self.symbol, self.runtime.expiry, day
         )
         publication = self.settings.oi_publication_utc(day)
-        fresh = None if last is None or not self._oi_published(now) else last >= publication
+        fresh: bool | None = None
+        if last is not None and self._oi_published(now):
+            key = (day, last)
+            if self._wide_oi_compared is None or self._wide_oi_compared[0] != key:
+                self._wide_oi_compared = (key, await self._wings_fresh(day))
+            fresh = self._wide_oi_compared[1]
         self.wide_oi_state = (last, fresh)
         if (
             fresh is not False
@@ -577,7 +593,7 @@ class InstrumentPipeline:
         ):
             return
         self._wide_oi_alerted_day = day
-        assert last is not None  # fresh False jen s časem poslední změny
+        assert last is not None  # fresh False jen se změnou křídel dne
         message = (
             f"Křídla OI z tasty pro {self.symbol} se po publikaci CME neobnovila (poslední "
             f"změna {last:%H:%M} UTC) — OI zdi, Max Pain a P/C mimo obálku IBKR nesou "
@@ -593,6 +609,19 @@ class InstrumentPipeline:
                 "ts": now.timestamp(),
             },
         )
+
+    async def _wings_fresh(self, day: dt.date) -> bool | None:
+        """Liší se křídla dne od předchozího obchodního dne? None = není s čím srovnat."""
+        expiry = self.runtime.expiry
+        previous = await asyncio.to_thread(
+            self.oi_repository.latest_trading_day_before, self.symbol, expiry, day
+        )
+        if previous is None:
+            return None
+        common, changed = await asyncio.to_thread(
+            self.oi_repository.wings_changed_vs, self.symbol, expiry, day, previous
+        )
+        return None if common == 0 else changed > 0
 
     def _oi_refresh_due(self, now: dt.datetime) -> bool:
         """Má se existující snímek dne přečíst znovu? (#463)
@@ -1463,6 +1492,7 @@ class InstrumentPipeline:
         try:
             await self._watch_wide_oi(now)
         except Exception:
+            self.wide_oi_state = None  # neměří se — ne stará čísla bez stáří
             logger.exception("Stáří tasty křídel %s se nepodařilo zjistit", self.symbol)
 
         # Stav mapy (#1245) — PŘED detektorem, ať feature log nese stav téže

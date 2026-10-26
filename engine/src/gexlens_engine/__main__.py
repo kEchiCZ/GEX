@@ -2834,7 +2834,7 @@ async def main() -> None:
             Běží v kadenci extended smyčky; jádro je `wide_oi_pass` (#1605):
             pokryté jsou jen striky s IBKR řádkem dne (dotaz na archiv, takže
             se znalost obálky nemusí protahovat přes engine), tasty řádky se
-            během dne obnovují (publikace CME ~12:00 UTC) a zapisuje se jen
+            během dne obnovují (tasty nese publikaci CME ~01:45–02:30 UTC, #1626) a zapisuje se jen
             změněná hodnota. IBKR řádek tasty nikdy nepřepíše (stráž v SQL).
             """
             if not settings.tasty_wide_oi:
