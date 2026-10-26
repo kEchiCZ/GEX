@@ -325,3 +325,29 @@ def test_strop_velikosti_se_pocita_zvlast_od_rate_limitu() -> None:
     assert stream._pause_s == SUBSCRIPTION_PAUSE_S
     assert not stream._heal_due(stream.size_exceeded_ts + 1_000)
     assert stream.errors == 1
+
+
+async def test_resubscribe_posle_jen_drzene_symboly_s_jejich_eventy() -> None:
+    """#1604: cílená resubskripce univerza = idempotentní `add` jen zadaných symbolů."""
+    stream, sent = make_stream()
+    stream._ws = cast(object, SimpleNamespace())  # type: ignore[assignment]
+    await stream.set_subscriptions({"./A": {"Quote", "Greeks"}, "./B": {"Quote"}, "/ES": {"Quote"}})
+    sent.clear()
+
+    count = await stream.resubscribe({"./A", "./X"}, "test")
+
+    assert count == 1  # ./X stream nedrží, podklad /ES se neposílá
+    (payload,) = _subscription_payloads(sent)
+    assert _entries(payload, "add") == sorted(
+        [{"type": "Greeks", "symbol": "./A"}, {"type": "Quote", "symbol": "./A"}], key=str
+    )
+    assert "remove" not in payload
+    assert stream.entries_total == 4  # cílová množina se nemění
+
+
+async def test_resubscribe_bez_spojeni_nic_neposle() -> None:
+    stream, sent = make_stream()
+    await stream.set_subscriptions({"./A": {"Quote"}})
+    sent.clear()
+    assert await stream.resubscribe({"./A"}, "test") == 0
+    assert sent == []

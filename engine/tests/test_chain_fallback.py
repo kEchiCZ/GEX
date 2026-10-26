@@ -17,21 +17,24 @@ from gexlens_engine.tasty.chain_fallback import (
     ChainFallback,
     fallback_alert_message,
     tasty_chain_quotes,
+    universe_alive_ts,
 )
-from gexlens_engine.tasty.crosscheck import CrossCheckVerdict, MinuteTally
+from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict, MinuteTally
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.symbols import ChainSymbols
 
 NOW = dt.datetime(2026, 8, 18, 14, 30, tzinfo=dt.UTC)
 
 
-def verdict(state: str, *, streak: int = 0) -> CrossCheckVerdict:
+def verdict(state: str, *, streak: int = 0, ibkr_healthy: bool | None = None) -> CrossCheckVerdict:
+    """Verdikt jako od detektoru; `ibkr_healthy` bez zadání jako větev „oba dodávají"."""
     return CrossCheckVerdict(
         state=state,  # type: ignore[arg-type]
         tally=MinuteTally(contracts=200),
         streak=streak,
         alert=False,
         message="test",
+        ibkr_healthy=(state == "ok" and streak == 0) if ibkr_healthy is None else ibkr_healthy,
     )
 
 
@@ -201,6 +204,42 @@ def test_malo_kontraktu_navrat_nespusti() -> None:
     fallback.observe(verdict("ok"))
 
     assert source_of(fallback) == "tasty"
+
+
+def test_mlcici_tasty_pri_zdravem_ibkr_vrati_retez_na_ibkr() -> None:
+    """#1604: opce obou instrumentů mlčí, IBKR se vrátil — minuta „mlčí jen tasty"
+    je pro návrat čistá, jinak by fallback držel mezeru, i když IBKR data má."""
+    fallback = ChainFallback(recover_minutes=3)
+    fallback.observe(verdict("ibkr_suspect", streak=3))
+
+    fallback.observe(verdict("ok", streak=1, ibkr_healthy=True))  # tasty zaostává
+    fallback.observe(verdict("tasty_suspect", streak=2, ibkr_healthy=True))
+    back = fallback.observe(verdict("tasty_suspect", streak=3, ibkr_healthy=True))
+
+    assert back.source == "ibkr" and back.switched is True
+
+
+def test_detektor_oznaci_zdrave_ibkr_jen_kdyz_ibkr_dodava() -> None:
+    """Návrat řídí detektor: mlčí jen tasty → zdravé IBKR; série IBKR nad prahem,
+    ticho obou ani málo kontraktů zdravé IBKR nejsou."""
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+    tasty_dead = MinuteTally(
+        contracts=100, both_fresh=10, tasty_only_dead=90, ibkr_comparable=100, ibkr_changed=50
+    )
+    assert all(detector.observe(tasty_dead).ibkr_healthy for _ in range(5))
+    assert detector.observe(MinuteTally(contracts=100, both_fresh=100)).ibkr_healthy
+    ibkr_dead = MinuteTally(contracts=100, both_fresh=10, ibkr_only_dead=90)
+    assert not detector.observe(ibkr_dead).ibkr_healthy  # „ok" se sérií IBKR
+    assert not detector.observe(MinuteTally(contracts=100, both_dead=100)).ibkr_healthy
+    assert not detector.observe(MinuteTally(contracts=5, both_fresh=5)).ibkr_healthy
+
+    fallback = ChainFallback(recover_minutes=3)
+    for _ in range(3):
+        fallback.observe(detector.observe(ibkr_dead))
+    assert source_of(fallback) == "tasty"
+    for _ in range(3):
+        decision = fallback.observe(detector.observe(tasty_dead))
+    assert decision.source == "ibkr" and decision.switched is True
 
 
 # ── skládání kotací z tasty ─────────────────────────────────────────────────
@@ -394,3 +433,56 @@ def test_bid_nula_deep_otm_zustava_ve_snimku_s_nulovymi_greeks() -> None:
         tasty_chain_quotes(specs, chain, cache, now_utc_ts=NOW.timestamp(), now_monotonic=1000.0)
         == {}
     )
+
+
+def test_mlcici_univerzum_pri_zivem_podkladu_nevrati_nic() -> None:
+    """#1604: front future tiká týmž streamem, opce produktu mlčí 5 min — živost
+    se měří na univerzu řetězu, takže snímek dostane mezeru, ne zmrzlé kotace."""
+    specs = [spec(5900.0), spec(5950.0, "P")]
+    chain = chain_for(specs)
+    clock = FrozenClock(NOW)
+    cache = TastyChainCache(clock)
+    fill_cache(cache, clock, chain, specs, quote_at=NOW - dt.timedelta(minutes=5))
+    clock.at = NOW
+    cache.on_event("Quote", ["/ESZ26:XCME", 5900.0, 5900.25, 10, 12])  # podklad tiká
+    assert cache.last_event_at == NOW
+
+    alive = universe_alive_ts(specs, chain, cache)
+    assert alive == (NOW - dt.timedelta(minutes=5)).timestamp()
+    quotes = tasty_chain_quotes(
+        specs,
+        chain,
+        cache,
+        now_utc_ts=NOW.timestamp(),
+        now_monotonic=1000.0,
+        max_age_ms=120_000,
+        stream_alive_ts=alive,
+    )
+    assert quotes == {}
+
+
+def test_zive_univerzum_bez_zmeny_kontraktu_dodava() -> None:
+    """Event-on-change dál platí: deep OTM bez změny, ale univerzum živé → hodnota."""
+    specs = [spec(5900.0), spec(5950.0, "P")]
+    chain = chain_for(specs)
+    clock = FrozenClock(NOW)
+    cache = TastyChainCache(clock)
+    fill_cache(cache, clock, chain, [specs[0]], quote_at=NOW - dt.timedelta(minutes=20))
+    fill_cache(cache, clock, chain, [specs[1]], quote_at=NOW - dt.timedelta(seconds=5))
+
+    quotes = tasty_chain_quotes(
+        specs,
+        chain,
+        cache,
+        now_utc_ts=NOW.timestamp(),
+        now_monotonic=1000.0,
+        stream_alive_ts=universe_alive_ts(specs, chain, cache),
+    )
+    assert set(quotes) == set(specs)
+
+
+def test_universe_alive_ts_bez_chain_a_bez_eventu() -> None:
+    specs = [spec(5900.0)]
+    cache = TastyChainCache(FrozenClock(NOW))
+    assert universe_alive_ts(specs, None, cache) is None
+    assert universe_alive_ts(specs, chain_for(specs), cache) is None
