@@ -12,17 +12,27 @@ neklasifikujeme, jen sčítáme. Surové printy se NEUKLÁDAJÍ (podklad jich m�
 miliony za den, viz `trades_recorder`); drží se jen minutový agregát.
 
 Kotva je táž jako u CumΔ: open Globex seance (#638), aby obě řady seděly na
-tutéž osu obchodního dne a daly se číst proti sobě.
+tutéž osu obchodního dne a daly se číst proti sobě. Tisk se do kumulativu
+přičte až uzávěrkou minuty (#1603, vzor stínu `tasty/cumdelta_dx`): roll
+seance tak tisky po openu nezahodí a po restartu se kumulativ naváže z flow
+partice (`restore_cum`).
 """
 
 import datetime as dt
 import logging
 from dataclasses import dataclass
 
+from gexlens_engine.compute.marketclock import CLOSE_HOUR, OPEN_HOUR
+from gexlens_engine.compute.settle import session_bounds
+
 logger = logging.getLogger(__name__)
 
 #: Hodnoty `aggressorSide` z dxFeed → znaménko toku
 _AGGRESSOR_SIGN = {"BUY": 1.0, "SELL": -1.0}
+
+#: Denní pauza Globexu (16:00–17:00 CT): uzávěrka minuty po jejím začátku už
+#: nenese tisky staré seance
+_DAILY_PAUSE = dt.timedelta(hours=OPEN_HOUR - CLOSE_HOUR)
 
 
 @dataclass(frozen=True)
@@ -52,6 +62,9 @@ class FuturesCvdTracker:
         self._minute: dict[str, float] = {}
         self._trades: dict[str, int] = {}
         self._with_aggressor: dict[str, int] = {}
+        #: Štítek poslední uzavřené minuty instrumentu (roll podle něj pozná
+        #: rozdělanou minutu s tisky staré seance)
+        self._last_close: dict[str, dt.datetime] = {}
         self._session_date: dt.date | None = None
 
     def register(self, symbol: str, streamer: str) -> None:
@@ -82,30 +95,42 @@ class FuturesCvdTracker:
         if sign is None or size is None:
             return  # print bez agresora se do toku nepočítá (ale je v `trades`)
         self._with_aggressor[symbol] = self._with_aggressor.get(symbol, 0) + 1
-        flow = sign * size
-        self._cum[symbol] = self._cum.get(symbol, 0.0) + flow
-        self._minute[symbol] = self._minute.get(symbol, 0.0) + flow
+        # Jen do minuty — do kumulativu až `close_minute` (#1603)
+        self._minute[symbol] = self._minute.get(symbol, 0.0) + sign * size
 
     def close_minute(self, symbol: str, ts_min: dt.datetime) -> CvdRow:
-        """Uzavře minutu: bod řady a vynulování minutového agregátu."""
+        """Uzavře minutu: přičte ji do kumulativu, vrátí bod řady a vynuluje minutu."""
         trades = self._trades.get(symbol, 0)
         share = (self._with_aggressor.get(symbol, 0) / trades) if trades else None
+        minute = self._minute.get(symbol, 0.0)
+        self._cum[symbol] = self._cum.get(symbol, 0.0) + minute
         row = CvdRow(
             ts_min=ts_min,
-            cvd_delta=self._minute.get(symbol, 0.0),
-            cvd=self._cum.get(symbol, 0.0),
+            cvd_delta=minute,
+            cvd=self._cum[symbol],
             aggressor_share=share,
         )
+        self._clear_minute(symbol)
+        self._last_close[symbol] = ts_min
+        return row
+
+    def _clear_minute(self, symbol: str) -> None:
         self._minute[symbol] = 0.0
         self._trades[symbol] = 0
         self._with_aggressor[symbol] = 0
-        return row
 
     def roll_session(self, session_date: dt.date) -> bool:
         """Reset kumulativu na hranici Globex seance (#638) — stejná kotva jako CumΔ.
 
-        První volání po startu jen zafixuje seanci BEZ resetu, aby restart
-        uprostřed dne nezahodil dosavadní tok.
+        Maže jen kumulativy (#1603): rozdělaná minuta nese tisky od openu, které
+        přišly před prvním cyklem nové seance (callback streamu běží mimo
+        minutový cyklus), a ty patří do první minuty nové seance. Výjimka je
+        instrument, který od začátku pauzy minutu neuzavřel (front future
+        registrovaný bez běžící pipeline: watchlist nad stropem, cooldown) —
+        jeho rozdělaná minuta nese tok staré seance a zahodí se. Volají ho
+        primáry všech instrumentů; reset provede první v pořadí a platí pro
+        všechny. První volání po startu jen zafixuje seanci BEZ resetu — úroveň
+        běžící seance naváže `restore_cum`.
         """
         if self._session_date == session_date:
             return False
@@ -114,14 +139,28 @@ class FuturesCvdTracker:
         if first:
             return False
         self._cum.clear()
-        self._minute.clear()
-        self._trades.clear()
-        self._with_aggressor.clear()
+        cutoff = session_bounds(session_date)[0] - _DAILY_PAUSE
+        for symbol in list(self._minute):
+            last = self._last_close.get(symbol)
+            if last is None or last < cutoff:
+                self._clear_minute(symbol)
         return True
 
-    def restore_cum(self, symbol: str, base: float) -> None:
-        """Naváže kumulativ z flow partice po restartu uprostřed seance (#638)."""
-        self._cum[symbol] = self._cum.get(symbol, 0.0) + base
+    def has_level(self, symbol: str) -> bool:
+        """Má instrument v běžící seanci úroveň (uzavřená minuta nebo navázání)?"""
+        return symbol in self._cum
+
+    def restore_cum(self, symbol: str, base: float) -> bool:
+        """Naváže kumulativ z flow partice po restartu uprostřed seance (#638, #1603).
+
+        Jen instrument, který v seanci ještě úroveň nemá — pipeline založená
+        znovu uprostřed seance (roll expirace v settle, návrat do watchlistu)
+        sdílí tracker a základ by jinak přičetla podruhé. Vrací, zda navázal.
+        """
+        if symbol in self._cum:
+            return False
+        self._cum[symbol] = base
+        return True
 
     def is_tracking(self, symbol: str) -> bool:
         """Má instrument registrovaný streamer? Bez něj je řada jen prázdná."""
@@ -141,7 +180,9 @@ class FuturesCvdTracker:
                 "streamer": streamer,
                 "trades_minute": trades,
                 "with_aggressor_minute": self._with_aggressor.get(symbol, 0),
-                "cum": round(self._cum.get(symbol, 0.0), 1),
+                # Živá úroveň: uzavřené minuty + rozdělaná (do kumulativu jde
+                # až `close_minute`, #1603)
+                "cum": round(self._cum.get(symbol, 0.0) + self._minute.get(symbol, 0.0), 1),
             }
         return {"futures_cvd": per_symbol}
 

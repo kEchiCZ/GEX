@@ -135,6 +135,39 @@ def test_derived_dir_reserved_for_compute(tmp_path: Path) -> None:
     assert settings.derived_dir == tmp_path / "derived"
 
 
+def test_read_last_futures_cvd_bez_filtru_zdroje_a_preskoci_null(tmp_path: Path) -> None:
+    """#1603: CVD podkladu navazuje z posledního ne-null řádku okna, ať ho psal
+    kterýkoli zdroj CumΔ (bump v6 nasazený v pauze nad midpointovou partici)."""
+    import datetime as dt
+
+    from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, FlowRow
+    from gexlens_engine.storage.parquet_store import read_last_futures_cvd
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    day = dt.date(2026, 7, 16)
+    writer.write_flow(
+        "ES",
+        day,
+        [
+            FlowRow(dt.datetime(2026, 7, 16, 20, 50, tzinfo=dt.UTC), 1.0, 1.0, 5.0, 4360.0),
+            FlowRow(
+                dt.datetime(2026, 7, 16, 20, 51, tzinfo=dt.UTC),
+                None,
+                None,
+                None,
+                None,
+                source=SOURCE_AGGRESSOR,
+            ),
+        ],
+    )
+    paths = [tmp_path / "derived" / "ES" / "flow" / f"{day.isoformat()}.parquet"]
+    start = dt.datetime(2026, 7, 15, 22, 0, tzinfo=dt.UTC)
+    end = dt.datetime(2026, 7, 16, 22, 0, tzinfo=dt.UTC)
+    assert read_last_futures_cvd(paths, start=start, end=end) == 4360.0
+    # Okno jiné seance → None
+    assert read_last_futures_cvd(paths, start=end, end=end + dt.timedelta(days=1)) is None
+
+
 def test_read_last_cum_delta_okno_seance(tmp_path: Path) -> None:
     """#638: seed CumΔ čte jen řádky v okně seance, přes dvě UTC partice."""
     import datetime as dt
