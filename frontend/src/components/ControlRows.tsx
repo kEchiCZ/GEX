@@ -274,7 +274,7 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           value={oiSource}
           onChange={(event) => setOiSource(event.target.value as OiSource)}
           aria-label="Zdroj OI"
-          title="Měřené = ranní OI archiv (mění se 1× denně). FA odhad = OI + α·klasifikovaný intradenní tok (ADR-0011) — vidí i dnes postavený positioning, ale je to model, ne měření. Volba se pamatuje per symbol."
+          title="Měřené = ranní OI archiv (mění se 1× denně). FA odhad = ranní OI + ρ·dnešní objem strany (od mechaniky v6, ADR-0061; do v6 α·klasifikovaný tok, ADR-0011) — vidí i dnes postavený positioning, ale je to model, ne měření. Volba se pamatuje per symbol."
         >
           {(Object.keys(OI_SOURCE_LABELS) as OiSource[]).map((value) => (
             <option key={value} value={value}>

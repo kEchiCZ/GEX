@@ -180,7 +180,8 @@ export const NEWS_MARKER_FILTERS: readonly NewsMarkerFilter[] = ['all', 'importa
 export const NEWS_MARKER_FILTER_KEY = 'newsMarkerFilter.v2'
 
 /** Zdroj OI pro heatmapu a Dyn GEX (#232 fáze 2): měřený ranní archiv, nebo
-flow-adjusted odhad OI_est = OI + α·net (ADR-0011). Default VŽDY měřené —
+flow-adjusted odhad OI_est = OI + ρ·objem strany (od v6, ADR-0061; do v6 OI + α·net,
+ADR-0011). Default VŽDY měřené —
 FA je opt-in a UI ho vždy značí jako odhad. Persistuje se per symbol. */
 export type OiSource = 'measured' | 'fa'
 export const OI_SOURCES: readonly OiSource[] = ['measured', 'fa']

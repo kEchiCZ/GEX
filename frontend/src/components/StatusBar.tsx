@@ -3,15 +3,25 @@ import { daysLabel, faAlphaBadge, useFaAlpha, type FaAlphaBadge } from '../hooks
 import { CUMDELTA_SOURCE_AGGRESSOR } from '../replay/loader'
 import { useAppState } from '../state/AppState'
 
-/** Tooltip badge FA α — odrážky a `\n` (vzor `ivRankTooltip`). */
+/** Tooltip badge FA — odrážky a `\n` (vzor `ivRankTooltip`). */
 function faAlphaTooltip(badge: FaAlphaBadge): string {
   if (badge.kind === 'uncalibrated') {
     return [
-      `FA odhad OI je vypnutý do kalibrace z tisků (ADR-0057 bod 6): ${badge.days} z ${badge.minDays} platných dnů.`,
-      '• α se kalibruje z čistého objemu tisků se stranou agresora od burzy',
-      '• den s mezerou tisků za otevřeného trhu bod nedá',
-      '• stav z midpoint testu (před mechanikou v6) je jiná veličina a nepočítá se',
+      `FA odhad OI je vypnutý do kalibrace ρ (ADR-0061): ${badge.days} z ${badge.minDays} platných dnů.`,
+      '• ρ se kalibruje každé ráno z objemu strany za seanci proti ΔOI dalšího rána',
+      '• den s mezerou snímků řetězu za otevřeného trhu bod nedá',
+      '• α z čistého toku (mechanika v5) je jiná veličina a nepočítá se',
       '• do té doby engine FA vrstvu (odhad OI, FA levels, FA profil) nepíše',
+    ].join('\n')
+  }
+  if (badge.source === 'volume') {
+    return [
+      'Kalibrovaná ρ flow-adjusted odhadu OI (ADR-0061):',
+      '• ρ = podíl objemu strany za seanci, který se ráno propíše do OI',
+      '• odhad = ranní OI + ρ·objem strany, bez znaménka toku',
+      '• FA OI jen přibývá — zavírání pozic nevidí',
+      '• kalibrace z řetězu zítřejší expirace (celou seanci sekundár), medián přes strany, EMA přes dny',
+      '• počet = kolik platných dnů už kalibrace započetla',
     ].join('\n')
   }
   return [
@@ -38,7 +48,7 @@ function formatBytes(bytes?: number): string {
 
 export function StatusBar() {
   const { status, symbol } = useAppState()
-  // Kalibrovaná FA α (#232 fáze 2); pod tisky „nekalibrováno n/5“ (ADR-0057 bod 6)
+  // Kalibrovaná FA α (#232 fáze 2), pod v6 ρ z objemu (ADR-0061); bez ní „nekalibrováno n/5“
   const faAlpha = faAlphaBadge(
     useFaAlpha(),
     symbol,
@@ -74,7 +84,7 @@ export function StatusBar() {
       {faAlpha && (
         <span data-testid="status-fa-alpha" title={faAlphaTooltip(faAlpha)}>
           {faAlpha.kind === 'calibrated'
-            ? `FA α=${faAlpha.alpha.toFixed(2)} · ${daysLabel(faAlpha.days)}`
+            ? `FA ${faAlpha.source === 'volume' ? 'ρ' : 'α'}=${faAlpha.alpha.toFixed(2)} · ${daysLabel(faAlpha.days)}`
             : `FA nekalibrováno ${faAlpha.days}/${faAlpha.minDays}`}
         </span>
       )}

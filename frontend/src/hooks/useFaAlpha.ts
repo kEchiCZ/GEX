@@ -1,16 +1,21 @@
-/** Kalibrovaná FA α per symbol (#232 fáze 2) — zdroj pro badge ve stavové liště.
+/** Kalibrovaná FA α / ρ per symbol (#232 fáze 2, ADR-0061) — zdroj pro badge ve stavové liště.
 
-α se mění nejvýš jednou denně (ranní kalibrace po OI archivu), takže stačí
+Faktor se mění nejvýš jednou denně (ranní kalibrace po OI archivu), takže stačí
 načtení při startu a obnova à 15 minut. Bez dat (API neběží) vrací null
 a badge se neukáže. Co badge ukáže, rozhoduje `faAlphaBadge` proti zdroji
-CumΔ běžícího enginu (ADR-0057 bod 6, #1632).
+CumΔ běžícího enginu (ADR-0057 bod 6, #1632, #1666).
 */
 import { useEffect, useState } from 'react'
 import { API_BASE } from '../config'
 import { CUMDELTA_SOURCE_AGGRESSOR } from '../replay/loader'
 
-/** Zdroj netu kalibrace α (ADR-0057 bod 8); NULL ze starších stavů = midpoint. */
-export type FaAlphaSource = 'midpoint' | 'aggressor'
+/** Zdroj kalibrace pod v6 (engine `fa_calibration.SOURCE_VOLUME`, ADR-0061 bod 4):
+ρ = podíl objemu strany za seanci, který se propíše do OI. */
+export const FA_SOURCE_VOLUME = 'volume'
+
+/** Zdroj kalibrace: α z netu midpoint testu (ADR-0057 bod 8; NULL ze starších
+stavů = midpoint), α z netu tisků (`aggressor`) nebo ρ z objemu (`volume`, ADR-0061). */
+export type FaAlphaSource = 'midpoint' | 'aggressor' | 'volume'
 
 export interface FaAlphaState {
   alpha: number
@@ -39,6 +44,11 @@ interface AlphaRow {
   source?: string | null
 }
 
+function parseSource(source: string | null | undefined): FaAlphaSource {
+  if (source === FA_SOURCE_VOLUME) return 'volume'
+  return source === CUMDELTA_SOURCE_AGGRESSOR ? 'aggressor' : 'midpoint'
+}
+
 export function useFaAlpha(): FaAlphaPayload | null {
   const [payload, setPayload] = useState<FaAlphaPayload | null>(null)
 
@@ -55,7 +65,7 @@ export function useFaAlpha(): FaAlphaPayload | null {
               bySymbol[row.symbol] = {
                 alpha: row.alpha,
                 days: Number(row.days) || 0,
-                source: row.source === CUMDELTA_SOURCE_AGGRESSOR ? 'aggressor' : 'midpoint',
+                source: parseSource(row.source),
               }
             }
           }
@@ -80,16 +90,17 @@ export function useFaAlpha(): FaAlphaPayload | null {
   return payload
 }
 
-/** Badge FA α pro symbol podle zdroje CumΔ běžícího enginu (zrcadlí `live_alpha`).
+/** Badge FA pro symbol podle zdroje CumΔ běžícího enginu (zrcadlí `live_alpha`).
 
 - Pod midpointem (mechanika v5; zdroj neznámý = starší engine = midpoint) FA
-  jede s uloženou α → „FA α=…“; bez stavu běží default z konfigurace a badge
-  se nekreslí (beze změny proti stavu před #1632).
-- Pod tisky (v6, ADR-0057 bod 6) jede FA jen se stavem z tisků s aspoň
-  `minDays` dny, jinak je vypnutá → „nekalibrováno n/5“; stav z midpointu je
-  jiná veličina a počítá se jako 0 dnů. Bez stavu „0/5“, ne default α — ale
-  jen u symbolu, který CumΔ tracker má (`/status.cumdelta_coverage`): ad-hoc
-  pohled FA nemá vůbec.
+  jede s uloženým faktorem → „FA α=…“ (u stavu `volume` po návratu z v6 „FA ρ=…“);
+  bez stavu běží default z konfigurace a badge se nekreslí (beze změny proti
+  stavu před #1632).
+- Pod tisky (v6, ADR-0061 bod 4) jede FA jen se stavem ρ z objemu (`volume`)
+  s aspoň `minDays` dny, jinak je vypnutá → „nekalibrováno n/5“; α z netu
+  (midpoint i tisky) je jiná veličina a počítá se jako 0 dnů. Bez stavu „0/5“,
+  ne default α — ale jen u symbolu, který CumΔ tracker má
+  (`/status.cumdelta_coverage`): ad-hoc pohled FA nemá vůbec.
 */
 export function faAlphaBadge(
   payload: FaAlphaPayload | null,
@@ -104,13 +115,13 @@ export function faAlphaBadge(
   }
   const { minDays } = payload
   if (minDays === null) return null // starší API bez prahu — nehádat
-  if (state && state.source === CUMDELTA_SOURCE_AGGRESSOR && state.days >= minDays) {
+  if (state && state.source === 'volume' && state.days >= minDays) {
     return { kind: 'calibrated', ...state }
   }
   if (!state && !trackedSymbols.includes(symbol)) return null
   return {
     kind: 'uncalibrated',
-    days: state?.source === CUMDELTA_SOURCE_AGGRESSOR ? state.days : 0,
+    days: state?.source === 'volume' ? state.days : 0,
     minDays,
   }
 }
