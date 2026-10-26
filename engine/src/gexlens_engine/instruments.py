@@ -1366,12 +1366,13 @@ class InstrumentPipeline:
         await self._watch_repair(now, metrics)
 
         # Stav mapy (#1245) — PŘED detektorem, ať feature log nese stav téže
-        # minuty; max pain sdílí s tendencí (obnova jen při novém snímku OI)
+        # minuty; max pain sdílí s tendencí (obnova jen při novém snímku OI).
+        # Pod v6 jen z živé ceny (#1657): bez ní je stav minuty neznámý
         if self.map_state is not None:
             try:
                 await self.map_state.on_minute(
                     now,
-                    spot,
+                    live_spot,
                     self.runtime,
                     self.tendency_engine.max_pain if self.tendency_engine is not None else None,
                 )
@@ -1395,10 +1396,11 @@ class InstrumentPipeline:
                 await self.tendency_engine.on_minute(now, live_spot, self.runtime)
             except Exception:
                 logger.exception("Indikátor tendence %s selhal — pokračuji", self.symbol)
-        # Sběrač kandidátů T6 (#256) — sám se hlídá na jeden běh denně
+        # Sběrač kandidátů T6 (#256) — sám se hlídá na jeden běh denně; pod v6
+        # jen z živé ceny (#1657), bez ní čeká nejvýš do US openu
         if self.t6_collector is not None:
             try:
-                await self.t6_collector.on_minute(now, spot, self.runtime)
+                await self.t6_collector.on_minute(now, live_spot, self.runtime)
             except Exception:
                 logger.exception("T6 sběrač %s selhal — pokračuji", self.symbol)
         # Gamma útes (#576) — jednou po settle; pád nesmí shodit sběr

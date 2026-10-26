@@ -320,3 +320,30 @@ async def test_collector_po_rollu_v_settle_neprepise_agregat_seance(tmp_path: Pa
         )
     row = repo.history_before("ES", TS.date() + dt.timedelta(days=1), window=1)[0]
     assert row.sample_minutes == 1
+
+
+async def test_collector_bez_zive_ceny_stav_neznamy(tmp_path: Path) -> None:
+    """#1657 (Rozhodnuto 26. 10. A): pod v6 bez živé ceny (None) je stav minuty
+    neznámý — žádný zmrzlý předchozí stav, `thin_map` null, vzorek seance se
+    nepřidá; agregát po settle jde jen z minut s cenou."""
+    repo = MapStateRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'm.sqlite'}"))
+    repo.ensure_schema()
+    levels = GexLevels(
+        flip=7600.0, call_wall=7700.0, put_wall=7550.0, centroid=7620.0, total_gex=2000.0,
+        call_wall_dom=0.5, put_wall_dom=0.4,
+    )  # fmt: skip
+    runtime = FakeRuntime(levels, None)
+    collector = MapStateCollector(symbol="ES", repository=repo, data_dir=tmp_path, backfill=False)
+    await collector.on_minute(TS, 7650.0, cast(EngineRuntime, runtime), 7625.0)
+    assert collector.state is not None and runtime.thin_map is False
+
+    for minute in (1, 2):
+        await collector.on_minute(
+            TS + dt.timedelta(minutes=minute), None, cast(EngineRuntime, runtime), 7625.0
+        )
+        assert collector.state is None and runtime.thin_map is None
+
+    await collector.on_minute(settle_ts(TS.date()), 7650.0, cast(EngineRuntime, runtime), 7625.0)
+    row = repo.history_before("ES", TS.date() + dt.timedelta(days=1), window=1)[0]
+    assert row.sample_minutes == 1  # jen minuta s cenou
+    assert row.thin_share == 0.0

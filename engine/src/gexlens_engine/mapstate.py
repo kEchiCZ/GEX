@@ -167,8 +167,9 @@ class MapStateCollector:
     _thin_flags: list[bool] = field(default_factory=list, init=False)
 
     async def on_minute(
-        self, now: dt.datetime, spot: float, runtime: EngineRuntime, max_pain: float | None
+        self, now: dt.datetime, spot: float | None, runtime: EngineRuntime, max_pain: float | None
     ) -> None:
+        """Stav minuty z ceny `spot`; None = živá cena chybí (pod v6, #1657)."""
         session = trading_session_date(now)
         if self.backfill and not self._backfilled:
             self._backfilled = True  # jeden pokus per proces i při chybě
@@ -180,33 +181,42 @@ class MapStateCollector:
             self._samples_for = session
             self._gex_abs, self._gamma_abs, self._dominance, self._thin_flags = [], [], [], []
 
-        levels = runtime.last_gex_levels
-        profile = runtime.last_profile
-        inputs = MapInputs(
-            ts_min=now,
-            spot=spot,
-            total_gex=levels.total_gex if levels else None,
-            gamma_at_price=gamma_at_price(profile, spot) if profile else None,
-            call_wall_dom=levels.call_wall_dom if levels else None,
-            put_wall_dom=levels.put_wall_dom if levels else None,
-            flip=levels.flip if levels else None,
-            call_wall=levels.call_wall if levels else None,
-            put_wall=levels.put_wall if levels else None,
-            max_pain=max_pain,
-        )
-        state = map_state(inputs, self._history)
-        self.state = state
-        runtime.thin_map = state.thin
+        if spot is None:
+            # Pod v6 bez živé ceny (#1657, Rozhodnuto 26. 10. A) je stav minuty
+            # neznámý: stará cena by posunula gamma u ceny i slitou mapu a
+            # předchozí stav by se tvářil jako aktuální (SPEC 3.7). /status pak
+            # klíč nemá, verdikt a feature log nesou null. Vzorek seance se
+            # nepřidá; agregát po settle níž jde ze vzorků minut s cenou.
+            self.state = None
+            runtime.thin_map = None
+        else:
+            levels = runtime.last_gex_levels
+            profile = runtime.last_profile
+            inputs = MapInputs(
+                ts_min=now,
+                spot=spot,
+                total_gex=levels.total_gex if levels else None,
+                gamma_at_price=gamma_at_price(profile, spot) if profile else None,
+                call_wall_dom=levels.call_wall_dom if levels else None,
+                put_wall_dom=levels.put_wall_dom if levels else None,
+                flip=levels.flip if levels else None,
+                call_wall=levels.call_wall if levels else None,
+                put_wall=levels.put_wall if levels else None,
+                max_pain=max_pain,
+            )
+            state = map_state(inputs, self._history)
+            self.state = state
+            runtime.thin_map = state.thin
 
-        if not outside_us_rth(now):
-            if state.gex_abs is not None:
-                self._gex_abs.append(state.gex_abs)
-            if state.gamma_abs is not None:
-                self._gamma_abs.append(state.gamma_abs)
-            doms = [d for d in (inputs.call_wall_dom, inputs.put_wall_dom) if d is not None]
-            if doms:
-                self._dominance.append(max(doms))
-            self._thin_flags.append(state.thin)
+            if not outside_us_rth(now):
+                if state.gex_abs is not None:
+                    self._gex_abs.append(state.gex_abs)
+                if state.gamma_abs is not None:
+                    self._gamma_abs.append(state.gamma_abs)
+                doms = [d for d in (inputs.call_wall_dom, inputs.put_wall_dom) if d is not None]
+                if doms:
+                    self._dominance.append(max(doms))
+                self._thin_flags.append(state.thin)
 
         # Agregát se píše v prvním cyklu po settle, bez odkladu: vzorky jsou
         # v paměti (poslední z cyklu minuty před settle), na zápis partic se
