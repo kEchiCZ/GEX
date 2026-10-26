@@ -128,7 +128,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Chipy stavu trhu</strong></td>
-<td><strong>Settle watch</strong> — segment „settle 22:00 · nad/pod X ±d b&quot;: klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?&quot; na jeden pohled. <strong>Chip „odpadá X % gammy&quot;</strong> — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. <strong>Chip ⌛ kalendáře expirací</strong> (v1.20, #1189) — jen v kvartálním expiračním týdnu: „roll proběhl 10. 9. · expirace U6 pá 18. 9. 15:30&quot;, „OPEX týden&quot;, „kvartální expirace U6 dnes 15:30 (SOQ)&quot;, „po OPEXu — bez opční podpory&quot;; tooltip vysvětluje, co fáze znamená. Stejné ⌛ jsou v ose grafu (jako TradingView) a v Briefingu je karta <strong>Expirační týden</strong>. <strong>Chip ◌ „tenká mapa (n/3)&quot;</strong> (v1.21, #1245) — jen když pozicování, které by cenu tlumilo nebo pinovalo, právě chybí: aspoň dvě ze tří podmínek — <em>tenká gamma</em> (celkové GEX i gamma u ceny pod 25. percentilem posledních 20 seancí téhož symbolu; prahy jsou relativní, ES a NQ se liší o řády), <em>slabé zdi</em> (dominance obou &lt; 25 %), <em>slitá mapa</em> (flip, obě zdi a max pain do 0,25 % ceny od sebe — referenční 21. 9. 2026 po kvartálním OPEX: vše na 7 650). Tooltip vypisuje ✓/✗/? per podmínku. Co z toho plyne: nic netlumí a nic nepinuje, pohyby jsou delší v obou směrech, zdi jen orientační, setupy od zdi a pin k Max Pain nedávají smysl, dokud se mapa neobnoví. Liší se od útesu gammy: útes říká, co po settle <strong>odpadlo</strong>, tenká mapa, co <strong>teď zbylo</strong> (a může nastat i mimo OPEX, po prudkém pohybu mimo pozicování). Fáze 1 jen ukazuje, nic se neblokuje.</td>
+<td><strong>Settle watch</strong> — segment „settle 22:00 · nad/pod X ±d b&quot;: klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?&quot; na jeden pohled. <strong>Chip „odpadá X % gammy&quot;</strong> — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. <strong>Chip ⌛ kalendáře expirací</strong> (v1.20, #1189) — jen v kvartálním expiračním týdnu: „roll proběhl 10. 9. · expirace U6 pá 18. 9. 15:30&quot;, „OPEX týden&quot;, „kvartální expirace U6 dnes 15:30 (SOQ)&quot;, „po OPEXu — bez opční podpory&quot;; tooltip vysvětluje, co fáze znamená. Stejné ⌛ jsou v ose grafu (jako TradingView) a v Briefingu je karta <strong>Expirační týden</strong>. <strong>Chip ◌ „tenká mapa (n/3)&quot;</strong> (v1.21, #1245) — jen když pozicování, které by cenu tlumilo nebo pinovalo, právě chybí: aspoň dvě ze tří podmínek — <em>tenká gamma</em> (celkové GEX i gamma u ceny pod 25. percentilem posledních 20 seancí téhož symbolu; prahy jsou relativní, ES a NQ se liší o řády), <em>slabé zdi</em> (dominance obou &lt; 25 %), <em>slitá mapa</em> (flip, obě zdi a max pain do 0,25 % ceny od sebe — referenční 21. 9. 2026 po kvartálním OPEX: vše na 7 650). Tooltip vypisuje ✓/✗/? per podmínku. Co z toho plyne: nic netlumí a nic nepinuje, pohyby jsou delší v obou směrech, zdi jen orientační, setupy od zdi a pin k Max Pain nedávají smysl, dokud se mapa neobnoví. Liší se od útesu gammy: útes říká, co po settle <strong>odpadlo</strong>, tenká mapa, co <strong>teď zbylo</strong> (a může nastat i mimo OPEX, po prudkém pohybu mimo pozicování). Fáze 1 jen ukazuje, nic se neblokuje. Od mechaniky v6 (#1657) se stav mapy počítá jen z živé ceny: bez ní (výpadek zdrojů, zavřený trh o víkendu a v denní pauze) je neznámý a chip chybí.</td>
 </tr>
 <tr>
 <td><strong>Ukazatele pokrytí dat</strong></td>
@@ -136,7 +136,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Přepínač OI</strong></td>
-<td><strong>Měřené / FA odhad</strong> — zdroj Open Interest pro heatmapu i profil (persistováno per symbol, default Měřené). FA odhad = OI dopočtené z klasifikovaného toku (netflow×α): k dispozici dřív než publikovaný archiv, ale je to odhad — při pochybnosti věř Měřeným. FA má i vlastní Dyn GEX plochu v dropdownu Dyn plocha a vlastní FA levels. <strong>Minuta bez FA řad je v režimu FA mezera</strong> (ADR-0057 bod 4, #1632): OI vrstvy, Dyn GEX podklad i GEX křivka pravého profilu tam nic nekreslí, poslední FA profil se přes ni nedrží a graf tiše nepřejde na měřené OI. Takovou minutu dělá mezera tisků (od mechaniky v6), FA vypnutá do kalibrace (prvních 5 dnů v6) nebo řetěz po settle; díra ve sběru (minuta bez snímku) se kreslí stejně jako v měřeném režimu. Den úplně bez FA ukáže badge <strong>„FA odhad · den bez FA“</strong> — tak vypadá i sekundární expirace (FA píše jen aktivní řetěz) a ad-hoc pohled; měřené OI vrátí přepínač OI → Měřené.</td>
+<td><strong>Měřené / FA odhad</strong> — zdroj Open Interest pro heatmapu i profil (persistováno per symbol, default Měřené). FA odhad = ranní OI + ρ·objem strany za seanci (od mechaniky v6, ADR-0061; do v6 ranní OI + α·klasifikovaný čistý tok): k dispozici dřív než publikovaný archiv, ale je to odhad — při pochybnosti věř Měřeným. Od v6 FA OI jen přibývá: zavírání pozic nevidí, takže strike, kde se dnes zavírá, nadhodnotí. FA má i vlastní Dyn GEX plochu v dropdownu Dyn plocha a vlastní FA levels. <strong>Minuta bez FA řad je v režimu FA mezera</strong> (ADR-0057 bod 4, #1632): OI vrstvy, Dyn GEX podklad i GEX křivka pravého profilu tam nic nekreslí, poslední FA profil se přes ni nedrží a graf tiše nepřejde na měřené OI. Takovou minutu dělá od mechaniky v6 minuta bez měřeného objemu IBKR v řetězu, FA vypnutá do kalibrace (bez 5 platných dnů ρ) nebo řetěz po settle; díra ve sběru (minuta bez snímku) se kreslí stejně jako v měřeném režimu. Den úplně bez FA ukáže badge <strong>„FA odhad · den bez FA“</strong> — tak vypadá i sekundární expirace (FA píše jen aktivní řetěz) a ad-hoc pohled; měřené OI vrátí přepínač OI → Měřené.</td>
 </tr>
 <tr>
 <td><strong>Lišta grafu</strong></td>
@@ -577,7 +577,7 @@ backfill, jiný den nebo symbol, #977).</p>
 </li>
 <li><p>Tlačítko <strong>Σ</strong> = souhrn přes všechny sbírané expirace tohoto instrumentu (pondělní + úterní řetěz…). Hlavička se změní na „Σ expirací&quot;; heatmapa zůstává u zvolené expirace. Celkový positioning bez přepínání.</p>
 </li>
-<li><p><strong>ⓘ v hlavičce</strong> (v1.18, #1126) = <strong>Metodika</strong>: najetím odpověď na nejčastější otázku „odkud ta čísla jsou&quot; — OI z ranního archivu CME přes IBKR (jednou denně, přes den se nemění; striky mimo obálku IBKR nesou denní OI z tastytrade), FA odhad <code>OI_est = ranní OI + α·klasifikovaný tok</code> jako model, Vol a OI Δ jako Δ-vážené složky (proto „kontrakty&quot; ≠ hrubé počty), Prémie $ = objem × mid × multiplikátor. Kliknutí otevře tento manuál.</p>
+<li><p><strong>ⓘ v hlavičce</strong> (v1.18, #1126) = <strong>Metodika</strong>: najetím odpověď na nejčastější otázku „odkud ta čísla jsou&quot; — OI z ranního archivu CME přes IBKR (jednou denně, přes den se nemění; striky mimo obálku IBKR nesou denní OI z tastytrade), FA odhad <code>OI_est = ranní OI + ρ·objem strany</code> (do v6 <code>+ α·klasifikovaný tok</code>) jako model, Vol a OI Δ jako Δ-vážené složky (proto „kontrakty&quot; ≠ hrubé počty), Prémie $ = objem × mid × multiplikátor. Kliknutí otevře tento manuál.</p>
 </li>
 <li><p>Najetí myší na řádek zvýrazní strike v celé aplikaci (crosshair) a dole zobrazí <strong>tooltip</strong>: OI call/put, Vol call/put, <strong>ΔOI vs. včera C/P</strong> (kde přes noc přibyly/ubyly pozice; jen per expirace, v Σ režimu se neukazuje), vzdálenost od spotu</p>
 </li>
@@ -1269,7 +1269,7 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 </tr>
 <tr>
 <td><strong>Ranní checklist</strong> (v1.18, #1241)</td>
-<td>Sedm bodů, které 21. 9. 2026 (trendový den po kvartálním OPEX, NQ +580 b od 15:30) měly odpověď v datech, ale byly roztroušené po panelech: <strong>útes gammy</strong> minulé seance (≥ 50 % = den rozsahu, ne pinu), <strong>stav mapy</strong> (v1.21, #1245: tenká mapa = nic netlumí a nic nepinuje, setupy od zdi a pin vynechat; „—&quot; = engine stav nevyhodnocuje), <strong>vyšší TF trend</strong> (bias dne), <strong>nejbližší zeď s dominancí</strong> (&lt; 25 % = slabá zeď → průraz pravděpodobnější než odraz), <strong>gap vůči PDC a flipu</strong> (≥ 0,4 % a držení = komprese před průrazem ve směru gapu), <strong>tendence a Max Pain</strong> (váhu mají až posledních 90 min do expirace; přes den jen informace, dokud se mapa hýbe), <strong>riziko</strong> (max 50 $ / obchod, −100 $ = konec dne, 15 min pauza po stopu, max 4 obchody). ▲ = signál pro dnešek, ● = sledovat, ○ = v normálu, — = bez dat. Viz kap. 21b.</td>
+<td>Sedm bodů, které 21. 9. 2026 (trendový den po kvartálním OPEX, NQ +580 b od 15:30) měly odpověď v datech, ale byly roztroušené po panelech: <strong>útes gammy</strong> minulé seance (≥ 50 % = den rozsahu, ne pinu), <strong>stav mapy</strong> (v1.21, #1245: tenká mapa = nic netlumí a nic nepinuje, setupy od zdi a pin vynechat; „—&quot; = engine stav nevyhodnocuje, od mechaniky v6 i minuta bez živé ceny, #1657), <strong>vyšší TF trend</strong> (bias dne), <strong>nejbližší zeď s dominancí</strong> (&lt; 25 % = slabá zeď → průraz pravděpodobnější než odraz), <strong>gap vůči PDC a flipu</strong> (≥ 0,4 % a držení = komprese před průrazem ve směru gapu), <strong>tendence a Max Pain</strong> (váhu mají až posledních 90 min do expirace; přes den jen informace, dokud se mapa hýbe), <strong>riziko</strong> (max 50 $ / obchod, −100 $ = konec dne, 15 min pauza po stopu, max 4 obchody). ▲ = signál pro dnešek, ● = sledovat, ○ = v normálu, — = bez dat. Viz kap. 21b.</td>
 </tr>
 <tr>
 <td><strong>Trend</strong> (v1.16, #1089)</td>
@@ -1730,7 +1730,7 @@ běží CumΔ dál z tisků tastytrade a tyto setupy stojí jen při mezeře tis
 </tr>
 <tr>
 <td><strong>T6 kandidát</strong></td>
-<td>Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech</td>
+<td>Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech. Jen v obchodní den s US openem (o víkendu a svátku NYSE ne)</td>
 <td>Kandidát vzorce T6 (vyp.)</td>
 </tr>
 <tr>
@@ -2111,14 +2111,19 @@ velikost proher. Tooltip dlaždice i karty nese celý dosazený výpočet.</p>
 market data linek od minulého údaje (registr subskripcí: sweep dávka +
 trvalé streamy), ne konfigurační konstanta. Strop účtu je 100 linek;
 typická špička sweep okna je ~85 %.</li>
-<li><strong>α badge</strong> (u FA odhadu OI) — kalibrovaná hodnota alfa per symbol + počet
-kalibračních dnů, v tooltipu i zdroj čistého toku; do první kalibrace jede
-engine na defaultu 0,4 a badge se nekreslí. Od mechaniky v6 (#1403) se α
-kalibruje znovu z tisků se stranou agresora a FA odhad je vypnutý, dokud nemá
-5 platných dnů (ADR-0057 bod 6): badge ukáže <strong>„FA nekalibrováno n/5“</strong>.
-Stav kalibrovaný z midpointu je jiná veličina a počítá se jako 0 dnů, bez
-stavu „0/5“ (ne default α); ad-hoc pohled FA nemá a badge se u něj nekreslí
-(#1632).</li>
+<li><strong>Badge FA α / ρ</strong> (u FA odhadu OI) — kalibrovaný faktor per symbol + počet
+kalibračních dnů, v tooltipu jeho význam.<ul>
+<li>Do mechaniky v6 <strong>„FA α=0.34 · 12 dní“</strong>: α čistého toku z midpoint testu; do první
+kalibrace jede engine na defaultu 0,4 a badge se nekreslí.</li>
+<li>Od v6 (#1403, ADR-0061) <strong>„FA ρ=0.27 · 16 dní“</strong>: ρ = podíl objemu strany za seanci,
+který se ráno propíše do OI. Engine ho každé ráno kalibruje z řetězu zítřejší expirace
+proti skutečnému ΔOI (medián přes strany, EMA přes dny). Den s mezerou snímků řetězu
+za otevřeného trhu bod nedá. Díky zpětné kalibraci FA jede od bumpu hned.</li>
+<li>Bez 5 platných dnů ρ je FA vypnutý a badge ukáže <strong>„FA nekalibrováno n/5“</strong>. α z čistého
+toku je jiná veličina a počítá se jako 0 dnů, bez stavu „0/5“ (ne default α);
+ad-hoc pohled FA nemá a badge se u něj nekreslí (#1632, #1666).</li>
+</ul>
+</li>
 <li><strong>Catch-up</strong> — první minuty po startu enginu jsou označené příznakem
 (CumΔ má vysvětlující popisek): kumulativy se dopočítávají ze session
 archivu, ne od nuly.</li>
@@ -2743,7 +2748,7 @@ i s plánovaným stopem.</li>
 </tr>
 <tr>
 <td><strong>FA odhad OI</strong></td>
-<td>OI dopočtené z klasifikovaného toku (netflow×α) místo změřeného archivu — dostupné dřív, ale je to odhad; přepínač OI: Měřené/FA odhad, kalibrovaná α ve stavové liště (od v6 „nekalibrováno n/5“, dokud nemá 5 dnů z tisků). Minuta bez FA řad je mezera, ne měřené OI.</td>
+<td>Odhad OI místo změřeného archivu: od mechaniky v6 ranní OI + ρ·objem strany za seanci (ADR-0061, jen růst OI), do v6 ranní OI + α·klasifikovaný čistý tok — dostupné dřív, ale je to odhad; přepínač OI: Měřené/FA odhad, kalibrovaný faktor ve stavové liště („FA ρ“, bez 5 platných dnů „nekalibrováno n/5“). Minuta bez FA řad je mezera, ne měřené OI.</td>
 <td></td>
 <td></td>
 </tr>
@@ -3120,7 +3125,7 @@ podkladu</strong>, ne absolutní čísla.</p>
 </tr>
 <tr>
 <td><strong>FA levels</strong> (flow-adjusted)</td>
-<td>Flip/walls počítané z odhadu OI = ranní OI + dnešní klasifikovaný tok — ukazují stěhování úrovní dřív, než to potvrdí zítřejší OI archiv.</td>
+<td>Flip/walls počítané z odhadu OI (od v6 ranní OI + ρ·dnešní objem strany, do v6 + klasifikovaný čistý tok) — ukazují stěhování úrovní dřív, než to potvrdí zítřejší OI archiv.</td>
 </tr>
 <tr>
 <td><strong>SentIndex</strong></td>
