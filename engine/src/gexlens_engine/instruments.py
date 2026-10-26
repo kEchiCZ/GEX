@@ -88,6 +88,8 @@ logger = logging.getLogger(__name__)
 
 # OI retry každých ~30 minutových cyklů (CME publikuje OI jednou denně ráno, ADR-0001)
 OI_RETRY_CYCLES = 30
+#: Kdy po publikačním okně se ohlásí tasty křídla bez změny (#1611, Rozhodnuto 26. 10.)
+WIDE_OI_STALE_AFTER = dt.timedelta(minutes=60)
 # Strop odkladu po opakovaném selhání setupu (neznámý symbol) — cyklů do dalšího pokusu
 SETUP_RETRY_CYCLES = 30
 # První odklad (#457): dočasná příčina (přetažená market data konkurenční relací)
@@ -440,6 +442,9 @@ class InstrumentPipeline:
     # jednou za den a znovu až po úspěšném čtení. Opakovat tutéž větu à 30 min
     # je spam, který uživatele naučí zvonek ignorovat.
     _oi_alerted_day: dt.date | None = field(default=None, repr=False)
+    #: Stáří tasty křídel OI (#1611): (poslední změna, nesou dnešní publikaci?)
+    wide_oi_state: tuple[dt.datetime | None, bool | None] | None = field(default=None, repr=False)
+    _wide_oi_alerted_day: dt.date | None = field(default=None, repr=False)
     # Stav rozvrhu CME z minulého cyklu (#1307) — z něj hrana otevření trhu.
     # None před prvním cyklem: start v zavřeném trhu (víkend, pauza Globexu =
     # okno nasazení) není hrana zavření a první archiv nezahodí (#1674)
@@ -541,6 +546,53 @@ class InstrumentPipeline:
         """
         day = now.date()
         return is_trading_session(day) and now >= self.settings.oi_publication_utc(day)
+
+    async def _watch_wide_oi(self, now: dt.datetime) -> None:
+        """Stáří tasty křídel OI aktivní expirace (#1611): stav pro /status a hranový alert.
+
+        Křídla mimo obálku IBKR nesou ~55 % Σ OI 0DTE (#1605) a stojí na nich OI
+        zdi, Max Pain a P/C. Když tasty vypadne přes publikační okno, zůstanou na
+        předchozí publikaci a nic to neoznačí. `wide_oi_state` = (poslední změna,
+        nesou dnešní publikaci?): None = publikaci dne nečekáme (před oknem,
+        víkend, svátek — `_oi_published`) nebo den křídla nemá (ad-hoc pohled,
+        tasty mlčí od půlnoci — to hlásí `feed_silent` #1228 a #1604).
+
+        Alert (Rozhodnuto 26. 10., A): v publikace + `WIDE_OI_STALE_AFTER`, jen při
+        otevřeném trhu v obchodní den a nejvýš jednou za den (#1307).
+        """
+        if not self.settings.tasty_wide_oi:
+            return
+        day = now.date()
+        last = await asyncio.to_thread(
+            self.oi_repository.wings_last_change, self.symbol, self.runtime.expiry, day
+        )
+        publication = self.settings.oi_publication_utc(day)
+        fresh = None if last is None or not self._oi_published(now) else last >= publication
+        self.wide_oi_state = (last, fresh)
+        if (
+            fresh is not False
+            or now < publication + WIDE_OI_STALE_AFTER
+            or is_market_closed(now)
+            or self._wide_oi_alerted_day == day
+        ):
+            return
+        self._wide_oi_alerted_day = day
+        assert last is not None  # fresh False jen s časem poslední změny
+        message = (
+            f"Křídla OI z tasty pro {self.symbol} se po publikaci CME neobnovila (poslední "
+            f"změna {last:%H:%M} UTC) — OI zdi, Max Pain a P/C mimo obálku IBKR nesou "
+            "předchozí publikaci"
+        )
+        logger.warning("%s (#1611)", message)
+        await self.publisher.publish(
+            "alerts",
+            {
+                "kind": "wide_oi_stale",
+                "symbol": self.symbol,
+                "message": message,
+                "ts": now.timestamp(),
+            },
+        )
 
     def _oi_refresh_due(self, now: dt.datetime) -> bool:
         """Má se existující snímek dne přečíst znovu? (#463)
@@ -1408,6 +1460,10 @@ class InstrumentPipeline:
         metrics = await self.runtime.run_cycle(now, spot, bars, forming)
         await self._watch_greeks(now, metrics)
         await self._watch_repair(now, metrics)
+        try:
+            await self._watch_wide_oi(now)
+        except Exception:
+            logger.exception("Stáří tasty křídel %s se nepodařilo zjistit", self.symbol)
 
         # Stav mapy (#1245) — PŘED detektorem, ať feature log nese stav téže
         # minuty; max pain sdílí s tendencí (obnova jen při novém snímku OI).

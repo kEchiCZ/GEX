@@ -75,6 +75,7 @@ PUBLISHED_KINDS = frozenset(
         "news_feed_recovered",
         "oi_missing",
         "oi_refresh_failed",
+        "wide_oi_stale",
         "band_capped",
         "fa_validation",
         "fa_calibration",
@@ -115,6 +116,8 @@ def _legacy_category(kind: str) -> str:
         "strikes_stalled",
         "oi_refresh_failed",
         "oi_missing",
+        # wide_oi_stale (#1611) vznikl po #1175 — zastaralé OI patří k provozu jako oi_missing
+        "wide_oi_stale",
         "spot_fallback",
         "chain_fallback",
         "setup_degraded",

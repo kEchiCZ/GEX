@@ -458,6 +458,25 @@ class OIEodRepository:
             row = conn.execute(stmt).one()
         return _as_utc(row[0]), _as_utc(row[1])
 
+    def wings_last_change(self, symbol: str, expiry: str, day: dt.date) -> dt.datetime | None:
+        """Poslední změna tasty křídel expirace dne (#1611); None = křídla nejsou.
+
+        Jen řádky bez IBKR `captured_ts`: řádek přepsaný z IBKR si nechá starý
+        tasty čas, tasty ho už neobnoví (stráž #1605). Tasty zapisuje jen změněnou
+        hodnotu, takže čas je poslední ZMĚNA, ne čerstvost — po publikaci CME se
+        ale většina křídel mění (#1605, Data), takže „změna ≥ publikace“ znamená
+        „křídla nesou dnešní publikaci“.
+        """
+        stmt = select(func.max(oi_eod_table.c.tasty_captured_ts)).where(
+            oi_eod_table.c.symbol == symbol,
+            oi_eod_table.c.expiry == expiry,
+            oi_eod_table.c.date == day,
+            oi_eod_table.c.captured_ts.is_(None),
+        )
+        with self._engine.connect() as conn:
+            changed: dt.datetime | None = conn.execute(stmt).scalar_one_or_none()
+        return _as_utc(changed)
+
     def snapshot(
         self, symbol: str, day: dt.date, *, ibkr_only: bool = False
     ) -> dict[tuple[str, float, str], float]:
