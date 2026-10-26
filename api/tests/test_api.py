@@ -501,21 +501,23 @@ def test_replay_bundle_daily_resolution(client: TestClient) -> None:
 
 
 def test_daily_futures_cvd_z_konce_obchodovani() -> None:
-    """#1633: Daily CVD = úroveň z konce obchodování; nula v pauze po restartu
-    enginu (do #1603) ani NULL minuta bez streameru ji nepřepíše."""
+    """#1633: Daily CVD = tok seance (součet přírůstků) = úroveň z konce obchodování;
+    nula v pauze ani restart enginu uprostřed seance (do #1603) ji neposunou."""
     from gexlens_api.main import daily_futures_cvd
 
     close = dt.datetime(2026, 7, 16, 21, 0, tzinfo=dt.UTC)  # 16:00 CDT
+    minutes = (-3, -2, -1, 0, 20, 30, 59)
     flow = pd.DataFrame(
         {
-            "ts_min": [close + dt.timedelta(minutes=m) for m in (-2, -1, 0, 20, 59)],
-            "futures_cvd": [4340.0, None, 4360.0, 0.0, 0.0],
+            "ts_min": [close + dt.timedelta(minutes=m) for m in minutes],
+            # Restart ve 20:58: kumulativ 4 340 → 0; minuta bez streameru NULL;
+            # pauza po restartu v ní nese 0 / NULL
+            "futures_cvd_delta": [12.0, 3.0, None, 20.0, 0.0, None, 0.0],
+            "futures_cvd": [4340.0, 3.0, None, 23.0, 0.0, None, 0.0],
         }
     )
-    # Štítek 21:00 nese tisky [20:59, 21:00) — poslední minutu obchodování
-    assert daily_futures_cvd(flow) == pytest.approx(4360.0)
-    assert daily_futures_cvd(flow.iloc[:2]) == pytest.approx(4340.0)  # NULL se přeskočí
-    assert daily_futures_cvd(flow.assign(futures_cvd=None)) is None
+    assert daily_futures_cvd(flow) == pytest.approx(35.0)
+    assert daily_futures_cvd(flow.assign(futures_cvd_delta=None)) is None
     assert daily_futures_cvd(pd.DataFrame()) is None
 
 
@@ -525,8 +527,9 @@ def test_daily_balik_nese_futures_cvd(settings: Settings) -> None:
 
     api_main._DAILY_BUNDLE_CACHE.clear()  # uzavřený den z jiného testu by vrátila cache
     rows = [_Flow(ts(m), 50.0, 50.0 * (m + 1)) for m in range(MINUTES)]
-    for row, cvd in zip(rows, (12.0, None, 30.0), strict=True):
-        row.futures_cvd = cvd
+    for row, delta in zip(rows, (12.0, None, 18.0), strict=True):
+        row.futures_cvd_delta = delta
+        row.futures_cvd = None if delta is None else 30.0
     SnapshotWriter(settings).write_flow("ES", DAY, rows)
     url = (
         f"/replay/ES/20260716/{DAY.isoformat()}?resolution=daily&v={api_main.DAILY_BUNDLE_VERSION}"

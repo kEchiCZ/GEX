@@ -543,7 +543,7 @@ legenda „· CVD podkladu“, pod crosshairem „· CVD …“. Popisek **„·
 kumulativ se resetuje na open Globex seance (17:00 CT), první minuta osy ale už
 nese nasčítaný tok — výchylku čti proti této hodnotě, ne proti nule.
 Popisek „od HH:MM“ (engine startoval uprostřed seance) popisuje kap. 15 (catch-up).
-V **Daily** je bod dne úroveň **z konce obchodování** (poslední minuta s otevřeným trhem; pauza Globexu ji nepřepíše ani po restartu enginu, #1633), den bez CVD je mezera. Linka se živě posouvá **každou minutu**. Zůstává i v timeframu **5m a víc**
+V **Daily** je bod dne **tok celé seance** = úroveň z konce obchodování (součet minut; pauza Globexu ani restart enginu ho neposunou, #1633), den bez CVD je mezera. Na starších dnech, kdy restart enginu uprostřed seance intradenní linku shodil k nule (do #1603), proto Daily ukazuje víc než poslední bod intradenního grafu. Linka se živě posouvá **každou minutu**. Zůstává i v timeframu **5m a víc**
 (koš ukazuje poslední hodnotu; popisek panelu „od HH:MM“ zůstává také) a v playbacku
 končí na pozici přetáčení. Do opravy #1578 stála živě až hodinu na hodnotě
 z posledního načtení dne. V agregaci a v playbacku zmizela úplně, v playbacku

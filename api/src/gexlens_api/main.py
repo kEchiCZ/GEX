@@ -74,7 +74,6 @@ from gexlens_engine.compute.expiry_calendar import expiry_calendar
 from gexlens_engine.compute.facalibration import FA_MIN_DAYS
 from gexlens_engine.compute.gammacliff import build_cliff
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
-from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.paper import POINT_VALUES
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
 from gexlens_engine.compute.risk import week_start
@@ -196,7 +195,7 @@ _DAILY_BUNDLE_CACHE_MAX = 64
 #: obsahu Daily balíku (součty, `cum_delta`, řady) verzi zvedá. Dotaz s jinou
 #: verzí (otevřený starý frontend, návrat jen jedné služby) dostane `no-cache`
 #: a do `_DAILY_BUNDLE_CACHE` se neuloží. 2 = přírůstky proti průběžnému maximu,
-#: 3 = `daily.futures_cvd` z konce obchodování (#1633).
+#: 3 = `daily.futures_cvd`, tok seance = úroveň z konce obchodování (#1633).
 DAILY_BUNDLE_VERSION = 3
 
 
@@ -209,25 +208,19 @@ def _last_state(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def daily_futures_cvd(flow: pd.DataFrame) -> float | None:
-    """CVD podkladu z konce obchodování dne pro Daily (#1633).
+    """CVD podkladu dne pro Daily (#1633): součet minutových přírůstků
+    `futures_cvd_delta` seance = úroveň z konce obchodování.
 
-    Poslední ne-null `futures_cvd` řádku, jehož obsah [N−1, N) leží v otevřeném
-    trhu (`is_market_closed`). Tok se v pauze Globexu ani v zavření svátku
-    nemění; restart enginu v pauze do #1603 v ní ale psal nulu, takže poslední
-    stav seance by Daily na historických dnech nesl 0 místo úrovně z konce
-    obchodování. None = den bez CVD (bez tasty větve).
+    Ne poslední stav seance: ten leží v pauze Globexu a restart enginu do #1603
+    v ní i uprostřed obchodování nuloval kumulativ (ES od 23. 9. 19× uprostřed
+    seance) — součet přírůstků restart neposune, pauza přidává nuly. Na dnech
+    bez restartu se rovná poslední úrovni (ES 15. 10. −268, NQ 4 064); tisky
+    z doby výpadku enginu chybí v obou. None = den bez CVD (bez tasty větve).
     """
-    if flow.empty or "futures_cvd" not in flow:
+    if flow.empty or "futures_cvd_delta" not in flow:
         return None
-    for ts_min, value in zip(
-        reversed(flow["ts_min"].tolist()), reversed(flow["futures_cvd"].tolist()), strict=True
-    ):
-        if value is None or pd.isna(value):
-            continue
-        if is_market_closed(pd.Timestamp(ts_min).to_pydatetime() - dt.timedelta(minutes=1)):
-            continue
-        return float(value)
-    return None
+    measured = flow["futures_cvd_delta"].dropna()
+    return float(measured.sum()) if not measured.empty else None
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
