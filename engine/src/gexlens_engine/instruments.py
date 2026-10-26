@@ -465,6 +465,8 @@ class InstrumentPipeline:
     _oi_pass: OIArchivePass | None = field(default=None, repr=False)
     #: Joby po průchodu (FA, sebekontrola, Forward GEX) na pozadí (#1646)
     _oi_jobs_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    #: Sběrače jednou po settle na pozadí (#1701); None = neběží
+    _settle_jobs_task: asyncio.Task[None] | None = field(default=None, repr=False)
     # Kolik barů zatím doplnil tasty fallback během běžícího stall (do logu při zotavení)
     _gap_filled: int = field(default=0, repr=False)
     # Vol koncentrace (#208): už ohlášené strany (expirace, strike, right) —
@@ -1410,6 +1412,60 @@ class InstrumentPipeline:
         self._spot_live = False
         return None, reason
 
+    def _start_settle_jobs(self, now: dt.datetime) -> None:
+        """Sběrače „jednou po settle" z minutového cyklu na pozadí (#1701).
+
+        Cyklus na ně čekal, i když práci dělají ve vlákně: gamma útes a volatilitní
+        režim čtou partice barů celé historie a 26. 10. 2026 trvaly ~68 s na
+        symbol, takže ES i NQ každý všední den ztratily minuty 20:06–20:07 UTC.
+        Každý sběrač si sám hlídá jeden běh za seanci, proto minuta, ve které
+        předchozí běh ještě neskončil, jen počká na další. IBKR nečtou (IV rank
+        zůstává v cyklu), lines se sweepem nesčítají.
+        """
+        running = self._settle_jobs_task
+        if running is not None and not running.done():
+            return
+        task = asyncio.create_task(self._run_settle_jobs(now), name=f"settle-jobs-{self.symbol}")
+        task.add_done_callback(self._log_settle_jobs_result)
+        self._settle_jobs_task = task
+
+    async def _run_settle_jobs(self, now: dt.datetime) -> None:
+        # Pořadí jako dřív v cyklu: verdikty dne (#1091) čtou em_respect téže seance
+        if self.gamma_cliff is not None:
+            try:
+                await self.gamma_cliff.on_minute(now)
+            except Exception:
+                logger.exception("Gamma útes %s selhal — pokračuji", self.symbol)
+        if self.scenario_collector is not None:
+            try:
+                await self.scenario_collector.on_minute(now)
+            except Exception:
+                logger.exception("Vyhodnocení scénářů %s selhalo — pokračuji", self.symbol)
+        if self.vol_regime is not None:
+            try:
+                await self.vol_regime.on_minute(now)
+            except Exception:
+                logger.exception("Volatilitní režim %s selhal — pokračuji", self.symbol)
+        if self.em_respect is not None:
+            try:
+                await self.em_respect.on_minute(now)
+            except Exception:
+                logger.exception("EM respect %s selhal — pokračuji", self.symbol)
+        if self.briefing_verdicts is not None:
+            try:
+                await self.briefing_verdicts.on_minute(now)
+            except Exception:
+                logger.exception("Vyhodnocení verdiktů %s selhalo — pokračuji", self.symbol)
+
+    def _log_settle_jobs_result(self, task: asyncio.Task[None]) -> None:
+        if task is self._settle_jobs_task:
+            self._settle_jobs_task = None
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Sběrače po settle %s selhaly", self.symbol, exc_info=exc)
+
     async def run_minute(self, now: dt.datetime) -> SweepMetrics:
         """Jeden minutový cyklus instrumentu: OI retry, expanze obálky, runtime cyklus."""
         # Očekávají se data? (#1307) Jeden predikát z rozvrhu CME (ADR-0023) pro
@@ -1537,12 +1593,6 @@ class InstrumentPipeline:
                 await self.t6_collector.on_minute(now, live_spot, self.runtime)
             except Exception:
                 logger.exception("T6 sběrač %s selhal — pokračuji", self.symbol)
-        # Gamma útes (#576) — jednou po settle; pád nesmí shodit sběr
-        if self.gamma_cliff is not None:
-            try:
-                await self.gamma_cliff.on_minute(now)
-            except Exception:
-                logger.exception("Gamma útes %s selhal — pokračuji", self.symbol)
         # Verdikt dne (#1595) — PO tendenci a stavu mapy (hlasují hodnotou téže
         # minuty), PŘED scénářem; pád nesmí shodit sběr dat
         pre_open = None
@@ -1559,42 +1609,21 @@ class InstrumentPipeline:
                 await self.scenario_generator.on_minute(now, pre_open, self.runtime)
             except Exception:
                 logger.exception("Automatický scénář %s selhal — pokračuji", self.symbol)
-        # Scénáře dne (#1173) — jednou po settle, jen scénáře po termínu
-        if self.scenario_collector is not None:
-            try:
-                await self.scenario_collector.on_minute(now)
-            except Exception:
-                logger.exception("Vyhodnocení scénářů %s selhalo — pokračuji", self.symbol)
         # Paper účet (#1187): fily proti barům minuty — pád nesmí shodit sběr dat
         if self.paper_broker is not None:
             try:
                 await self.paper_broker.on_minute(now, spot, bars, self.runtime)
             except Exception:
                 logger.exception("Paper účet %s selhal — pokračuji", self.symbol)
-        # Volatilitní režim (ADR-0028) — jednou po settle, čte jen bary
-        if self.vol_regime is not None:
-            try:
-                await self.vol_regime.on_minute(now)
-            except Exception:
-                logger.exception("Volatilitní režim %s selhal — pokračuji", self.symbol)
-        # Respektování pásma EM (#872) — jednou po settle; pád nesmí shodit sběr
-        if self.em_respect is not None:
-            try:
-                await self.em_respect.on_minute(now)
-            except Exception:
-                logger.exception("EM respect %s selhal — pokračuji", self.symbol)
-        # Verdikty dne (#1091) — jednou po settle, čte jen bary a em_respect
-        if self.briefing_verdicts is not None:
-            try:
-                await self.briefing_verdicts.on_minute(now)
-            except Exception:
-                logger.exception("Vyhodnocení verdiktů %s selhalo — pokračuji", self.symbol)
         # IV Rank (#871) — jednou po settle; historický request, žádná linka
         if self.iv_rank is not None:
             try:
                 await self.iv_rank.on_minute(now)
             except Exception:
                 logger.exception("IV rank %s selhal — pokračuji", self.symbol)
+        # Sběrače jednou po settle (gamma útes, scénáře, volatilitní režim, EM
+        # respect, verdikty) na pozadí — cyklus na ně nečeká (#1701)
+        self._start_settle_jobs(now)
 
         # Následující expirace v nižší kadenci; její pád nesmí shodit aktivní řetěz
         if (
@@ -1998,6 +2027,8 @@ class InstrumentPipeline:
             self._gap_fill_task.cancel()
         if self._oi_jobs_task is not None:
             self._oi_jobs_task.cancel()
+        if self._settle_jobs_task is not None:
+            self._settle_jobs_task.cancel()
         self.drop_oi_archive("pipeline končí")
         try:
             self.on_stop()
