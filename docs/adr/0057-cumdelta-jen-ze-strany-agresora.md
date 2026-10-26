@@ -532,9 +532,36 @@ Spot minutového cyklu pod mechanikou v6. Vlastník v epice #1385 rozhodl 23. 10
   živou cenu“), návrat je na úrovni INFO. Při zavřeném trhu a 2 min po startu i po každém
   otevření (`SPOT_WATCH_GRACE`, první ticky přijdou až po otevření) se nevaruje a stav se
   nemění (#1307). Výpadek, který začal o víkendu, tak varuje po nedělním otevření, ne nikdy.
-- **Mimo rozsah:** T6 (`overnight_pct`) a stav mapy dostávají pod v6 dál nejčerstvější známou
-  cenu (`self.spot`), i starou. Týž vzor řeší nález #1657.
+- **Mimo rozsah:** T6 (`overnight_pct`) a stav mapy dostávaly pod v6 dál nejčerstvější známou
+  cenu (`self.spot`), i starou. Vyřešeno doplňkem 26. 10. 2026 (#1657).
 - **Pod v5 beze změny (bod 11):** `instruments._current_spot` i zamrzlý `fallback_price`
   zůstávají, vzorky v5 i tendence v4 se nemění a `main` jde nasadit kdykoli.
 - **Verze:** pravidla verdiktu 4, tendence v5 a mechanika v6 přicházejí s bumpem, vlastní
   zvýšení verze to nepotřebuje.
+
+## Doplněk (26. 10. 2026, #1657)
+Rozhodnuto 26. 10. 2026 v #1385 (vlastník, varianty A/A). Doplňuje spotřebitele spotu se stářím
+z doplňku 23. 10. o stav mapy a T6. Platí jen pod v6: pod v5 vrací `_live_spot` spot cyklu.
+- **Stav mapy** (`mapstate.MapStateCollector`) dostává `live_spot`. Bez živé ceny je stav minuty
+  **neznámý**:
+  - `state` je None, takže klíč `map_state` ve `/status` chybí (= neměří se);
+  - `runtime.thin_map` je None, takže verdikt dne i feature log setupů nesou null;
+  - vzorek do statistik seance se nepřidá, agregát po settle jde jen z minut s cenou.
+
+  Stará cena by posunula gamma u ceny i slitou mapu a předchozí stav by se tvářil jako aktuální
+  (SPEC 3.7). Zavřený trh živou cenu nemá, takže o víkendu a v denní pauze je stav mapy neznámý.
+  Varianta B (spočítat jen slabé zdi) by zavedla třetí stav „nelze rozhodnout“, který by musel
+  rozlišit verdikt, feature log i UI.
+- **Hlas gammy ve verdiktu** (`compute/dayverdict`, ADR-0035) bere `thin_map` None jako „mapa není
+  tenká“. V minutě bez živé ceny je ale řádek verdiktu už neúplný (`missing` spot), takže se
+  nezmrazí a scénář nad ním nevznikne.
+- **T6** (`t6.T6Collector`) dostává `live_spot`. Od 9:25 ET zkouší bez živé ceny každou minutu,
+  nejdéle do US openu (`compute/settle.us_open_ts`). Pak je den bez kandidáta a v logu je warning
+  „T6 … trigger splněn, ale bez živé ceny do US openu — kandidát dne nevzniká“, jen při splněném
+  triggeru. Varianta B (den se v minutě bez ceny nevyhodnotí) by kvůli výpadku jediné minuty
+  smazala kandidáta celého dne.
+- **T6 jen v obchodní den** (`is_trading_session`, AGENTS.md „Obchodní den“). Platí **i pod v5**:
+  bez US seance (víkend, svátek NYSE) premarket není. Dřív by v sobotu páteční pokles dal
+  kandidáta nad cenou zavřeného trhu. V `t6_occurrences` k 26. 10. 2026 takový řádek není.
+- **Beze změny:** setupy, paper a sondy T9 spot nečtou (rozhodují z barů minuty, #1346, #1320).
+  GEX výpočet a obálka striků dál běží s nejčerstvější známou cenou.

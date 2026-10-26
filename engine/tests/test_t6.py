@@ -297,6 +297,21 @@ def test_collector_bez_zive_ceny_do_openu_den_bez_kandidata(
     assert repository.list_for("ES") == [] and publisher.messages == []
 
 
+def test_collector_bez_zive_ceny_v_zime_ceka_do_14_30_utc(tmp_path: Path) -> None:
+    """#1657: US open je burzovní čas — v zimě 9:30 ET = 14:30 UTC. Bez ceny ve
+    14:26–14:28 se ještě čeká (s letním 13:30 UTC by den propadl) a cena ve 14:29
+    kandidáta založí."""
+    write_bars_day(tmp_path, "ES", dt.date(2026, 1, 13), [(dt.time(20, 59), 7500.0)])
+    write_bars_day(tmp_path, "ES", dt.date(2026, 1, 14), [(dt.time(20, 59), 7400.0)])
+    collector, repository, _ = make_collector(tmp_path)
+    runtime = cast(EngineRuntime, FakeRuntime())
+    winter = dt.datetime(2026, 1, 15, 14, 26, tzinfo=dt.UTC)  # 9:26 ET
+    for minute in range(3):  # 14:26–14:28 UTC bez ceny
+        asyncio.run(collector.on_minute(winter + dt.timedelta(minutes=minute), None, runtime))
+    asyncio.run(collector.on_minute(winter + dt.timedelta(minutes=3), 7410.0, runtime))
+    assert len(repository.list_for("ES")) == 1
+
+
 def test_collector_bez_triggeru_a_bez_ceny_mlci(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

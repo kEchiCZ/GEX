@@ -217,7 +217,8 @@ class T6Collector:
             return
         if spot is None and now < us_open_ts(today):
             # Rozhodnuto 26. 10. A (#1657): bez živé ceny další pokus v příští
-            # minutě, nejdéle do US openu — premarket vzorec po openu nemá smysl
+            # minutě, nejdéle do US openu — kandidát je premarket vzorec (start
+            # enginu až po openu s živou cenou ho dál vyhodnotí, nález #1686)
             return
         self._evaluated_for = today  # jeden pokus denně i při chybě — žádné bušení
 
@@ -228,7 +229,7 @@ class T6Collector:
             return
         if spot is None:
             logger.warning(
-                "T6 %s %s: trigger splněn, ale do US openu chyběla živá cena — "
+                "T6 %s %s: trigger splněn, ale bez živé ceny do US openu — "
                 "kandidát dne nevzniká (#1657)",
                 self.symbol,
                 today,
