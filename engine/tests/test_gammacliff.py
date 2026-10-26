@@ -474,17 +474,24 @@ def test_session_ranges_since_vraci_totez_pro_spolecne_seance(tmp_path: Path) ->
     assert dict(since)[days[3]] == pytest.approx(60.0)
 
 
-def test_session_ranges_hranice_settle_a_openu_v_jedne_partici(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("day", "settle_hour", "open_hour"),
+    [
+        (dt.date(2026, 9, 16), 20, 22),  # letní čas: settle 16:00 ET = 20:00 UTC
+        (dt.date(2026, 11, 18), 21, 23),  # zimní čas: settle 21:00 UTC, open 23:00 UTC
+    ],
+)
+def test_session_ranges_hranice_settle_a_openu_v_jedne_partici(
+    tmp_path: Path, day: dt.date, settle_hour: int, open_hour: int
+) -> None:
     """#1701 (vektorové přiřazení): minuta v settle se počítá, po settle ne; minuta
-    v 17:00 CT už patří následující seanci (ADR-0023). 16. 9. 2026 je letní čas:
-    settle 20:00 UTC, open 22:00 UTC."""
+    v 17:00 CT už patří následující seanci (ADR-0023) — v létě i v zimě."""
     settings = Settings(
         data_dir=tmp_path, database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}"
     )
-    day = dt.date(2026, 9, 16)
 
     def bar(hour: int, minute: int, high: float, low: float) -> Bar:
-        ts = dt.datetime(2026, 9, 16, hour, minute, tzinfo=dt.UTC)
+        ts = dt.datetime(day.year, day.month, day.day, hour, minute, tzinfo=dt.UTC)
         return Bar(ts=ts, open=low, high=high, low=low, close=high, volume=1.0)
 
     SnapshotWriter(settings).write_bars(
@@ -492,16 +499,16 @@ def test_session_ranges_hranice_settle_a_openu_v_jedne_partici(tmp_path: Path) -
         day,
         [
             bar(15, 0, 7610.0, 7600.0),
-            bar(20, 0, 7620.0, 7605.0),  # přesně v settle → ještě 16. 9.
-            bar(20, 1, 7700.0, 7500.0),  # po settle → nepočítá se nikam
-            bar(21, 59, 7690.0, 7510.0),  # denní pauza před openem → nepočítá se
-            bar(22, 0, 7650.0, 7640.0),  # open → seance 17. 9.
+            bar(settle_hour, 0, 7620.0, 7605.0),  # přesně v settle → ještě seance `day`
+            bar(settle_hour, 1, 7700.0, 7500.0),  # po settle → nepočítá se nikam
+            bar(open_hour - 1, 59, 7690.0, 7510.0),  # denní pauza před openem → nepočítá se
+            bar(open_hour, 0, 7650.0, 7640.0),  # open → následující seance
         ],
     )
     ranges = session_ranges(tmp_path, "ES")
     assert [(session, round(value, 6)) for session, value in ranges] == [
         (day, 20.0),
-        (dt.date(2026, 9, 17), 10.0),
+        (day + dt.timedelta(days=1), 10.0),
     ]
 
 
