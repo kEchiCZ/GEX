@@ -714,16 +714,29 @@ class InstrumentPipeline:
         Forward pole (#519) stojí na celém řetězu dne včetně tasty křídel mimo
         obálku IBKR (~55 % Σ OI 0DTE, #1605). Do finality ho přepočítá každý IBKR
         průchod. Po finalitě už žádný nepřijde, takže obnovu křídel (`wide_oi_pass`
-        po výpadku tasty přes publikaci) by pole nevidělo až do rollu. Běžící joby
-        po archivu zapisují týž soubor a čtou řetěz dřív, proto se nejdřív dočkají
-        (`asyncio.wait` nepropustí zrušení jobu, jen vlastní).
+        po výpadku tasty přes publikaci) by pole nevidělo až do rollu.
+
+        Běžící joby po archivu zapisují týž soubor a řetěz čtou dřív, proto přepočet
+        jde až po nich — na pozadí v témž slotu (`_oi_jobs_task`: zruší ho stop
+        pipeline, chybu zaloguje): extended smyčka, která volá (široký OI, extended
+        snímky), na FA a α nad PG čekat nesmí. `asyncio.wait` nepropustí zrušení
+        jobu, jen vlastní.
         """
         today = now.date()
         if written <= 0 or not self.oi_final or self._oi_day != today:
             return False
-        if self._oi_jobs_task is not None:
-            await asyncio.wait({self._oi_jobs_task})
-        await self._write_forward_field(today)
+        running = self._oi_jobs_task
+        if running is None:
+            await self._write_forward_field(today)
+            return True
+
+        async def after_jobs() -> None:
+            await asyncio.wait({running})
+            await self._write_forward_field(today)
+
+        task = asyncio.create_task(after_jobs(), name=f"oi-jobs-forward-{self.symbol}")
+        task.add_done_callback(self._log_oi_jobs_result)
+        self._oi_jobs_task = task
         return True
 
     def _log_oi_jobs_result(self, task: asyncio.Task[None]) -> None:
@@ -833,8 +846,9 @@ class InstrumentPipeline:
     async def _write_forward_field(self, today: dt.date) -> None:
         """Forward GEX (#519): pole per budoucí den z denního snímku řetězce.
 
-        Počítá se po (znovu)pořízení OI archivu — OI se přes den nemění, takže
-        per minuta nemá smysl. Selhání nesmí shodit archivační cestu: forward
+        Počítá se po (znovu)pořízení OI archivu a po finalitě i po obnově tasty
+        křídel (#1607, `refresh_forward_after_tasty`) — OI se jinak přes den
+        nemění, takže per minuta nemá smysl. Selhání nesmí shodit archivační cestu: forward
         je odvozenina, sběr běží dál.
         """
         try:

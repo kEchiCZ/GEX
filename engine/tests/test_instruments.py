@@ -2841,9 +2841,16 @@ async def test_forward_gex_po_finalite_prepocita_po_obnove_tasty_kridel(
     pipeline.oi_final, pipeline._oi_day = True, day
     await pipeline._write_forward_field(day)
     first = _forward_computed_ts(settings, day)
+    path = settings.derived_dir / "ES" / "gexforward" / f"{day.isoformat()}.parquet"
+    values_before = pd.read_parquet(path)["values"].iloc[0].tolist()
 
-    assert await pipeline.refresh_forward_after_tasty(3, now) is True
+    # tasty obnoví křídlo mimo obálku IBKR (strike bez IBKR řádku, #828)
+    wing = OIRecord("ES", "20260717", 7620.0, "C", day, 5_000.0)
+    written = repository.upsert_many([wing], tasty_captured_ts=now)
+    assert written == 1
+    assert await pipeline.refresh_forward_after_tasty(written, now) is True
     assert _forward_computed_ts(settings, day) != first
+    assert pd.read_parquet(path)["values"].iloc[0].tolist() != values_before  # pole vidí křídlo
 
 
 @pytest.mark.parametrize(
@@ -2881,7 +2888,8 @@ async def test_forward_gex_po_tasty_pocka_na_bezici_joby_po_archivu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Joby po archivu (FA, Forward GEX) zapisují týž soubor a řetěz čtou dřív —
-    přepočet po tasty jde až po nich, jinak by ho přepsaly starším stavem."""
+    přepočet po tasty jde až po nich, jinak by ho přepsaly starším stavem. Na pozadí
+    ve slotu jobů: extended smyčka, která volá, na FA a α nečeká."""
     settings, writer, repository, publisher = env
     pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
     order: list[str] = []
@@ -2899,4 +2907,9 @@ async def test_forward_gex_po_tasty_pocka_na_bezici_joby_po_archivu(
     pipeline._oi_jobs_task = asyncio.create_task(jobs())
     now = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
     assert await pipeline.refresh_forward_after_tasty(5, now) is True
+    assert order == []  # volající nečekal
+    follow_up = pipeline._oi_jobs_task
+    assert follow_up is not None
+    await follow_up
     assert order == ["joby", "forward"]
+    assert pipeline._oi_jobs_task is None  # slot uvolněn po doběhnutí
