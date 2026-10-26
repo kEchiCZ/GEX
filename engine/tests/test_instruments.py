@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -2667,3 +2667,38 @@ def test_v6_vypadek_spotu_ze_zavreneho_trhu_varuje_az_po_otevreni(
         expected = 0 if opened is None or ts < opened + dt.timedelta(minutes=2) else 1
         assert len(warned) == expected, (label, ts)
         ts += dt.timedelta(minutes=1)
+
+
+class _SpotRecorder:
+    """Spotřebitel minutového cyklu, který si zapamatuje předanou cenu."""
+
+    def __init__(self) -> None:
+        self.spots: list[float | None] = []
+
+    async def on_minute(self, now: dt.datetime, spot: float | None, *args: object) -> None:
+        self.spots.append(spot)
+
+
+async def test_v6_stav_mapy_a_t6_dostanou_zivou_cenu(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1657: pod v6 dostanou stav mapy a T6 živou cenu (`live_spot`), bez ní None
+    — ne nejčerstvější známou cenu; pod v5 spot cyklu jako dosud."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    map_state, t6 = _SpotRecorder(), _SpotRecorder()
+    pipeline.map_state = cast(Any, map_state)
+    pipeline.t6_collector = cast(Any, t6)
+    pipeline.spot_age_gate = True
+    stale = SpotReading(7601.25, TS - dt.timedelta(minutes=10), "bar", False)
+    readings = iter([SpotReading(7601.25, TS, "ibkr", True), stale])
+    pipeline.spot_reading = lambda: next(readings)
+
+    await pipeline.run_minute(TS)
+    await pipeline.run_minute(TS + dt.timedelta(minutes=1))
+    assert map_state.spots == [7601.25, None]
+    assert t6.spots == [7601.25, None]
+
+    pipeline.spot_age_gate = False
+    await pipeline.run_minute(TS + dt.timedelta(minutes=2))
+    assert map_state.spots[-1] == t6.spots[-1] == pipeline.spot

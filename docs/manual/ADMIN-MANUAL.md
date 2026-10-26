@@ -952,7 +952,10 @@ spojení s IBKR, nebo Gateway vyhozená souběhem s mobilem — API port odmít�
   mid ne) → close posledního 5s baru (≤ 60 s) → tasty mid hlášený jako čerstvý (poll ≤ 30 s,
   jen s `GEXLENS_TASTY_SPOT_FALLBACK`). Když není živý žádný zdroj, verdikt dne je neúplný
   (`missing`: „spot: poslední cena … stará N s“), automatický scénář nevznikne a tendence
-  nehlasuje z polohy ceny; GEX výpočet běží s nejčerstvější známou cenou. Log `Spot ES: žádný
+  nehlasuje z polohy ceny. Stav mapy té minuty je neznámý: `map_state` ve `/status` chybí,
+  `thin_map` je null a minuta se nepočítá do statistik seance. T6 zkouší živou cenu každou minutu
+  nejdéle do US openu, pak je den bez kandidáta (log `T6 ES …: trigger splněn, ale do US openu
+  chyběla živá cena`) (#1657). GEX výpočet běží s nejčerstvější známou cenou. Log `Spot ES: žádný
   zdroj nemá živou cenu` (jen při otevřeném trhu a ne v prvních 2 min po startu a otevření)
   / `živá cena zpět`. Pod v5 platí override jako dosud.
 - **Svíčky podkladu**: při stall (3 min bez real-time barů při živém spotu)
