@@ -69,6 +69,7 @@ from gexlens_engine.storage.parquet_store import (
     SnapshotWriter,
     WallDomRow,
     read_last_cum_delta,
+    read_last_futures_cvd,
     read_netflow_latest,
 )
 
@@ -334,6 +335,45 @@ class EngineRuntime:
             session_day.isoformat(),
         )
 
+    async def _seed_futures_cvd(self, session_day: dt.date) -> None:
+        """Naváže CVD podkladu z flow partice po restartu uprostřed seance (#1603).
+
+        Nezávisle na CumΔ (`_seed_cum_delta` končí u nulového základu) a jednou
+        za seanci pro sdílený tracker: pojistka je v trackeru (`has_level`,
+        `restore_cum`), ne v příznaku runtime — pipeline založená znovu uprostřed
+        seance (roll expirace v settle) má nový runtime, ale tentýž tracker.
+        Platí i pro restart v pauze Globexu: řádky pauzy drží úroveň z konce
+        obchodování, ne 0 (#1633). Bez řádku v okně (nová seance) je základ 0.
+        """
+        cvd = self.futures_cvd
+        assert cvd is not None  # volá se jen s trackerem
+        if cvd.has_level(self.symbol):
+            return
+        start, end = session_bounds(session_day)
+        paths = [
+            self.settings.derived_dir / self.symbol / "flow" / f"{day.isoformat()}.parquet"
+            for day in self._session_partition_days(session_day)
+        ]
+        try:
+            base = await asyncio.to_thread(
+                functools.partial(read_last_futures_cvd, paths, start=start, end=end)
+            )
+        except Exception:
+            # Nečitelná partice nesmí shodit cyklus každou minutu: CVD začne od
+            # nuly (stav před #1603), viditelně v logu
+            logger.exception(
+                "CVD podkladu %s: navázání z flow partice selhalo — řada začíná od nuly",
+                self.symbol,
+            )
+            base = None
+        if cvd.restore_cum(self.symbol, base or 0.0) and base:
+            logger.info(
+                "CVD podkladu %s navázán z flow partice (%.0f) — restart uprostřed seance %s",
+                self.symbol,
+                base,
+                session_day.isoformat(),
+            )
+
     async def _seed_net_volume(self, session_day: dt.date) -> None:
         """Jednorázově naváže kumulativní net objem z partice netflow (#232).
 
@@ -433,6 +473,7 @@ class EngineRuntime:
             # Táž kotva jako CumΔ, ať jdou obě řady číst proti sobě (#829).
             # Sdílená instance napříč runtimes → roluje ji jen primární.
             self.futures_cvd.roll_session(session_day)
+            await self._seed_futures_cvd(session_day)
         if tracker.roll_session(session_day):
             self._netflow_seed_pending = False  # nová seance nemá co navazovat
             self._flow_seed_pending = False

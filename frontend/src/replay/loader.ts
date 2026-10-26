@@ -117,6 +117,8 @@ export interface DailyTotals {
   cumDelta: number | null
   /** Minuty seance bez tisků (NULL, ADR-0057 bod 3); 0 = den bez mezer nebo starší API. */
   cumDeltaGapMinutes: number
+  /** CVD podkladu z konce obchodování (#1633); null = den bez CVD. */
+  futuresCvd: number | null
   bar: { open: number; high: number; low: number; close: number } | null
 }
 
@@ -447,6 +449,7 @@ export interface ReplayBundle {
     evo_oi_put: number
     cum_delta: number | null
     cum_delta_gap_minutes?: number
+    futures_cvd?: number | null
     bar: { open: number; high: number; low: number; close: number } | null
   }
 }
@@ -476,8 +479,9 @@ export async function fetchDays(symbol: string): Promise<DayListing[]> {
  * Uzavřený den jde s `Cache-Control: immutable` na rok a prohlížeč ho drží
  * podle URL — po změně obsahu (součty `daily_totals`, `cum_delta`, řady) by
  * Daily dál ukazoval staré hodnoty. Zvedni při každé takové změně; API odpoví
- * `immutable` jen na svou verzi. 2 = přírůstky proti průběžnému maximu. */
-export const DAILY_BUNDLE_VERSION = 2
+ * `immutable` jen na svou verzi. 2 = přírůstky proti průběžnému maximu,
+ * 3 = `daily.futures_cvd` z konce obchodování (#1633). */
+export const DAILY_BUNDLE_VERSION = 3
 
 async function fetchBundle(
   symbol: string,
@@ -923,6 +927,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
           evoOiPut: Number(bundle.daily.evo_oi_put) || 0,
           cumDelta: numOrNull(bundle.daily.cum_delta),
           cumDeltaGapMinutes: Number(bundle.daily.cum_delta_gap_minutes) || 0,
+          futuresCvd: numOrNull(bundle.daily.futures_cvd),
           bar: bundle.daily.bar
             ? {
                 open: Number(bundle.daily.bar.open),

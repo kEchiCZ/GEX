@@ -194,8 +194,9 @@ _DAILY_BUNDLE_CACHE_MAX = 64
 #: Uzavřený den drží prohlížeč `immutable` rok podle URL, takže každá změna
 #: obsahu Daily balíku (součty, `cum_delta`, řady) verzi zvedá. Dotaz s jinou
 #: verzí (otevřený starý frontend, návrat jen jedné služby) dostane `no-cache`
-#: a do `_DAILY_BUNDLE_CACHE` se neuloží. 2 = přírůstky proti průběžnému maximu.
-DAILY_BUNDLE_VERSION = 2
+#: a do `_DAILY_BUNDLE_CACHE` se neuloží. 2 = přírůstky proti průběžnému maximu,
+#: 3 = `daily.futures_cvd`, tok seance = úroveň z konce obchodování (#1633).
+DAILY_BUNDLE_VERSION = 3
 
 
 def _last_state(frame: pd.DataFrame) -> pd.DataFrame:
@@ -204,6 +205,22 @@ def _last_state(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
     return frame.ffill().tail(1).reset_index(drop=True)
+
+
+def daily_futures_cvd(flow: pd.DataFrame) -> float | None:
+    """CVD podkladu dne pro Daily (#1633): součet minutových přírůstků
+    `futures_cvd_delta` seance = úroveň z konce obchodování.
+
+    Ne poslední stav seance: ten leží v pauze Globexu a restart enginu do #1603
+    v ní i uprostřed obchodování nuloval kumulativ (ES od 23. 9. 19× uprostřed
+    seance) — součet přírůstků restart neposune, pauza přidává nuly. Na dnech
+    bez restartu se rovná poslední úrovni (ES 15. 10. −268, NQ 4 064); tisky
+    z doby výpadku enginu chybí v obou. None = den bez CVD (bez tasty větve).
+    """
+    if flow.empty or "futures_cvd_delta" not in flow:
+        return None
+    measured = flow["futures_cvd_delta"].dropna()
+    return float(measured.sum()) if not measured.empty else None
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
@@ -1556,6 +1573,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             float(measured.iloc[-1]) if not measured.empty else None
                         )
                         daily["cum_delta_gap_minutes"] = int(cum.isna().sum())
+                        daily["futures_cvd"] = daily_futures_cvd(frame)
                     frame = _last_state(frame)
                 else:
                     frame = _last_state(frame)
@@ -1565,6 +1583,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             daily.setdefault("vol", 0.0)
             daily.setdefault("cum_delta", None)
             daily.setdefault("cum_delta_gap_minutes", 0)
+            daily.setdefault("futures_cvd", None)
             bundle["daily"] = daily
             if immutable:
                 if len(_DAILY_BUNDLE_CACHE) >= _DAILY_BUNDLE_CACHE_MAX:

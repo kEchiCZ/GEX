@@ -17,6 +17,7 @@ from gexlens_engine.compute.cumdelta import (
     CumDeltaTracker,
     FlowRow,
 )
+from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockQuoteStreamer
@@ -714,6 +715,111 @@ async def test_nasazeni_v6_v_pauze_nenavaze_midpoint_uroven(tmp_path: Path) -> N
     assert tracker is not None
     assert tracker.cum_delta == 0.0
     assert tracker.net_volumes() == {}
+
+
+FRONT = "/ESU6:XCME"
+
+
+def _cvd_runtime(tmp_path: Path, tracker: FuturesCvdTracker) -> tuple[EngineRuntime, Settings]:
+    """Runtime se sdíleným trackerem CVD podkladu (#1603), front future registrovaný."""
+    engine_runtime, _publisher, settings = build_runtime(tmp_path, MockQuoteStreamer())
+    tracker.register("ES", FRONT)
+    engine_runtime.futures_cvd = tracker
+    return engine_runtime, settings
+
+
+def _cvd_buy(tracker: FuturesCvdTracker, size: float) -> None:
+    """Tisk front future s agresorem BUY (pořadí polí `tasty.stream.EVENT_FIELDS`)."""
+    tracker.on_event("TimeAndSale", [FRONT, 0, SPOT, size, "BUY", False, False])
+
+
+def _write_cvd_history(settings: Settings) -> None:
+    """Flow seance 16. 7.: CVD 4 360 ve 20:50 UTC, pak minuta bez streameru (NULL).
+
+    CumΔ je 0 — `_seed_cum_delta` u nulového základu končí a CVD na něm
+    záviset nesmí (#1603)."""
+    before = PAUSE - dt.timedelta(minutes=40)
+    SnapshotWriter(settings).write_flow(
+        "ES",
+        TS.date(),
+        [
+            FlowRow(before, 0.0, 0.0, 12.0, 4360.0, source=SOURCE_MIDPOINT),
+            FlowRow(before + dt.timedelta(minutes=1), 0.0, 0.0, None, None, source=SOURCE_MIDPOINT),
+        ],
+    )
+
+
+def _flow_at(settings: Settings, ts: dt.datetime) -> pd.Series:
+    path = settings.derived_dir / "ES" / "flow" / f"{ts.date().isoformat()}.parquet"
+    flow = pd.read_parquet(path)
+    return flow[flow["ts_min"] == ts].iloc[0]
+
+
+async def test_restart_v_pauze_navaze_cvd_podkladu_z_partice(tmp_path: Path) -> None:
+    """#1603/#1633: restart v pauze drží úroveň z konce obchodování (+ tok od startu), ne 0."""
+    tracker = FuturesCvdTracker()
+    engine_runtime, settings = _cvd_runtime(tmp_path, tracker)
+    _write_cvd_history(settings)
+    _cvd_buy(tracker, 10.0)
+
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    row = _flow_at(settings, PAUSE)
+    assert (row["futures_cvd_delta"], row["futures_cvd"]) == (10.0, 4370.0)
+    assert engine_runtime.cum_delta is not None
+    assert engine_runtime.cum_delta.cum_delta == 0.0  # CumΔ beze změny (nulový základ)
+
+
+async def test_necitelna_partice_cvd_neshodi_cyklus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1603: selhání čtení partice při navázání CVD zaloguje výjimku a cyklus doběhne."""
+    tracker = FuturesCvdTracker()
+    engine_runtime, settings = _cvd_runtime(tmp_path, tracker)
+
+    def broken(*_args: object, **_kwargs: object) -> float | None:
+        raise OSError("poškozená partice")
+
+    monkeypatch.setattr("gexlens_engine.runtime.read_last_futures_cvd", broken)
+    _cvd_buy(tracker, 10.0)
+
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    row = _flow_at(settings, PAUSE)
+    assert (row["futures_cvd_delta"], row["futures_cvd"]) == (10.0, 10.0)
+    assert "navázání z flow partice selhalo" in caplog.text
+
+
+async def test_znovu_zalozena_pipeline_cvd_nenavaze_podruhe(tmp_path: Path) -> None:
+    """#1603: nový runtime nad sdíleným trackerem (roll expirace v settle) pokračuje bez skoku."""
+    tracker = FuturesCvdTracker()
+    first, settings = _cvd_runtime(tmp_path, tracker)
+    _write_cvd_history(settings)
+    await first.run_cycle(PAUSE, SPOT, [])
+
+    second, _settings = _cvd_runtime(tmp_path, tracker)
+    _cvd_buy(tracker, 5.0)
+    later = PAUSE + dt.timedelta(minutes=1)
+    await second.run_cycle(later, SPOT, [])
+
+    row = _flow_at(settings, later)
+    assert (row["futures_cvd_delta"], row["futures_cvd"]) == (5.0, 4365.0)
+
+
+async def test_roll_seance_v_1700_ct_nuluje_cvd_a_necha_tisky_po_openu(tmp_path: Path) -> None:
+    """#1603: po restartu v pauze roll v 17:00 CT vynuluje úroveň; tisk po openu
+    přijatý před prvním cyklem nové seance patří do její první minuty."""
+    tracker = FuturesCvdTracker()
+    engine_runtime, settings = _cvd_runtime(tmp_path, tracker)
+    _write_cvd_history(settings)
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    open_ts = dt.datetime(2026, 7, 16, 22, 0, tzinfo=dt.UTC)  # 17:00 CDT → seance 17. 7.
+    _cvd_buy(tracker, 3.0)  # tisk po openu, cyklus (a s ním roll) přijde až po něm
+    await engine_runtime.run_cycle(open_ts, SPOT, [])
+
+    row = _flow_at(settings, open_ts)
+    assert (row["futures_cvd_delta"], row["futures_cvd"]) == (3.0, 3.0)
 
 
 async def test_netflow_seed_obnovi_i_stranu_mimo_pasmo(tmp_path: Path) -> None:

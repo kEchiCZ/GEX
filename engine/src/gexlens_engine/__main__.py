@@ -154,6 +154,7 @@ from gexlens_engine.tasty.chain_fallback import (
     ChainFallback,
     fallback_alert_message,
     tasty_chain_quotes,
+    universe_alive_ts,
 )
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow, plan_dx_flush
@@ -182,7 +183,14 @@ from gexlens_engine.tasty.trade_branch import (
     route_trade,
 )
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
-from gexlens_engine.tasty.watchdog import SilentStreamWatchdog, silent_alert_message
+from gexlens_engine.tasty.watchdog import (
+    SilentStreamWatchdog,
+    SilentUniverseWatchdog,
+    UniverseSample,
+    check_universes,
+    silent_alert_message,
+    silent_universe_alert_message,
+)
 from gexlens_engine.tasty.wideoi import wide_oi_pass, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.ticker import parse_ticker
@@ -2227,31 +2235,77 @@ async def main() -> None:
 
         if settings.tasty_silent_watchdog:
             silent_watchdog = SilentStreamWatchdog()
+            # Hlídač opčního univerza per instrument (#1604): stav zvlášť, aby
+            # zásah i alert šly jen za mlčícím instrumentem
+            universe_watchdogs: dict[str, SilentUniverseWatchdog] = {}
+            # Resubskripce běží mimo minutový cyklus: čeká na zámek streamu,
+            # který drží i plná subskripce po reconnectu (minuty, #1646)
+            pending_resubscribes: set[asyncio.Task[int]] = set()
 
             async def _tasty_silence_tick(now: dt.datetime) -> None:
-                """Socket žije, eventy ne (#1228): při otevřeném trhu přepojit + alert."""
+                """Socket žije, eventy ne (#1228), nebo mlčí jen opce instrumentu (#1604)."""
                 action = silent_watchdog.check(
                     now,
                     connected=tasty_stream.connected,
                     last_event_at=tasty_cache.last_event_at,
                 )
-                if action is None:
-                    return
-                logger.warning("Hlídač tasty streamu (#1228): %s", action.reason)
-                await tasty_stream.force_reconnect("mlčící stream (#1228)")
-                if action.alert:
-                    await publisher.publish(
-                        "alerts",
-                        {
-                            "kind": "feed_silent",
-                            "symbol": "*",
-                            # Dopad na CumΔ jen pod tisky (v6, ADR-0057 bod 3)
-                            "message": silent_alert_message(
-                                action.silence_s, cumdelta_prints=CUMDELTA_PRINTS
-                            ),
-                            "ts": dt.datetime.now(dt.UTC).timestamp(),
-                        },
-                    )
+                if action is not None:
+                    logger.warning("Hlídač tasty streamu (#1228): %s", action.reason)
+                    await tasty_stream.force_reconnect("mlčící stream (#1228)")
+                    if action.alert:
+                        await publisher.publish(
+                            "alerts",
+                            {
+                                "kind": "feed_silent",
+                                "symbol": "*",
+                                # Dopad na CumΔ jen pod tisky (v6, ADR-0057 bod 3)
+                                "message": silent_alert_message(
+                                    action.silence_s, cumdelta_prints=CUMDELTA_PRINTS
+                                ),
+                                "ts": dt.datetime.now(dt.UTC).timestamp(),
+                            },
+                        )
+                    return  # přepojení přihlásí i všechna univerza
+                universe_actions = check_universes(
+                    now,
+                    universe_watchdogs,
+                    [
+                        UniverseSample(symbol, routes.active_expiry, frozenset(routes.active))
+                        for symbol, routes in trade_routes.items()
+                    ],
+                    running_expiry={
+                        symbol: pipe.runtime.expiry for symbol, pipe in pipelines.items()
+                    },
+                    last_event_among=tasty_cache.last_event_among,
+                    connected=tasty_stream.connected,
+                    subscribed_at=tasty_stream.subscribed_at,
+                    stream_last_event_at=tasty_cache.last_event_at,
+                )
+                for universe, universe_action in universe_actions:
+                    logger.warning("Hlídač opčního univerza (#1604): %s", universe_action.reason)
+                    reason = f"mlčící univerzum {universe.symbol} (#1604)"
+                    if universe_action.remedy == "resubscribe":
+                        task = asyncio.create_task(
+                            tasty_stream.resubscribe(universe.streamers, reason)
+                        )
+                        pending_resubscribes.add(task)
+                        task.add_done_callback(pending_resubscribes.discard)
+                    else:
+                        await tasty_stream.force_reconnect(reason)
+                    if universe_action.alert:
+                        await publisher.publish(
+                            "alerts",
+                            {
+                                "kind": "feed_silent",
+                                "symbol": universe.symbol,
+                                "message": silent_universe_alert_message(
+                                    universe.symbol,
+                                    universe_action.silence_s,
+                                    cumdelta_prints=CUMDELTA_PRINTS,
+                                ),
+                                "ts": dt.datetime.now(dt.UTC).timestamp(),
+                            },
+                        )
 
             tasty_silence_tick = _tasty_silence_tick
 
@@ -2447,7 +2501,6 @@ async def main() -> None:
                     return None
                 # Všechny specs jedné pipeline sdílejí symbol; mapa je per produkt
                 chain = shadow_chain.get(specs[0].symbol)
-                last_event = tasty_cache.last_event_at
                 # Spot pipeline (i z tasty fallbacku) pro BS dopočet greeks tam,
                 # kde dxFeed Greeks nechodí (deep OTM 0DTE — právě striky zdí)
                 owner = pipelines.get(specs[0].symbol)
@@ -2459,9 +2512,11 @@ async def main() -> None:
                     now_utc_ts=dt.datetime.now(dt.UTC).timestamp(),
                     now_monotonic=time.monotonic(),
                     max_age_ms=int(settings.tasty_chain_max_age_s * 1000),
-                    # dxFeed je event-on-change: stáří měří živost streamu,
-                    # ne poslední změnu kontraktu (jinak fallback ztrácel OTM striky)
-                    stream_alive_ts=last_event.timestamp() if last_event is not None else None,
+                    # dxFeed je event-on-change: stáří měří živost univerza
+                    # řetězu, ne poslední změnu kontraktu (jinak fallback
+                    # ztrácel OTM striky) ani celý stream — tikající podklad
+                    # by mlčícím opcím dal stáří ~0 s (#1604)
+                    stream_alive_ts=universe_alive_ts(specs, chain, tasty_cache),
                     spot=spot_value,
                 )
 

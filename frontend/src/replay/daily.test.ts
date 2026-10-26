@@ -48,6 +48,7 @@ function day(date: string, daily?: ReplayBundle['daily']): ReplayDay {
 test('bez součtů se panely sčítají z minut (plný balík)', () => {
   const built = buildDailyDay([day('2026-07-16')])
   expect(built.panels.vol).toEqual([40])
+  expect(built.panels.futuresCvd).toEqual([null]) // den bez CVD = mezera, ne 0
   expect(built.panels.evoOiCall).toEqual([100])
   expect(built.overlays.price?.[0]).toMatchObject({
     open: 7600,
@@ -92,8 +93,8 @@ test('součty z ?resolution=daily mají přednost a nesou denní OHLC (#1206)', 
   expect(built.spotSeries[1]).toBe(7662.25)
 })
 
-test('Daily: Cum Δ dne s mezerou, neúplný den, CVD a zdroj — žádná řada nevypadne (#1588, #1591)', () => {
-  const totals = (cum: number | null, gap: number): ReplayBundle['daily'] => ({
+test('Daily: Cum Δ dne s mezerou, neúplný den, CVD a zdroj — žádná řada nevypadne (#1588, #1591, #1633)', () => {
+  const totals = (cum: number | null, gap: number, cvd: number | null): ReplayBundle['daily'] => ({
     ts_min: '2026-07-16T15:00:00Z',
     vol: 1,
     opt_vol_call: 1,
@@ -104,6 +105,7 @@ test('Daily: Cum Δ dne s mezerou, neúplný den, CVD a zdroj — žádná řada
     evo_oi_put: 1,
     cum_delta: cum,
     cum_delta_gap_minutes: gap,
+    futures_cvd: cvd,
     bar: null,
   })
   const withFlow = (date: string, daily: ReplayBundle['daily'], source: string) =>
@@ -122,8 +124,8 @@ test('Daily: Cum Δ dne s mezerou, neúplný den, CVD a zdroj — žádná řada
     )
   const built = buildDailyDay(
     [
-      withFlow('2026-07-15', totals(null, 1380), 'aggressor'),
-      withFlow('2026-07-16', totals(-500, 12), 'midpoint'),
+      withFlow('2026-07-15', totals(null, 1380, 4360), 'aggressor'),
+      withFlow('2026-07-16', totals(-500, 12, null), 'midpoint'),
     ],
     ['2026-07-14'],
   )
@@ -131,11 +133,12 @@ test('Daily: Cum Δ dne s mezerou, neúplný den, CVD a zdroj — žádná řada
   expect(built.panels.cumDelta).toEqual([null, null, -500]) // nic neměřeno ≠ nula
   expect(built.panels.cumDeltaGapMinutes).toEqual([0, 1380, 12])
   expect(built.panels.cumDeltaMidpoint).toEqual([false, false, true])
-  // Linku CVD Daily nekreslí: poslední minuta seance je v pauze, CVD tam 0 (#1633)
-  expect(built.panels.futuresCvd).toEqual([])
+  // CVD dne = tok seance z API (#1633), ne poslední minuta seance (pauza, -340);
+  // den bez CVD = mezera
+  expect(built.panels.futuresCvd).toEqual([null, 4360, null])
   expect(built.panels.cumDeltaFromIso).toBeNull()
   // Sada klíčů jako u aggregateDay/slicePanels (#1578): Daily nevynechá žádnou řadu
-  const intraday = withFlow('2026-07-16', totals(-500, 12), 'midpoint').panels
+  const intraday = withFlow('2026-07-16', totals(-500, 12, null), 'midpoint').panels
   const required = Object.keys(intraday).filter((key) => key !== 'sentiment')
   expect(required.filter((key) => !(key in built.panels))).toEqual([])
 })

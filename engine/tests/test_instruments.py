@@ -3134,3 +3134,108 @@ def test_wide_oi_status_serializuje_stav_per_symbol(
         "wide_oi_last_change_ts": {"ES": "2026-07-16T02:00:00+00:00", "NQ": None},
         "wide_oi_published": {"ES": False, "NQ": None},
     }
+
+
+# ── Sběrače jednou po settle mimo minutový cyklus (#1701) ─────────
+
+
+class GatedCollector:
+    """Sběrač po settle, který skončí až na pokyn testu (`gate`)."""
+
+    def __init__(
+        self, name: str, calls: list[tuple[str, dt.datetime]], gate: asyncio.Event | None = None
+    ) -> None:
+        self.name = name
+        self.calls = calls
+        self.gate = gate
+
+    async def on_minute(self, now: dt.datetime) -> None:
+        self.calls.append((self.name, now))
+        if self.gate is not None:
+            await self.gate.wait()
+
+
+def gated_collectors(
+    pipeline: InstrumentPipeline, gate: asyncio.Event
+) -> list[tuple[str, dt.datetime]]:
+    """Všech pět sběračů po settle; volatilitní režim stojí na `gate` (jako 26. 10. ~68 s)."""
+    calls: list[tuple[str, dt.datetime]] = []
+    pipeline.gamma_cliff = cast(Any, GatedCollector("gamma", calls))
+    pipeline.scenario_collector = cast(Any, GatedCollector("scenario", calls))
+    pipeline.vol_regime = cast(Any, GatedCollector("vol", calls, gate))
+    pipeline.em_respect = cast(Any, GatedCollector("em", calls))
+    pipeline.briefing_verdicts = cast(Any, GatedCollector("verdicts", calls))
+    return calls
+
+
+async def test_sberace_po_settle_cyklus_necekaji(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1701: cyklus na sběrače jednou po settle čekal, i když pracovaly ve vlákně.
+
+    26. 10. 2026 trval volatilitní režim ~68 s na symbol, takže ES i NQ každý všední
+    den ztratily minuty 20:06–20:07 UTC. Minuta teď doběhne hned; sběrače jdou na
+    pozadí v původním pořadí (verdikty čtou em_respect téže seance) a další minuta
+    nespustí druhý řetěz, dokud první neskončil.
+    """
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    stub_sweep(pipeline, monkeypatch)
+    gate = asyncio.Event()
+    calls = gated_collectors(pipeline, gate)
+    first = dt.datetime(2026, 7, 17, 20, 5, tzinfo=dt.UTC)
+
+    await asyncio.wait_for(pipeline.run_minute(first), timeout=5)
+    await asyncio.sleep(0)
+    task = pipeline._settle_jobs_task
+    assert task is not None and not task.done()
+    assert calls == [("gamma", first), ("scenario", first), ("vol", first)]
+
+    second = first + dt.timedelta(minutes=1)
+    await asyncio.wait_for(pipeline.run_minute(second), timeout=5)
+    assert pipeline._settle_jobs_task is task  # běžící řetěz se nezdvojí
+    assert len(calls) == 3
+
+    gate.set()
+    await task
+    assert [name for name, _ in calls] == ["gamma", "scenario", "vol", "em", "verdicts"]
+    assert pipeline._settle_jobs_task is None
+
+    third = second + dt.timedelta(minutes=1)
+    await pipeline.run_minute(third)
+    assert pipeline._settle_jobs_task is not None
+    await pipeline._settle_jobs_task
+    assert calls[-5:] == [(name, third) for name in ("gamma", "scenario", "vol", "em", "verdicts")]
+
+
+async def test_sberace_po_settle_pad_neshodi_retez_a_stop_ho_zrusi(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#1701: pád jednoho sběrače se zaloguje a další běží; stop pipeline (roll)
+    běžící řetěz zruší."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    stub_sweep(pipeline, monkeypatch)
+    gate = asyncio.Event()
+    calls = gated_collectors(pipeline, gate)
+
+    async def boom(now: dt.datetime) -> None:
+        raise RuntimeError("partice nečitelná")
+
+    monkeypatch.setattr(pipeline.gamma_cliff, "on_minute", boom)
+    at = dt.datetime(2026, 7, 17, 20, 5, tzinfo=dt.UTC)
+    with caplog.at_level(logging.ERROR, logger="gexlens_engine.instruments"):
+        await pipeline.run_minute(at)
+        await asyncio.sleep(0)
+    assert "Gamma útes ES selhal" in caplog.text
+    assert [name for name, _ in calls] == ["scenario", "vol"]
+
+    task = pipeline._settle_jobs_task
+    assert task is not None
+    pipeline.stop()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled()

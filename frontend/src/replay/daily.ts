@@ -89,6 +89,9 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
   const cumDelta: (number | null)[] = Array.from({ length: columns }, () => null)
   const cumDeltaMidpoint = Array.from({ length: columns }, () => false)
   const cumDeltaGapMinutes = Array.from({ length: columns }, () => 0)
+  // CVD podkladu dne = tok seance z API (součet přírůstků = úroveň z konce
+  // obchodování, restart enginu ho neposune, #1633); den bez CVD = null
+  const futuresCvd: (number | null)[] = Array.from({ length: columns }, () => null)
   const deltaFlowCall = Array.from({ length: columns }, () => 0)
   const deltaFlowPut = Array.from({ length: columns }, () => 0)
   const evoOiCall = Array.from({ length: columns }, () => 0)
@@ -127,6 +130,11 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
     cumDelta[dayIdx] = totals ? totals.cumDelta : lastMeasured(day.panels.cumDelta)
     cumDeltaMidpoint[dayIdx] = day.panels.cumDeltaMidpoint?.at(-1) ?? false
     cumDeltaGapMinutes[dayIdx] = totals?.cumDeltaGapMinutes ?? 0
+    futuresCvd[dayIdx] = totals
+      ? totals.futuresCvd
+      : day.panels.futuresCvd
+        ? lastMeasured(day.panels.futuresCvd)
+        : null
     deltaFlowCall[dayIdx] = totals ? totals.deltaFlowCall : sum(day.panels.deltaFlowCall)
     deltaFlowPut[dayIdx] = totals ? totals.deltaFlowPut : sum(day.panels.deltaFlowPut)
     // Evo OI (#573): úroveň posledního sloupce dne — Σ přes striky z raw matic
@@ -180,10 +188,7 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
       timestamp: entries.at(-1)?.date ?? '',
     },
     // Popisek „od HH:MM" (#518) je intradenní: sloupec Daily je celý den
-    // CVD podkladu (#829) Daily nekreslí: balík nese stav poslední minuty seance,
-    // ta leží v pauze Globexu a CVD tam je 0 — hodnota z konce obchodování
-    // chce pole z API (#1633)
-    panels: { vol, optVolCall, optVolPut, cumDelta, cumDeltaMidpoint, cumDeltaGapMinutes, futuresCvd: [], deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut, cumDeltaFromIso: null }, // prettier-ignore
+    panels: { vol, optVolCall, optVolPut, cumDelta, cumDeltaMidpoint, cumDeltaGapMinutes, futuresCvd, deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut, cumDeltaFromIso: null }, // prettier-ignore
     profileByMinute: profileSourceOf(profileByMinute),
     demoProfileRows: null,
     spotSeries,

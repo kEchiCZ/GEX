@@ -1590,21 +1590,50 @@ def read_last_cum_delta(
     větve, ADR-0057 bod 3) se přeskakuje: kumulativ po mezeře pokračuje
     od poslední měřené úrovně, ne od nuly.
     """
+    return _read_last_flow_value(paths, "cum_delta", start=start, end=end, sources=sources)
+
+
+def read_last_futures_cvd(
+    paths: Sequence[Path],
+    *,
+    start: dt.datetime,
+    end: dt.datetime,
+) -> float | None:
+    """Poslední ne-null `futures_cvd` z flow partic v okně seance [start, end) (#1603).
+
+    Navázání CVD podkladu po restartu uprostřed seance, i v pauze Globexu.
+    NULL = minuta bez registrovaného streameru front future, přeskakuje se.
+    Zdroj CumΔ (`source`) se nefiltruje — CVD je tok futures z tisků burzy
+    a na mechanice CumΔ nezávisí. Blokující čtení — volat přes to_thread.
+    """
+    return _read_last_flow_value(paths, "futures_cvd", start=start, end=end, sources=None)
+
+
+def _read_last_flow_value(
+    paths: Sequence[Path],
+    column: str,
+    *,
+    start: dt.datetime,
+    end: dt.datetime,
+    sources: frozenset[str | None] | None,
+) -> float | None:
+    """Poslední ne-null hodnota sloupce flow partic v okně [start, end); `sources`
+    None = bez filtru zdroje."""
     best: tuple[dt.datetime, float] | None = None
     for path in paths:
         if not path.exists():
             continue
         table = pq.read_table(path, schema=FLOW_SCHEMA)
-        for ts, cum, source in zip(
+        for ts, value, source in zip(
             table.column("ts_min").to_pylist(),
-            table.column("cum_delta").to_pylist(),
+            table.column(column).to_pylist(),
             table.column("source").to_pylist(),
             strict=True,
         ):
-            if ts is None or cum is None or ts < start or ts >= end:
+            if ts is None or value is None or ts < start or ts >= end:
                 continue
-            if source not in sources:
+            if sources is not None and source not in sources:
                 continue
             if best is None or ts >= best[0]:
-                best = (ts, float(cum))
+                best = (ts, float(value))
     return best[1] if best is not None else None

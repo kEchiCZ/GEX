@@ -16,6 +16,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-26 — sběrače „jednou po settle“ v minutovém cyklu: potřetí stejný vzorec (#1701, po #1337 a #1646).**
+  Gamma útes (`_fill_next_metrics`) a volatilitní režim čtou partice barů celé historie
+  (`session_ranges`, 703 souborů). Běžely přes `await asyncio.to_thread` v cyklu instrumentu, takže
+  ES i NQ každý všední den od nejméně 14. 10. ztrácely minuty 20:06–20:07 UTC (~68 s na symbol). Na
+  díru se přišlo až při kontrole „minuty v levels“ u rollu (#1674), protože žádný alert minutu po
+  settle nehlídá. Samotný přesun na pozadí by nestačil: smyčka v Pythonu přes ~800 tis. barů držela
+  GIL ~17 s CPU na symbol a ve vlákně by brzdila sweep i dávky OI jako #1695. → Práci, která cyklus
+  zdržuje, nejdřív změřit (wall i `process_time`). CPU-bound smyčku převést na vektorové operace
+  pyarrow a teprve pak ji pustit z cyklu (`_settle_jobs_task`, vzor `_oi_jobs_task`). Výsledek
+  ověřit shodou se starou funkcí na produkčních datech. Díry v minutových řadách hledat i v pevném
+  denním čase, nejen v rytmu jobu.
 - **2026-10-26 — čtení OI od 00:00 UTC se přeskakovalo, protože „den má řádky“ počítalo i tasty (#1609).**
   Zkratka „platný snímek dne“ se ptala `days()`, které původ nerozlišuje. Tasty (#828) zapíše řádky dne v první
   minutě UTC dne, takže IBKR čtení od půlnoci proběhlo z 28 dnů jen u ES 13× a u NQ 5×. Sekundár
@@ -44,7 +55,8 @@ chyb**, hlavně diagnostických a provozních.
   souběžné se sweepem by sčítalo market data lines (100, ADR-0001 bod 4). → Práce, která čte IBKR,
   jde po dávkách do zbytku minuty na konci iterace (`advance_oi_archives`, jen když se dávka vejde);
   co IBKR nečte, jde na pozadí (`BackgroundJob`, task jako #1208). Hledat díry v minutových řadách
-  v rytmu jobu (à 31 min = 30 cyklů + vynechaná minuta) a měřit délku iterace, ne jen sweep.
+  v rytmu jobu (à 31 min = 30 cyklů + vynechaná minuta) a měřit délku iterace, ne jen sweep. Povýšeno
+  na pravidlo v AGENTS.md „Kritická pravidla“ (vlastník 22. 10.).
 
 - **2026-10-14 — epika se rozjela do bočních issues (#1385).** Za týden od schválení: 44 PR, z nich
   18 (41 %) v pořadí plánu, 13 na Fázi 6 před její bránou, 13 bočních; 44 nových bočních issues
@@ -456,6 +468,20 @@ chyb**, hlavně diagnostických a provozních.
   verdikt, se řeže v okamžiku vzorku (`CumDeltaTracker.seal`), ne v okamžiku zápisu; data jiné
   periody, než ve které je stav, čekají stranou na její začátek, místo aby je reset smazal.
   Test: pád streamu po vzorku a před uzávěrkou; tisk nové seance před rollem.
+
+- **2026-10-26 — CVD podkladu po restartu začínalo od nuly a roll seance mazal tisky po openu: tentýž vzorec v druhém trackeru (#1603, #1633).**
+  `FuturesCvdTracker.restore_cum` měl od #829 (24. 8.) unit test, ale v `engine/src` žádného
+  volajícího. Restart uprostřed seance proto shodil linku CVD svisle k nule. Restart v pauze
+  (aktualizace Docker Desktop ve 21:10 UTC 21. a 22. 10.) psal nulu do celé pauzy a Daily, který bere
+  poslední stav seance, by kreslil 0 místo úrovně z konce obchodování. `on_event` přičítal tisk rovnou
+  do kumulativu a roll smazal i rozdělanou minutu, takže zahodil tisky od openu do prvního cyklu
+  nové seance, u NQ až do rollu v cyklu ES. Stejnou chybu opravil 18. 10. #1460 v trackeru opcí
+  (záznam výše), u CVD zůstala.
+  → Kumulativ se plní až uzávěrkou minuty a reset na hranici seance maže jen kumulativ. Rozdělaná
+  minuta přejde do nové seance, jen když ji instrument od začátku pauzy uzavřel; jinak nese tok
+  staré seance (front future bez běžící pipeline). Navázání po restartu potřebuje test runtime
+  (nový runtime nad particí → první řádek), unit test metody nestačí. Test: restart v pauze, tisk
+  nové seance před rollem pro instrument, za který roluje jiný runtime.
 
 - **2026-10-18 — přírůstek kumulativu přes mezeru v krmení připsán jedné minutě (#1460).**
   `_last_volume` mazal jen roll seance, takže stav objemu kontraktu přežil cykly bez baru

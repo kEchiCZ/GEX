@@ -5,6 +5,9 @@ import datetime as dt
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 
 TS = dt.datetime(2026, 8, 24, 14, 30, tzinfo=dt.UTC)
+#: Poslední minuta pauzy 24. 8. (CDT) a open seance 25. 8. (17:00 CT = 22:00 UTC)
+PAUSE_END = dt.datetime(2026, 8, 24, 21, 59, tzinfo=dt.UTC)
+OPEN = dt.datetime(2026, 8, 24, 22, 0, tzinfo=dt.UTC)
 FRONT = "/ESU6:XCME"
 
 
@@ -101,11 +104,70 @@ def test_neregistrovany_instrument_se_nesleduje() -> None:
 
 def test_restore_cum_navaze_po_restartu() -> None:
     t = tracker()
-    t.restore_cum("ES", -1200.0)
+    assert t.has_level("ES") is False
+    assert t.restore_cum("ES", -1200.0) is True
 
     t.on_event("TimeAndSale", trade(FRONT, 200.0, "BUY"))
 
     assert t.close_minute("ES", TS).cvd == -1000.0
+
+
+def test_restore_cum_jen_bez_urovne_v_seanci() -> None:
+    """#1603: znovu založená pipeline nad sdíleným trackerem základ nepřičte podruhé."""
+    t = tracker()
+    assert t.restore_cum("ES", 4360.0) is True
+    assert t.restore_cum("ES", 4360.0) is False  # druhé navázání
+    t.on_event("TimeAndSale", trade(FRONT, 5.0, "BUY"))
+    assert t.close_minute("ES", TS).cvd == 4365.0
+
+    fresh = tracker()
+    fresh.close_minute("ES", TS)  # uzavřená minuta = úroveň seance existuje
+    assert fresh.has_level("ES") is True
+    assert fresh.restore_cum("ES", 4360.0) is False
+    assert fresh.close_minute("ES", TS).cvd == 0.0
+
+
+def test_tisk_po_openu_pred_rollem_patri_nove_seanci() -> None:
+    """#1603: roll provede runtime ES (sdílená instance) — tisky ES i NQ přijaté po
+    openu, ale před rollem, skončí v první minutě nové seance; stará seance ne."""
+    nq_front = "/NQU6:XCME"
+    t = tracker()
+    t.register("NQ", nq_front)
+    old_day, new_day = dt.date(2026, 8, 24), dt.date(2026, 8, 25)
+    t.roll_session(old_day)
+    t.on_event("TimeAndSale", trade(FRONT, 40.0, "BUY"))
+    t.on_event("TimeAndSale", trade(nq_front, 30.0, "SELL"))
+    t.close_minute("ES", PAUSE_END)
+    t.close_minute("NQ", PAUSE_END)
+
+    # 17:00 CT: tisky přijdou dřív, než první cyklus nové seance zavolá roll
+    t.on_event("TimeAndSale", trade(FRONT, 3.0, "BUY"))
+    t.on_event("TimeAndSale", trade(nq_front, 2.0, "SELL"))
+    assert t.roll_session(new_day) is True  # ES roluje za oba
+
+    es = t.close_minute("ES", OPEN)
+    nq = t.close_minute("NQ", OPEN)
+    assert (es.cvd_delta, es.cvd, es.aggressor_share) == (3.0, 3.0, 1.0)
+    assert (nq.cvd_delta, nq.cvd) == (-2.0, -2.0)
+
+
+def test_roll_zahodi_rozdelanou_minutu_bez_uzaverky_od_pauzy() -> None:
+    """#1603: front future registrovaný bez běžící pipeline (watchlist nad stropem,
+    cooldown) nesmí tok staré seance přenést do první minuty nové."""
+    nq_front = "/NQU6:XCME"
+    t = tracker()
+    t.register("NQ", nq_front)
+    t.roll_session(dt.date(2026, 8, 24))
+    t.on_event("TimeAndSale", trade(nq_front, 30.0, "SELL"))  # NQ bez pipeline
+    t.close_minute("NQ", TS)  # poslední uzávěrka v RTH, pak už žádná
+    t.on_event("TimeAndSale", trade(nq_front, 12.0, "SELL"))  # stará seance
+    t.close_minute("ES", PAUSE_END)  # ES běží
+    t.on_event("TimeAndSale", trade(FRONT, 3.0, "BUY"))  # ES po openu
+
+    assert t.roll_session(dt.date(2026, 8, 25)) is True
+
+    assert t.close_minute("NQ", OPEN).cvd_delta == 0.0
+    assert t.close_minute("ES", OPEN).cvd_delta == 3.0
 
 
 def test_status_fields_odlisi_tri_pricini_nuly() -> None:
