@@ -558,13 +558,14 @@ class InstrumentPipeline:
         zdi, Max Pain a P/C. Když tasty vypadne přes příchod publikace, zůstanou na
         předchozí publikaci a nic to neoznačí. `wide_oi_state` = (poslední změna,
         nesou dnešní publikaci?): None = publikaci dne nečekáme (před oknem,
-        víkend, svátek — `_oi_published`) nebo není s čím srovnat (den bez křídel:
+        víkend, svátek — `_oi_published`; po rollu v settle, kdy aktivní není
+        expirace UTC dne) nebo není s čím srovnat (den bez křídel:
         ad-hoc pohled, tasty mlčí od půlnoci — hlásí `feed_silent` #1228 a #1604;
         expirace bez předchozího obchodního dne).
 
         „Nesou dnešní publikaci“ = liší se od téže expirace předchozího obchodního
         dne aspoň u jednoho křídla (Rozhodnuto 26. 10., a). Ne čas změny: tasty
-        nese publikaci už ~01:45–02:30 UTC (#1626) a v pondělí od soboty, práh
+        nese publikaci už ~01:45–02:30 UTC (#1626) a za pátek přes víkend, práh
         07:00 CT by dal falešný alert skoro denně. Srovnání (~9 ms) běží jen při
         nové změně křídel; každou minutu jen dotaz na poslední změnu (~1,5 ms).
 
@@ -579,7 +580,10 @@ class InstrumentPipeline:
         )
         publication = self.settings.oi_publication_utc(day)
         fresh: bool | None = None
-        if last is not None and self._oi_published(now):
+        # Jen aktivní expirace UTC dne (0DTE): po rollu v settle je aktivní D+1,
+        # která má s předchozím dnem jen malý průnik striků — falešné „neobnoveno“
+        zero_dte = self.runtime.expiry == day.strftime("%Y%m%d")
+        if last is not None and zero_dte and self._oi_published(now):
             key = (day, last)
             if self._wide_oi_compared is None or self._wide_oi_compared[0] != key:
                 self._wide_oi_compared = (key, await self._wings_fresh(day))
