@@ -701,6 +701,24 @@ class InstrumentPipeline:
         task.add_done_callback(self._log_oi_jobs_result)
         self._oi_jobs_task = task
 
+    async def refresh_forward_after_tasty(self, written: int, now: dt.datetime) -> bool:
+        """Forward GEX znovu po obnově tasty křídel po finalitě (#1607); True = přepočteno.
+
+        Forward pole (#519) stojí na celém řetězu dne včetně tasty křídel mimo
+        obálku IBKR (~55 % Σ OI 0DTE, #1605). Do finality ho přepočítá každý IBKR
+        průchod. Po finalitě už žádný nepřijde, takže obnovu křídel (`wide_oi_pass`
+        po výpadku tasty přes publikaci) by pole nevidělo až do rollu. Běžící joby
+        po archivu zapisují týž soubor a čtou řetěz dřív, proto se nejdřív dočkají
+        (`asyncio.wait` nepropustí zrušení jobu, jen vlastní).
+        """
+        today = now.date()
+        if written <= 0 or not self.oi_final or self._oi_day != today:
+            return False
+        if self._oi_jobs_task is not None:
+            await asyncio.wait({self._oi_jobs_task})
+        await self._write_forward_field(today)
+        return True
+
     def _log_oi_jobs_result(self, task: asyncio.Task[None]) -> None:
         if task is self._oi_jobs_task:
             self._oi_jobs_task = None

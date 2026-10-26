@@ -606,7 +606,7 @@ Od ADR-0029 (v1.2) se **`snapshots/` a `derived/` nemažou nikdy** (`GEXLENS_KEE
 | `derived/{sym}/{expiry}/greekssource/{date}.parquet` | Zdroj greeks per minutu (model/computed, #547) |
 | `derived/{sym}/{expiry}/oimissing/{date}.parquet` | Striky bez OI (šrafura, #465) |
 | `derived/{sym}/catchup/{date}.parquet` | Příznak dohánění po startu (#518) |
-| `derived/{sym}/gexforward/{date}.parquet` | **Forward GEX** (#519): bloky per budoucí obchodní den (day, grid, values, dropped_expiries, dropped_share, iv_fallback_share); jen poslední stav, přepočet po OI archivu |
+| `derived/{sym}/gexforward/{date}.parquet` | **Forward GEX** (#519): bloky per budoucí obchodní den (day, grid, values, dropped_expiries, dropped_share, iv_fallback_share); jen poslední stav, přepočet po OI archivu. Po finalitě dne ho přepočítá i obnova tasty křídel mimo obálku IBKR (`wide_oi_pass` zapsal aspoň jeden řádek, až po dokončení jobů po archivu; #1607), jinak by po výpadku tasty přes publikaci zůstal do rollu na předchozí publikaci |
 | `derived/sentiment/{SYM}/{date}.parquet` | 1min řada SentIndexu per symbol (ADR-0026; ploché soubory bez symbolu = ES legacy) |
 
 Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane částečný soubor; osiřelé `.tmp` se uklízí při dalším zápisu. Writer po restartu navazuje na rozepsaný den.
