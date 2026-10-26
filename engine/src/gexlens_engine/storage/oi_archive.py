@@ -420,11 +420,13 @@ class OIEodRepository:
         return classes
 
     def captured_at(self, symbol: str, day: dt.date) -> dt.datetime | None:
-        """Kdy vznikl snímek dne; None = archiv chybí NEBO je z doby před #463.
+        """Kdy vznikl IBKR snímek dne; None = archiv chybí, den má jen tasty
+        řádky (#828, `captured_ts` NULL — o čtení od 00:00 rozhoduje právě tohle,
+        #1609) NEBO je z doby před #463.
 
-        Obě situace vedou ke stejnému závěru (snímek je potřeba po publikačním
+        Všechny vedou ke stejnému závěru (IBKR snímek je potřeba přečíst, po publikačním
         okně obnovit), takže je volající nemusí rozlišovat — na existenci
-        archivu je `days()`.
+        jakýchkoli řádků dne je `days()`.
         """
         stmt = select(func.max(oi_eod_table.c.captured_ts)).where(
             oi_eod_table.c.symbol == symbol,

@@ -8,10 +8,11 @@ Stopu nechávají logy enginu: „OI archiv {sym} {den}: … zapsáno“ (do #16
 „… průchod N kontraktů“ (od #1674) v okně 00:00–00:15 UTC.
 
 Vstup: uložené logy `data/logs/engine-*.log` (deploy je ukládá před recreate)
-a volitelně výpis `docker logs gex-engine-1` do souboru. Den se počítá jen tehdy,
-když některý log pokrývá celé okno.
+a volitelně výpis `docker logs gex-engine-1` do souboru MIMO repo (je veřejné).
+Den se počítá jen tehdy, když některý log pokrývá celé okno.
 
-    uv run python scripts/measure_oi_midnight_1609.py data/logs/engine-*.log engine-now.log
+    docker logs gex-engine-1 > "$TEMP/engine-now.log" 2>&1
+    uv run python scripts/measure_oi_midnight_1609.py data/logs/engine-*.log "$TEMP/engine-now.log"
 """
 
 from __future__ import annotations
@@ -19,11 +20,13 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 TS = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)")
-READ = re.compile(r"OI archiv (ES|NQ) (\d{4}-\d\d-\d\d): (?:\d+ zapsáno|průchod)")
+# Část uložených logů má diakritiku dvojitě kódovanou (`zaps├íno`, `pr┼»chod`)
+READ = re.compile(r"OI archiv (ES|NQ) (\d{4}-\d\d-\d\d): (?:\d+ zaps\S{1,4}no|pr\S{1,4}chod)")
 #: Okno začátku UTC dne; do #1674 první archiv běžel na pozadí, ES zapsal do ~00:02
 WINDOW = dt.time(0, 15)
 
@@ -55,6 +58,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("logs", nargs="+", type=Path)
     args = parser.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]  # Windows konzole cp1250
     ranges, reads = scan(args.logs)
     covered: set[dt.date] = set()
     for first, last in ranges:

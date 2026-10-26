@@ -1452,7 +1452,7 @@ async def test_kalibrace_alfa_po_oi_archivu_nastavi_runtime(
     today = TS.date()
     prev = today - dt.timedelta(days=1)
     # Archivy obou dnů s IBKR měřením po publikaci (#1605; make_pipeline zapisuje
-    # dnešní OI 500 bez času pořízení): ΔOI = +40 per strana
+    # dnešní OI 500 z čtení ve 00:05 UTC, tedy před publikací): ΔOI = +40 per strana
     contracts = list(pipeline.runtime.contracts)
     oi_repository.upsert_many(
         [OIRecord("ES", "20260717", c.strike, c.right, prev, 460.0) for c in contracts],
@@ -2773,3 +2773,44 @@ async def test_den_jen_s_tasty_radky_selhani_po_okne_hlasi_obnovu_ne_chybejici_o
     assert await archive_pass(pipeline, day, po_okne) is True
     kinds = [d["kind"] for ch, d in publisher.messages if ch == "alerts"]
     assert kinds == ["oi_refresh_failed"]
+
+
+async def test_novy_utc_den_v_sobotu_s_tasty_radky_otevre_pruchod(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1609 na produkčním případu: víkendové UTC dny mají dnes jen tasty řádky
+    (ne 25. 10. 2026 tasty 00:00:10, cyklus pozdě). Nový UTC den v sobotu 00:00
+    (zavřený trh, `new_day`) otevře průchod z minutového cyklu i tak."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    saturday = dt.datetime(2026, 7, 18, 0, 0, tzinfo=dt.UTC)
+    assert is_market_closed(saturday)
+    _tasty_rows(pipeline, repository, saturday.date())
+    pipeline._oi_day = saturday.date() - dt.timedelta(days=1)  # běžel páteční UTC den
+
+    await pipeline.run_minute(saturday)
+    assert pipeline._oi_pass is not None
+    assert pipeline._oi_pass.day == saturday.date()
+    assert pipeline._oi_pass.has_snapshot is True  # alerty berou tasty řádky jako OI dne
+
+
+async def test_den_jen_s_tasty_radky_bez_zapisu_ibkr_obnovi_ulozenou_alfu(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1609 (ověřovatel): dřív zkratka na dni jen s tasty řádky propsala uloženou
+    α (`_run_fa_jobs` → `_restore_alpha`). Průchod, který z IBKR nic nezapíše
+    (sobota přes den), joby po archivu nespustí — α se musí propsat i tak."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    alpha_repo = FaAlphaRepository(
+        create_engine(f"sqlite+pysqlite:///{settings.data_dir.parent / 'alpha1609.sqlite'}")
+    )
+    alpha_repo.ensure_schema()
+    alpha_repo.set_state("ES", 0.27, 12)
+    pipeline.alpha_repository = alpha_repo
+    day = dt.date(2026, 7, 16)
+    _tasty_rows(pipeline, repository, day)
+
+    # Výchozí MockOIFetcher nevrací nic → 0 zapsáno
+    assert await archive_pass(pipeline, day, dt.datetime(2026, 7, 16, 0, 1, tzinfo=dt.UTC))
+    assert pipeline.runtime.flow_alpha == pytest.approx(0.27)

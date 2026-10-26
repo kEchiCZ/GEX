@@ -16,6 +16,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-26 — čtení OI od 00:00 UTC se přeskakovalo, protože „den má řádky“ počítalo i tasty (#1609).**
+  Zkratka „platný snímek dne“ se ptala `days()`, které původ nerozlišuje. Tasty (#828) zapíše řádky dne v první
+  minutě UTC dne, takže IBKR čtení od půlnoci proběhlo z 28 dnů jen u ES 13× a u NQ 5×. Sekundár
+  pak jel do publikace na fallbacku a Forward GEX dne nevznikl. Je to zrcadlo #1605, kde pokrytí bralo tasty
+  řádky jako IBKR. → „Hotovo zdrojem X?“ se ptá jen na řádky původu X (`captured_at`, `captured_ts`),
+  „má den data?“ (alerty) na jakékoli řádky. Když zkratka mizí, přenést i její vedlejší účinky (tady
+  propsání uložené α). `oifilled` jako důkaz nestačí, protože fill nesou i křídla mimo obálku IBKR. Stopu
+  nechávají logy enginu (`scripts/measure_oi_midnight_1609.py`).
 - **2026-10-23 — oprava souběhu jen na jedné ze dvou cest k témuž čtení IBKR (#1674, #1649).**
   #1646 přesunul obnovu OI archivu z minutového cyklu po dávkách mezi cykly. První archiv po
   založení pipeline ale dál četl celý průchod naráz jako task na pozadí (#1208). Po rollu v settle

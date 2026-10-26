@@ -606,10 +606,11 @@ class InstrumentPipeline:
         # řádky (#828): alerty níž proto zůstávají na „den má jakékoli řádky“.
         has_snapshot = today in self.oi_repository.days(self.symbol)
         # O čtení ale rozhoduje jen IBKR snímek dne (`captured_ts` nese jen IBKR,
-        # #1609). Tasty zapíše aktivní expiraci ve 00:00:10 a dřív zkratka
-        # přeskočila čtení od 00:00: sekundár a další expirace univerza jely
-        # do obnovy po publikaci na tasty fallbacku a Forward GEX dne nevznikl
-        # (z 27 dnů 8. 9.–26. 10. 2026 četl ES jen 11×, NQ 5×).
+        # #1609). Tasty zapíše aktivní expiraci v první minutě UTC dne (smyčka
+        # à 60 s) a dřív zkratka přeskočila čtení od 00:00: sekundár a další
+        # expirace univerza jely do obnovy po publikaci na tasty fallbacku
+        # a Forward GEX dne nevznikl (z 28 dnů 8. 9.–26. 10. 2026 četl ES jen
+        # 13×, NQ 5×; `scripts/measure_oi_midnight_1609.py`).
         captured = self.oi_repository.captured_at(self.symbol, today)
         if captured is not None and not self._oi_refresh_due(now):
             await self._run_fa_jobs(today)
@@ -737,6 +738,7 @@ class InstrumentPipeline:
         # shodil celý řetěz do cooldownu) — sběr běží dál s volume fallbackem,
         # retry po OI_RETRY_CYCLES cyklech
         logger.exception("OI archivace %s selhala — pokračuje se bez OI", self.symbol)
+        await self._restore_alpha()  # jako při průchodu bez zápisu (#1609)
         if archive.has_snapshot:
             return await self._report_refresh_failed(archive.day, archive.started)
         await self._publish_oi_alert(
@@ -766,6 +768,10 @@ class InstrumentPipeline:
             result.missing_archived,
         )
         if result.written == 0:
+            # Bez zápisu joby po archivu nepoběží; uložená α se ale propsat musí,
+            # jako dřív zkratka na dni jen s tasty řádky (#1609) — jinak by FA po
+            # startu jela pod v5 s α z konfigurace a pod v6 vypnutá i s ρ
+            await self._restore_alpha()
             if has_snapshot:
                 return await self._report_refresh_failed(today, now)
             await self._publish_oi_alert(
