@@ -340,10 +340,17 @@ function StrikeProfileBase({
             className="profile-flag"
             data-testid="volume-missing"
             title={
-              'Objem této minuty není k dispozici — opční řetěz běžel z tastytrade ' +
-              'fallbacku (#614), který denní objem v sémantice IBKR nedodává.\n' +
-              'Pruhy a čísla ukazují jen složku OI Δ; objem se doplní, až se řetěz ' +
-              'vrátí na IBKR. Není to pokles objemu.'
+              windowMode
+                ? // Okno bez měřeného objemu (#1631): celé v mezeře objemu
+                  // nebo na expiraci, která objem nenese (jen tastytrade)
+                  'Objem se v okně neměřil:\n' +
+                  '• okno leží celé v mezeře objemu (tastytrade fallback #614, díra ve sběru)\n' +
+                  '• nebo expirace objem nenese (vzdálená expirace jen z tastytrade)\n' +
+                  'Pruhy a čísla ukazují jen složku OI Δ. Není to nulový obchod.'
+                : 'Objem této minuty není k dispozici — opční řetěz běžel z tastytrade ' +
+                  'fallbacku (#614), který denní objem v sémantice IBKR nedodává.\n' +
+                  'Pruhy a čísla ukazují jen složku OI Δ; objem se doplní, až se řetěz ' +
+                  'vrátí na IBKR. Není to pokles objemu.'
             }
           >
             Vol nedostupný

@@ -6,6 +6,7 @@ import io
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pyarrow.ipc
@@ -1594,6 +1595,161 @@ def test_profile_window_diff_values(client: TestClient) -> None:
     assert row["call_vol_component"] == pytest.approx(20.0 * 0.5)
     assert row["net"] == pytest.approx(10.0 - 8.0)
     assert payload["from_ts"] == ts(0).isoformat()
+
+
+@pytest.mark.parametrize(
+    ("series", "after", "expected"),
+    [
+        # Propad IBKR v t1 (800 pod maximem 1000): okno nese jen objem nad maximem,
+        # ne návrat 800 → 1010 (dřív 210)
+        ([1000.0, 800.0, 760.0, 1000.0, 1010.0], 1, 10.0),
+        # t2 v propadu: okno nese jen přírůstek 1005 (5), ne záporný rozdíl 760 − 1000
+        ([1000.0, 1005.0, 760.0], 0, 5.0),
+        # t1 = minuta 1 s NULL: při volání s touto bází nese okno přírůstky (1, 3]
+        # (posun báze řeší `profile`, rozhodnutí B — test_profile_window_t1_ve_fallbacku)
+        ([100.0, None, 130.0, 150.0], 1, 50.0),
+        # Kontrakt bez měření do t1: první hodnota v okně jen založí stav (dřív 510)
+        ([None, None, 500.0, 510.0], 1, 10.0),
+        # Okno od začátku seance nese celý kumulativ do t2
+        ([100.0, None, 130.0, 150.0], None, 150.0),
+    ],
+)
+def test_window_volumes_proti_prubeznemu_maximu(
+    series: list[float | None], after: int | None, expected: float
+) -> None:
+    """#1631: objem okna = Σ přírůstků proti průběžnému maximu přes (t1, t2]."""
+    from gexlens_api.main import window_volumes
+
+    template = snapshot_rows(0)[0]
+    rows = [
+        replace(template, ts_min=ts(m), strike=7600.0, right="C", volume=v)
+        for m, v in enumerate(series)
+    ]
+    frame = pd.DataFrame([r.__dict__ for r in rows])
+    frame["ts_min"] = pd.to_datetime(frame["ts_min"], utc=True)
+    bound = None if after is None else pd.Timestamp(ts(after))
+    assert window_volumes(frame, bound) == {(7600.0, "C"): pytest.approx(expected)}
+
+
+def _window_profile(
+    settings: Settings, series: list[float | None], start: int, end: int
+) -> dict[str, Any]:
+    writer = SnapshotWriter(settings)
+    template = snapshot_rows(0)[0]
+    for minute, volume in enumerate(series):
+        writer.write_minute(
+            "ES",
+            "20260717",
+            DAY,
+            [replace(template, ts_min=ts(minute), strike=7600.0, right="C", volume=volume)],
+        )
+    payload: dict[str, Any] = (
+        TestClient(create_app(settings))
+        .get(
+            "/profile/ES/20260717",
+            params={
+                "date": DAY.isoformat(),
+                "from": ts(start).isoformat(),
+                "to": ts(end).isoformat(),
+                "variant": "vol",
+                "spot": 7600.0,
+            },
+        )
+        .json()
+    )
+    return payload
+
+
+def test_profile_window_t1_ve_fallbacku(settings: Settings) -> None:
+    """#1631 = B: báze v minutě s NULL volume se posune na první měřenou minutu
+    okna — ne báze 0 (celý den, dřív 150) ani zastaralé maximum (50)."""
+    payload = _window_profile(settings, [100.0, None, 130.0, 150.0], 1, 3)
+    row = next(r for r in payload["profile"] if r["strike"] == 7600.0)
+    assert row["call_volume"] == pytest.approx(20.0)
+    assert payload["window_summary"]["call_volume"] == pytest.approx(20.0)
+    assert payload["from_ts"] == ts(2).isoformat()  # měřená báze
+    assert payload["to_ts"] == ts(3).isoformat()
+    assert payload["volume_measured"] is True
+
+
+def test_profile_window_t2_ve_fallbacku_a_okno_bez_mereni(settings: Settings) -> None:
+    """#1631 = B: konec v NULL minutě se zkrátí na poslední měřenou minutu; okno
+    celé v mezeře má `volume_measured: false`."""
+    payload = _window_profile(settings, [100.0, 120.0, None, None], 0, 3)
+    row = next(r for r in payload["profile"] if r["strike"] == 7600.0)
+    assert row["call_volume"] == pytest.approx(20.0)
+    assert payload["to_ts"] == ts(1).isoformat()
+    assert payload["volume_measured"] is True
+    gap = (
+        TestClient(create_app(settings))
+        .get(
+            "/profile/ES/20260717",
+            params={
+                "date": DAY.isoformat(),
+                "from": ts(2).isoformat(),
+                "to": ts(3).isoformat(),
+                "variant": "vol",
+                "spot": 7600.0,
+            },
+        )
+        .json()
+    )
+    assert gap["volume_measured"] is False
+    assert gap["window_summary"]["call_volume"] == 0.0
+
+
+def test_measured_bounds() -> None:
+    """#1631 = B: báze v mezeře → první měřená minuta okna, konec → poslední měřená."""
+    from gexlens_api.main import measured_bounds
+
+    def at(minute: int) -> pd.Timestamp:
+        return pd.Timestamp(ts(minute))
+
+    stamps = [at(m) for m in (0, 3, 4)]
+    assert measured_bounds(stamps, at(0), at(4)) == (at(0), at(4))  # celé měřené
+    assert measured_bounds(stamps, at(1), at(4)) == (at(3), at(4))  # báze v mezeře
+    assert measured_bounds(stamps, at(0), at(2)) == (at(0), None)  # nic měřeného v (0, 2]
+    assert measured_bounds(stamps, None, at(2)) == (None, at(0))  # od začátku seance
+    assert measured_bounds(stamps, at(1), at(2)) == (at(2), None)  # celé v mezeře
+
+
+def test_flow_window_opt_vol_bez_catch_up(settings: Settings) -> None:
+    """#1631: catch-up minuta (#518) do OptVol okna nejde, řada `opt_vol` beze změny."""
+    from gexlens_engine.storage.parquet_store import CatchUpRow
+
+    SnapshotWriter(settings).write_catch_up("ES", "20260716", DAY, [CatchUpRow(ts_min=ts(1))])
+    payload = (
+        TestClient(create_app(settings))
+        .get(
+            "/flow/ES",
+            params={"date": DAY.isoformat(), "from": ts(0).isoformat(), "to": ts(2).isoformat()},
+        )
+        .json()
+    )
+    assert payload["window"]["opt_vol"] == pytest.approx(120.0)  # jen minuta 2
+    assert [row["opt_vol"] for row in payload["opt_vol"]] == pytest.approx([0.0, 120.0, 120.0])
+
+
+def test_okno_s_hranici_v_dire_sberu(settings: Settings) -> None:
+    """#1631 = B: minuta bez řádku (díra ve sběru, #1646) posune bázi okna stejně
+    jako minuta s NULL, v `/profile` i ve `/flow`; from uvnitř minuty ji nevynechá."""
+    writer = SnapshotWriter(settings)
+    for minute in (3, 5, 6):  # minuta 4 bez řádku
+        writer.write_minute("ES", "20260716", DAY, snapshot_rows(minute))
+    client = TestClient(create_app(settings))
+    for start, base in ((ts(4), ts(5)), (ts(5) + dt.timedelta(seconds=30), ts(5))):
+        params = {"date": DAY.isoformat(), "from": start.isoformat(), "to": ts(6).isoformat()}
+        window = client.get("/flow/ES", params=params).json()["window"]
+        assert window["opt_vol"] == pytest.approx(120.0)  # jen přírůstek minuty 6
+        assert window["opt_vol_from_ts"] == base.isoformat()
+        assert window["opt_vol_to_ts"] == ts(6).isoformat()
+        profile = client.get(
+            "/profile/ES/20260716", params={**params, "variant": "vol", "spot": 7600.0}
+        ).json()
+        row = next(r for r in profile["profile"] if r["strike"] == 7600.0)
+        assert row["call_volume"] == pytest.approx(20.0)  # 10 · 2 za minutu 6
+        assert profile["from_ts"] == base.isoformat()
+        assert profile["to_ts"] == ts(6).isoformat()
 
 
 def test_profile_window_param_validation(client: TestClient) -> None:
