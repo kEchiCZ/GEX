@@ -11,7 +11,11 @@ import {
   rangeLabel,
   reactionWindow,
   windowProfileRows,
+  windowVolumeNote,
+  windowVolumes,
 } from './rangeselect'
+import type { WindowVolumes } from './rangeselect'
+import type { RawDay } from '../heatmap/modes'
 import type { ProfileRow } from '../profile/bars'
 
 /** Řádek jako z profileByMinute: kumulativní volume, component = vol × |Δ|. */
@@ -31,11 +35,16 @@ function row(strike: number, callVol: number, putVol: number): ProfileRow {
 }
 
 describe('windowProfileRows', () => {
-  it('okno = diff kumulativů, |Δ| k t2 se zachová, OI složky statické', () => {
-    // Parita s API (#483): fixture vzor — vol(t) = 10·(t+1) per strana
-    const rows1 = [row(7590, 15, 10)]
+  const volumes = (entries: [number, number, number][], measured = true): WindowVolumes => ({
+    byStrike: new Map(entries.map(([strike, call, put]) => [strike, { call, put }])),
+    fromIdx: 0,
+    toIdx: 0,
+    measured,
+  })
+
+  it('objem okna z windowVolumes, |Δ| k t2 se zachová, OI složky statické', () => {
     const rows2 = [row(7590, 35, 30)]
-    const result = windowProfileRows(rows2, rows1)
+    const result = windowProfileRows(rows2, volumes([[7590, 20, 20]]))
     expect(result[0].callVolume).toBe(20)
     expect(result[0].putVolume).toBe(20)
     expect(result[0].callVolComponent).toBeCloseTo(20 * 0.5, 10)
@@ -44,23 +53,88 @@ describe('windowProfileRows', () => {
     expect(result[0].callOi).toBe(100)
   })
 
-  it('prázdná baseline = okno od začátku dat (== plný kumulativ)', () => {
-    const rows2 = [row(7590, 35, 30)]
-    const result = windowProfileRows(rows2, [])
-    expect(result[0].callVolume).toBe(35)
-    expect(result[0].callVolComponent).toBeCloseTo(35 * 0.5, 10)
-  })
-
-  it('korekce dat (kumulativ klesl) se clampuje na 0', () => {
-    const result = windowProfileRows([row(7590, 10, 10)], [row(7590, 15, 10)])
+  it('strike bez objemu okna má 0', () => {
+    const result = windowProfileRows([row(7600, 12, 8)], volumes([[7590, 15, 10]]))
     expect(result[0].callVolume).toBe(0)
     expect(result[0].callVolComponent).toBe(0)
-    expect(result[0].putVolume).toBe(0)
+    expect(result[0].volumeMissing).toBe(false)
   })
 
-  it('strike bez baseline řádku (přibyl posunem obálky) má baseline 0', () => {
-    const result = windowProfileRows([row(7600, 12, 8)], [row(7590, 15, 10)])
-    expect(result[0].callVolume).toBe(12)
+  it('okno bez měřeného objemu nese volumeMissing, ne nulu jako měření (#1631)', () => {
+    const result = windowProfileRows([row(7590, 35, 30)], volumes([[7590, 0, 0]], false))
+    expect(result[0].volumeMissing).toBe(true)
+  })
+})
+
+/** Jeden strike 7590, call = `series`, put prázdný; `null` = volume NULL
+ * (maska 0), `undefined` = minuta bez snapshotu. */
+function rawOf(series: (number | null | undefined)[]): RawDay {
+  const minutes = series.length
+  const callVolume = Float32Array.from(series, (value) => value ?? 0)
+  const callVolumeKnown = Float32Array.from(series, (value) => (value == null ? 0 : 1))
+  const zeros = new Float32Array(minutes)
+  return {
+    minutes,
+    strikes: [7590],
+    callOi: zeros,
+    putOi: zeros,
+    callVolume,
+    putVolume: zeros,
+    callVolumeKnown,
+    putVolumeKnown: zeros,
+    snapshotMinutes: series.map((value) => value !== undefined),
+    spotSeries: series.map(() => null),
+    staleAge: null,
+  }
+}
+
+describe('windowVolumes (#1631)', () => {
+  // Tytéž řady jako API `test_window_volumes_proti_prubeznemu_maximu` (parita)
+  it.each([
+    ['propad v t1 se nezapočte znovu', [1000, 800, 760, 1000, 1010], 2, 4, 10],
+    ['t2 v propadu', [1000, 1005, 760], 1, 2, 5],
+    // t1 ve fallbacku (B): báze = první měřená minuta okna, ne 0 (dřív 150)
+    ['t1 ve fallbacku posune bázi na měřenou minutu', [100, null, 130, 150], 2, 3, 20],
+    ['strike bez měření do t1 jen založí stav', [null, null, 500, 510], 2, 3, 10],
+    ['okno od začátku seance nese celý kumulativ', [100, null, 130, 150], 0, 3, 150],
+  ] as [string, (number | null)[], number, number, number][])(
+    '%s',
+    (_label, series, fromIdx, toIdx, expected) => {
+      expect(windowVolumes(rawOf(series), fromIdx, toIdx)?.byStrike.get(7590)).toEqual({
+        call: expected,
+        put: 0,
+      })
+    },
+  )
+
+  it('bez snapshotu před oknem = od začátku seance i s barem před ním', () => {
+    // Minuta 0 má jen bar (osa začíná dřív než opční snímky)
+    expect(windowVolumes(rawOf([undefined, 100, 130]), 1, 2)?.byStrike.get(7590)?.call).toBe(130)
+  })
+
+  it('hranice v mezeře se posunou na měřenou část a chip to přizná (B)', () => {
+    const minutesIso = [0, 1, 2, 3, 4, 5].map((m) => `2026-10-02T19:1${m}:00Z`)
+    // t1 = 2 s bází v NULL minutě 1 → báze 3 (130), okno od 4; t2 = 5 v NULL → do 4
+    const window = windowVolumes(rawOf([100, null, null, 130, 150, null]), 2, 5)!
+    expect(window).toMatchObject({ fromIdx: 4, toIdx: 4, measured: true })
+    expect(window.byStrike.get(7590)?.call).toBe(20)
+    expect(windowVolumeNote(window, 2, 5, minutesIso)).toBe(
+      `objem měřen ${rangeLabel({ fromIso: minutesIso[4], toIso: minutesIso[4] })}`,
+    )
+    // Měřené celé okno popisek nemá
+    const full = windowVolumes(rawOf([100, 110, 130]), 1, 2)!
+    expect(windowVolumeNote(full, 1, 2, minutesIso)).toBeNull()
+  })
+
+  it('okno celé v mezeře objemu není měřené', () => {
+    const window = windowVolumes(rawOf([100, null, null]), 1, 2)!
+    expect(window.measured).toBe(false)
+    expect(window.byStrike.get(7590)?.call).toBe(0)
+    expect(windowVolumeNote(window, 1, 2, [])).toBe('objem se v okně neměřil')
+  })
+
+  it('den bez masky objemu (Daily, demo) okno nemá', () => {
+    expect(windowVolumes({ ...rawOf([100, 130]), callVolumeKnown: undefined }, 0, 1)).toBeNull()
   })
 })
 
