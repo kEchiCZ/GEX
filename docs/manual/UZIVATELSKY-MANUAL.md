@@ -634,8 +634,11 @@ flipem). Nedostupné volby jsou šedé s důvodem (před openem, bez flip crossu
 
 ### Okenní profil a P/C
 
-Pruhy profilu ukazují **objem zobchodovaný v okně** (rozdíl kumulativů — OI
-zůstává statické k času t2, otevřené pozice nejsou tok). P/C panel v okenním
+Pruhy profilu ukazují **objem zobchodovaný v okně**: součet přírůstků denního
+objemu kontraktu nad dosavadním maximem v seanci, stejně jako panel Opt Vol
+(#1631). Kmitání a propad IBKR na hranici okna ani strike, který vstoupil do
+pásma až v okně, okno nenafouknou celým denním objemem; objem z mezery uvnitř
+okna se do okna započte. OI zůstává statické k času t2, otevřené pozice nejsou tok. P/C panel v okenním
 režimu ukazuje **premium jako hlavní číslo a kusový poměr vedle** — rozdíl
 obou je sám o sobě informace (kusově vyrovnané okno může být penězi drtivě
 jednostranné). Tooltip nese **top 5 striků dle podílu na prémiích**
