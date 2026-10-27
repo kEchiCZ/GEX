@@ -73,7 +73,7 @@ import { sessionBoundsUtc, sessionDateIso } from './instrument/tz'
 import { EM_COLOR, EM_DASH, REF_COLOR, REF_DASH, SETUP_COLORS, VWAP_COLOR, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
 import { computeExpectedMove, emUsage } from './instrument/expectedmove'
 import { vwapSeriesForAxis } from './instrument/referencelevels'
-import { decodeRange, encodeRange, followUpRange, panelWindowCumDelta, prePostWindows, rangeBuckets, rangeLabel, reactionWindow, windowProfileRows, windowVolumes } from './instrument/rangeselect' // prettier-ignore
+import { decodeRange, encodeRange, followUpRange, panelWindowCumDelta, prePostWindows, rangeBuckets, rangeLabel, reactionWindow, windowProfileRows, windowVolumeNote, windowVolumes } from './instrument/rangeselect' // prettier-ignore
 import { diffProfileRows } from './profile/diff'
 import type { RangeSelection } from './instrument/rangeselect'
 import { RANGE_PRESETS, presetDisabledReason, presetRange } from './instrument/rangepresets'
@@ -159,6 +159,12 @@ function lastValue(series: (number | null)[] | undefined, position: number): num
 
 /** Jak dlouho visí hláška o nezdařeném prokliku z upozornění (#1290). */
 const NEWS_FOCUS_ERROR_MS = 8000
+
+/** Tooltip popisku měřené části okna Rozsah ⧉ (#1631, rozhodnutí B 27. 10.). */
+const RANGE_VOLUME_NOTE_TITLE =
+  'Hranice okna padla do minuty bez měřeného objemu (fallback tastytrade, díra ve sběru, vzdálená expirace bez objemu).\n' +
+  '• Objem okna je spočítaný přesně jen pro měřenou část — objem mezery se nedá rozdělit na před a po hranici\n' +
+  '• CumΔ okna se počítá z tisků a posun se ho netýká'
 
 function MainContent() {
   const endRenderTimer = useRenderTimer('renderApp') // měřič výkonu (#1419)
@@ -1517,7 +1523,7 @@ function MainContent() {
   // Okenní profil V KLIENTOVI (posudek #484): řádky k t2 s objemem okna z 1m
   // matic (Σ přírůstků proti průběžnému maximu, #1631 — sémantika API from);
   // díry v ose se u t2 přeskakují couváním na nejbližší koš se snapshotem.
-  const windowRowsForSpan = useCallback(
+  const windowForSpan = useCallback(
     (span: { startBucket: number; endBucket: number; fromIdx: number; toIdx: number } | null) => {
       if (!span || !day.profileByMinute || !day.raw) return null
       // profileByMinute je po agregaci KOŠOVÝ (rowsAt bere index koše, #503) —
@@ -1534,12 +1540,19 @@ function MainContent() {
       }
       if (rows2.length === 0) return null
       const volumes = windowVolumes(day.raw, span.fromIdx, span.toIdx)
-      return volumes ? windowProfileRows(rows2, volumes) : null
+      if (!volumes) return null
+      return {
+        rows: windowProfileRows(rows2, volumes),
+        // Hranice v mezeře objemu (#1631 = B): chip přizná měřenou část okna
+        note: windowVolumeNote(volumes, span.fromIdx, span.toIdx, day.minutesIso),
+      }
     },
-    [day.profileByMinute, day.raw],
+    [day.profileByMinute, day.raw, day.minutesIso],
   )
-  const rangeWindowRows = useMemo(() => windowRowsForSpan(rangeSpan), [windowRowsForSpan, rangeSpan]) // prettier-ignore
-  const rangeWindowRowsB = useMemo(() => windowRowsForSpan(rangeSpanB), [windowRowsForSpan, rangeSpanB]) // prettier-ignore
+  const rangeWindow = useMemo(() => windowForSpan(rangeSpan), [windowForSpan, rangeSpan])
+  const rangeWindowB = useMemo(() => windowForSpan(rangeSpanB), [windowForSpan, rangeSpanB])
+  const rangeWindowRows = rangeWindow?.rows ?? null
+  const rangeWindowRowsB = rangeWindowB?.rows ?? null
   // Diferenční profil B−A (#489): surové objemy per strana, golden test v diff.test
   const rangeDiffRows = useMemo(
     () =>
@@ -2186,6 +2199,12 @@ function MainContent() {
                 {rangeCum !== null &&
                   ` · CumΔ${rangeB ? ' A' : ' okna'} ${windowCumLabel(rangeCum)}`}
                 {rangeB && rangeCumB !== null && ` · B ${windowCumLabel(rangeCumB)}`}
+                {(rangeWindow?.note || rangeWindowB?.note) && (
+                  <span data-testid="range-volume-note" title={RANGE_VOLUME_NOTE_TITLE}>
+                    {rangeWindow?.note && ` · ${rangeB ? 'A ' : ''}${rangeWindow.note}`}
+                    {rangeWindowB?.note && ` · B ${rangeWindowB.note}`}
+                  </span>
+                )}
                 {/* Duální rozsah (#489): +B vytvoří navazující okno, mód přepíná profil */}
                 {!rangeB && (
                   <button

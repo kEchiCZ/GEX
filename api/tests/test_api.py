@@ -6,6 +6,7 @@ import io
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pyarrow.ipc
@@ -1604,7 +1605,8 @@ def test_profile_window_diff_values(client: TestClient) -> None:
         ([1000.0, 800.0, 760.0, 1000.0, 1010.0], 1, 10.0),
         # t2 v propadu: okno 0, ne záporný rozdíl ani pokles
         ([1000.0, 1005.0, 760.0], 0, 5.0),
-        # t1 ve fallbacku (NULL): báze je průběžné maximum 100, ne 0 (dřív 150)
+        # t1 = minuta 1 s NULL: při volání s touto bází nese okno přírůstky (1, 3]
+        # (posun báze řeší `profile`, rozhodnutí B — test_profile_window_t1_ve_fallbacku)
         ([100.0, None, 130.0, 150.0], 1, 50.0),
         # Kontrakt bez měření do t1: první hodnota v okně jen založí stav (dřív 510)
         ([None, None, 500.0, 510.0], 1, 10.0),
@@ -1629,24 +1631,62 @@ def test_window_volumes_proti_prubeznemu_maximu(
     assert window_volumes(frame, bound) == {(7600.0, "C"): pytest.approx(expected)}
 
 
-def test_profile_window_t1_ve_fallbacku(settings: Settings) -> None:
-    """#1631: okno s t1 v minutě s NULL volume nebere bázi 0 (celý den), ale maximum."""
+def _window_profile(
+    settings: Settings, series: list[float | None], start: int, end: int
+) -> dict[str, Any]:
     writer = SnapshotWriter(settings)
     template = snapshot_rows(0)[0]
-    for minute, volume in enumerate([100.0, None, 130.0, 150.0]):
+    for minute, volume in enumerate(series):
         writer.write_minute(
             "ES",
             "20260717",
             DAY,
             [replace(template, ts_min=ts(minute), strike=7600.0, right="C", volume=volume)],
         )
-    payload = (
+    payload: dict[str, Any] = (
         TestClient(create_app(settings))
         .get(
             "/profile/ES/20260717",
             params={
                 "date": DAY.isoformat(),
-                "from": ts(1).isoformat(),
+                "from": ts(start).isoformat(),
+                "to": ts(end).isoformat(),
+                "variant": "vol",
+                "spot": 7600.0,
+            },
+        )
+        .json()
+    )
+    return payload
+
+
+def test_profile_window_t1_ve_fallbacku(settings: Settings) -> None:
+    """#1631 = B: báze v minutě s NULL volume se posune na první měřenou minutu
+    okna — ne báze 0 (celý den, dřív 150) ani zastaralé maximum (50)."""
+    payload = _window_profile(settings, [100.0, None, 130.0, 150.0], 1, 3)
+    row = next(r for r in payload["profile"] if r["strike"] == 7600.0)
+    assert row["call_volume"] == pytest.approx(20.0)
+    assert payload["window_summary"]["call_volume"] == pytest.approx(20.0)
+    assert payload["from_ts"] == ts(2).isoformat()  # měřená báze
+    assert payload["to_ts"] == ts(3).isoformat()
+    assert payload["volume_measured"] is True
+
+
+def test_profile_window_t2_ve_fallbacku_a_okno_bez_mereni(settings: Settings) -> None:
+    """#1631 = B: konec v NULL minutě se zkrátí na poslední měřenou minutu; okno
+    celé v mezeře má `volume_measured: false`."""
+    payload = _window_profile(settings, [100.0, 120.0, None, None], 0, 3)
+    row = next(r for r in payload["profile"] if r["strike"] == 7600.0)
+    assert row["call_volume"] == pytest.approx(20.0)
+    assert payload["to_ts"] == ts(1).isoformat()
+    assert payload["volume_measured"] is True
+    gap = (
+        TestClient(create_app(settings))
+        .get(
+            "/profile/ES/20260717",
+            params={
+                "date": DAY.isoformat(),
+                "from": ts(2).isoformat(),
                 "to": ts(3).isoformat(),
                 "variant": "vol",
                 "spot": 7600.0,
@@ -1654,9 +1694,23 @@ def test_profile_window_t1_ve_fallbacku(settings: Settings) -> None:
         )
         .json()
     )
-    row = next(r for r in payload["profile"] if r["strike"] == 7600.0)
-    assert row["call_volume"] == pytest.approx(50.0)
-    assert payload["window_summary"]["call_volume"] == pytest.approx(50.0)
+    assert gap["volume_measured"] is False
+    assert gap["window_summary"]["call_volume"] == 0.0
+
+
+def test_measured_bounds() -> None:
+    """#1631 = B: báze v mezeře → první měřená minuta okna, konec → poslední měřená."""
+    from gexlens_api.main import measured_bounds
+
+    def at(minute: int) -> pd.Timestamp:
+        return pd.Timestamp(ts(minute))
+
+    stamps = [at(m) for m in (0, 3, 4)]
+    assert measured_bounds(stamps, at(0), at(4)) == (at(0), at(4))  # celé měřené
+    assert measured_bounds(stamps, at(1), at(4)) == (at(3), at(4))  # báze v mezeře
+    assert measured_bounds(stamps, at(0), at(2)) == (at(0), None)  # nic měřeného v (0, 2]
+    assert measured_bounds(stamps, None, at(2)) == (None, at(0))  # od začátku seance
+    assert measured_bounds(stamps, at(1), at(2)) == (at(2), None)  # celé v mezeře
 
 
 def test_flow_window_opt_vol_bez_catch_up(settings: Settings) -> None:

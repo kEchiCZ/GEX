@@ -11,7 +11,7 @@ import datetime as dt
 import logging
 import math
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 from typing import Annotated, Any, Literal
 
@@ -151,6 +151,26 @@ def window_volumes(
         increments = volume_increments(volume)
         totals = increments.loc[:, increments.columns > after].sum(axis=1)
     return {(float(strike), str(right)): float(value) for (strike, right), value in totals.items()}
+
+
+def measured_bounds(
+    measured: Sequence[pd.Timestamp], baseline: pd.Timestamp | None, end: pd.Timestamp
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    """Měřená část okna (`baseline`, `end`] (#1631, rozhodnutí B 27. 10.).
+
+    `measured` = vzestupně minuty, ve kterých nese objem aspoň jeden kontrakt.
+    Báze v minutě bez měřeného objemu (tasty fallback, díra ve sběru) se posune
+    na první měřenou minutu okna: její kumulativ nese objem mezery, který se nedá
+    rozdělit na před a po hranici. Vrací (báze, poslední měřená minuta okna);
+    konec None = okno nemá měřenou minutu. Báze None = od začátku seance.
+    """
+    if baseline is not None and baseline not in set(measured):
+        later = [stamp for stamp in measured if baseline < stamp <= end]
+        baseline = later[0] if later else end
+    within = [
+        stamp for stamp in measured if stamp <= end and (baseline is None or stamp > baseline)
+    ]
+    return baseline, (within[-1] if within else None)
 
 
 def _contract_frame(snapshots: pd.DataFrame) -> pd.DataFrame:
@@ -1235,11 +1255,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # začátku seance". Objem okna per kontrakt z přírůstků (#1631)
         window_volume: dict[tuple[float, str], float] = {}
         baseline_minute: pd.Timestamp | None = None
+        measured_end: pd.Timestamp | None = None
         if window:
             before = frame[frame["ts_min"] <= from_ts]
             if not before.empty:
                 baseline_minute = before["ts_min"].max()
-            window_volume = window_volumes(eligible, baseline_minute)
+            # Hranice v minutě bez měřeného objemu (B): okno jen přes měřenou část
+            measured = sorted(eligible.loc[eligible["volume"].notna(), "ts_min"].unique())
+            baseline_minute, measured_end = measured_bounds(measured, baseline_minute, minute)
+            if measured_end is not None:
+                window_volume = window_volumes(
+                    eligible[eligible["ts_min"] <= measured_end], baseline_minute
+                )
 
         if spot is None:
             spot = _spot_at(repository, symbol, date, reference)
@@ -1272,7 +1299,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         if window:
             payload["from_ts"] = baseline_minute.isoformat() if baseline_minute is not None else None  # noqa: E501 # fmt: skip
-            payload["to_ts"] = minute.isoformat()
+            # Konec měřené části okna (#1631 = B); okno bez měřeného objemu má
+            # `volume_measured: false` a objem 0 nečíst jako klid
+            payload["to_ts"] = (measured_end if measured_end is not None else minute).isoformat()
+            payload["volume_measured"] = measured_end is not None
             payload["oi_static"] = True
             # Stale buňky k t2 — diff stale buňky lže nulou (posudek #483)
             payload["stale_count"] = int((rows["stale_age"] > 0).sum())
@@ -1426,27 +1456,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             in_window = flow_frame[(stamps > from_ts) & (stamps <= to_ts)]
             window_gap = bool(in_window["cum_delta"].isna().any())
 
-            def series_sum(records: list[dict[str, object]], key: str) -> float:
+            def series_sum(
+                records: list[dict[str, object]],
+                key: str,
+                lo: dt.datetime | None,
+                hi: dt.datetime,
+            ) -> float:
                 total = 0.0
                 for record in records:
                     ts_min = record.get("ts_min")
                     if not isinstance(ts_min, str):
                         continue
                     stamp = dt.datetime.fromisoformat(ts_min)
-                    if from_ts < stamp <= to_ts:
+                    if (lo is None or lo < stamp) and stamp <= hi:
                         value = record.get(key)
                         if isinstance(value, (int, float)):
                             total += float(value)
                 return total
 
+            # OptVol okna jen přes měřenou část (#1631 = B): řada nese jen minuty
+            # s objemem, hranice v mezeře se posune na nejbližší měřenou minutu
+            measured = [pd.Timestamp(str(record["ts_min"])) for record in opt_vol]
+            first = measured[0] if measured else None
+            base = pd.Timestamp(from_ts) if first is not None and first <= from_ts else None
+            opt_base, opt_end = measured_bounds(measured, base, pd.Timestamp(to_ts))
+            counted = _opt_vol_series(repository, symbol, date, exclude_catch_up=True)
+            opt_vol_window = (
+                series_sum(counted, "opt_vol", opt_base, opt_end) if opt_end is not None else 0.0
+            )
             payload["window"] = {
                 "from_ts": from_ts.isoformat(),
                 "to_ts": to_ts.isoformat(),
                 "cum_delta": None if window_gap else cum_at(to_ts) - cum_at(from_ts),
-                "vol": series_sum(vol, "vol"),
-                "opt_vol": series_sum(
-                    _opt_vol_series(repository, symbol, date, exclude_catch_up=True), "opt_vol"
-                ),
+                "vol": series_sum(vol, "vol", from_ts, to_ts),
+                "opt_vol": opt_vol_window,
+                "opt_vol_from_ts": opt_base.isoformat() if opt_base is not None else None,
+                "opt_vol_to_ts": opt_end.isoformat() if opt_end is not None else None,
             }
         return payload
 
