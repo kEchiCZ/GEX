@@ -240,6 +240,28 @@ bar po otevření, tedy shodný výnos (GEOPOLITICS|1 deferred ~370 vzorků na ~
 Varianta „proxy klíč z kalendáře“ zamítnuta: na svátek nebo halt by rozdělila nebo spojila
 uzavírky jinak než trh.
 
+## Dodatek 2026-10-27 — bod 7 u odložených reakcí: K1 přes celou uzavírku (#1659, #1679)
+
+Odložená reakce (`deferred_min`) měří okna od prvního obchodovaného baru po uzavírce
+(`closure_open_ts`, #1574) a její výnos nese gap celé uzavírky. K1 do #1679 hledal kontaminující
+zprávy jen 61 min po zprávě, takže víkendová nebo noční zpráva jiné kategorie v gapu okno
+nekazila. Rozhodnutí vlastníka 24. 10. (#1659, varianta A):
+
+- **Odložené okno** [začátek, začátek + okno) je kontaminované právě tehdy, když jiná významná
+  zpráva jiné kategorie leží v (zpráva, začátek + okno): celá uzavírka i okno po otevření.
+  Neodložené okno beze změny, (zpráva, zpráva + okno).
+- **Parita (bod 7):** `ReactionJob._contaminating` i hodinový přepočet (`Contaminators.around`)
+  hledají až k začátku oken + 61 min a konec okna dořízne táž `window_contaminated`. Hodinový
+  přepočet bere začátek z `closure_open_ts`, starší řádek bez něj z prvního baru archivu.
+- **Historie:** `scripts/reclassify_news_rules.py --phase contamination` (dry-run, pak ostrý běh
+  po záloze PG); buckety a gate přepočte noční `ModelStatsJob`.
+
+Měření 24. 10. (`scripts/measure_deferred_contamination.py`, #1659 issuecomment-6387299449):
+kontaminovaných odložených oken C (stav do #1679) 95 567, A 187 485 z 229 996; Σ n odložených
+bucketů 17 193 → 12 072, bucketů s n ≥ 30 112 → 96, otevřené gate 4 → 3 jiné (všechny na hraně,
+Wilson LB ≤ 0,547). Varianty: A celá uzavírka (zvoleno); B 61 min po zprávě + okno po otevření
+(ignoruje zprávy v gapu); C beze změny.
+
 ## Dodatek 2026-10-08 — Yahoo headline feedy místo zrušeného `rssindex` (#1451)
 
 Yahoo `rssindex` vrací od 23. 9. 2026 HTTP 404. Rozhodnutím uživatele z 8. 10. ho v `rss_news`
