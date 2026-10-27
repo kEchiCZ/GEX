@@ -130,6 +130,29 @@ def volume_increments(volume: pd.DataFrame) -> pd.DataFrame:
     return reference.diff(axis=1).clip(lower=0.0).fillna(0.0)
 
 
+def window_volumes(
+    frame: pd.DataFrame, after: pd.Timestamp | None
+) -> dict[tuple[float, str], float]:
+    """Objem okna (`after`, konec `frame`] per kontrakt (strike, right) (#1631).
+
+    Σ přírůstků proti průběžnému maximu (`volume_increments`, #1602) přes minuty
+    okna — tentýž vzorec jako panel Opt Vol a Daily: kmitání ani propad IBKR
+    v t1 nebo t2 okno nezkreslí, NULL (tasty fallback) ani chybějící řádek nejsou
+    0 a kontrakt bez měření do t1 první hodnotou v okně jen založí stav. `after`
+    None = okno od začátku seance, nese celý kumulativ do t2 (průběžné maximum).
+    """
+    contracts = _contract_frame(frame[["ts_min", "strike", "right", "volume"]])
+    if contracts.empty:
+        return {}
+    volume = contracts.pivot(index=["strike", "right"], columns="ts_min", values="volume")
+    if after is None:
+        totals = volume.ffill(axis=1).cummax(axis=1).iloc[:, -1].fillna(0.0)
+    else:
+        increments = volume_increments(volume)
+        totals = increments.loc[:, increments.columns > after].sum(axis=1)
+    return {(float(strike), str(right)): float(value) for (strike, right), value in totals.items()}
+
+
 def _contract_frame(snapshots: pd.DataFrame) -> pd.DataFrame:
     """Snapshoty s jedním řádkem na (ts_min, strike, right).
 
@@ -1185,9 +1208,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, object]:
         """Strike profil k okamžiku ts, nebo za okno [from, to] (SPEC 4.6, #483).
 
-        Volume ve snapshotech je kumulativní denní (SPEC 4.3) — okenní hodnoty
-        jsou prostý rozdíl dvou snímků, O(strikes). OI v okenním módu zůstává
-        statické k `to` (`oi_static: true`) — otevřené pozice nejsou tok.
+        Volume ve snapshotech je kumulativní denní (SPEC 4.3) — objem okna je
+        Σ přírůstků proti průběžnému maximu kontraktu přes minuty okna
+        (`window_volumes`, #1631), ne rozdíl dvou snímků. OI v okenním módu
+        zůstává statické k `to` (`oi_static: true`) — otevřené pozice nejsou tok.
         """
         window = from_ts is not None or to_ts is not None
         if window and (ts is not None or from_ts is None or to_ts is None):
@@ -1207,22 +1231,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         minute = eligible["ts_min"].max()
         rows = eligible[eligible["ts_min"] == minute].dropna(subset=["delta"])
 
-        # Začátek okna: poslední snapshot ≤ from; nic před from → baseline 0
-        # (okno „od začátku seance"). Kontrakt bez řádku v t1 (přibyl s posunem
-        # obálky) má baseline 0 taky.
-        baseline: dict[tuple[float, str], float] = {}
+        # Začátek okna: poslední snapshot ≤ from; nic před from = okno „od
+        # začátku seance". Objem okna per kontrakt z přírůstků (#1631)
+        window_volume: dict[tuple[float, str], float] = {}
         baseline_minute: pd.Timestamp | None = None
         if window:
             before = frame[frame["ts_min"] <= from_ts]
             if not before.empty:
                 baseline_minute = before["ts_min"].max()
-                base_rows = before[before["ts_min"] == baseline_minute]
-                baseline = {
-                    (float(row.strike), str(row.right)): (
-                        0.0 if math.isnan(row.volume) else float(row.volume)
-                    )
-                    for row in base_rows.itertuples()
-                }
+            window_volume = window_volumes(eligible, baseline_minute)
 
         if spot is None:
             spot = _spot_at(repository, symbol, date, reference)
@@ -1232,11 +1249,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         def row_volume(row: Any) -> float:
-            total = 0.0 if math.isnan(row.volume) else float(row.volume)
-            if not window:
-                return total
-            # Korekce v datech můžou dát záporné okno — clamp na 0 (posudek #483)
-            return max(0.0, total - baseline.get((float(row.strike), str(row.right)), 0.0))
+            if window:
+                return window_volume.get((float(row.strike), str(row.right)), 0.0)
+            return 0.0 if math.isnan(row.volume) else float(row.volume)
 
         inputs = [
             ProfileInput(
@@ -1387,6 +1402,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         (kotva na open seance se rozdílem odečte), Vol podkladu a OptVol jako
         součty přes minuty okna (t1, t2]. Minuta bez tisků v (t1, t2] dá
         CumΔ_okno null — rozdíl přes mezeru je neúplný (ADR-0057 bod 4, #1588).
+        OptVol okna nepočítá catch-up minuty (#518, ADR-0024, #1631) — nesou objem
+        výpadku enginu, ne minutový obchod, stejně jako panel Opt Vol.
         """
         flow_frame = repository.session_frame(lambda d: repository.flow(symbol, d), date)
         flow_records = _records(flow_frame)
@@ -1427,7 +1444,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "to_ts": to_ts.isoformat(),
                 "cum_delta": None if window_gap else cum_at(to_ts) - cum_at(from_ts),
                 "vol": series_sum(vol, "vol"),
-                "opt_vol": series_sum(opt_vol, "opt_vol"),
+                "opt_vol": series_sum(
+                    _opt_vol_series(repository, symbol, date, exclude_catch_up=True), "opt_vol"
+                ),
             }
         return payload
 
@@ -1755,10 +1774,14 @@ def _spot_at(
 
 
 def _opt_vol_series(
-    repository: DataRepository, symbol: str, day: dt.date
+    repository: DataRepository, symbol: str, day: dt.date, *, exclude_catch_up: bool = False
 ) -> list[dict[str, object]]:
     """OptVol per minuta: součet minutových přírůstků kumulativního volume přes
-    expirace; přírůstek proti průběžnému maximu kontraktu (`volume_increments`, #1602)."""
+    expirace; přírůstek proti průběžnému maximu kontraktu (`volume_increments`, #1602).
+
+    `exclude_catch_up` vynechá catch-up minuty expirace (#518, ADR-0024): přírůstek
+    referenci posune, ale do součtu nejde — okno `/flow` (#1631), shodně s panelem.
+    """
     total: pd.Series | None = None
     for expiry in repository.list_expiries(symbol):
         try:
@@ -1778,6 +1801,15 @@ def _opt_vol_series(
             continue
         volume = frame.pivot(index=["strike", "right"], columns="ts_min", values="volume")
         series = volume_increments(volume).sum(axis=0)
+        if exclude_catch_up:
+            try:
+                catch_up = repository.session_frame(
+                    lambda d: repository.catch_up(symbol, expiry, d),  # noqa: B023
+                    day,
+                )
+            except PartitionNotFoundError:
+                catch_up = pd.DataFrame(columns=["ts_min"])
+            series = series[~series.index.isin(set(catch_up["ts_min"]))]
         total = series if total is None else total.add(series, fill_value=0.0)
     if total is None:
         return []
