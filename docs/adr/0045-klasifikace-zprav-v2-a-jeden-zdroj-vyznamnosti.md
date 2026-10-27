@@ -247,3 +247,25 @@ nahradily headline feedy indexů `^GSPC` a `^IXIC`. Strop agregátoru z bodu 2 p
 (`feed_of` pozná Yahoo podle `yahoo.com` v URL feedu). Vzorek ^GSPC z 8. 10.: Yahoo 8, Fool 3,
 BeInCrypto 3, Benzinga 2, TheStreet 2, Stocktwits 2, Trefis 1. Převažují názorové a souhrnné
 články, strop tedy sedí. Korpus má na 24. 9. zlom: jde o jiný feed, ne o pokračování.
+
+## Dodatek 2026-10-27 — bod 7 u odložených reakcí: K1 přes celou uzavírku (#1659, #1679)
+
+Odložená reakce (`deferred_min`) měří okna od prvního obchodovaného baru po uzavírce
+(`closure_open_ts`, #1574) a její výnos nese gap celé uzavírky. K1 do #1679 hledal kontaminující
+zprávy jen 61 min po zprávě, takže víkendová nebo noční zpráva jiné kategorie v gapu okno
+nekazila. Rozhodnutí vlastníka 24. 10. (#1659, varianta A):
+
+- **Odložené okno** [začátek, začátek + okno) je kontaminované právě tehdy, když jiná významná
+  zpráva jiné kategorie leží v (zpráva, začátek + okno): celá uzavírka i okno po otevření.
+  Neodložené okno beze změny, (zpráva, zpráva + okno).
+- **Parita (bod 7):** `ReactionJob._contaminating` i hodinový přepočet (`Contaminators.around`)
+  hledají až k začátku oken + 61 min a konec okna dořízne táž `window_contaminated`. Hodinový
+  přepočet bere začátek z `closure_open_ts`, starší řádek bez něj z prvního baru archivu.
+- **Historie:** `scripts/reclassify_news_rules.py --phase contamination` (dry-run, pak ostrý běh
+  po záloze PG); buckety a gate přepočte noční `ModelStatsJob`.
+
+Měření 24. 10. (`scripts/measure_deferred_contamination.py`, #1659 issuecomment-6387299449):
+kontaminovaných odložených oken C (stav do #1679) 95 567, A 187 485 z 229 996; Σ n odložených
+bucketů 17 193 → 12 072, bucketů s n ≥ 30 112 → 96, otevřené gate 4 → 3 jiné (všechny na hraně,
+Wilson LB ≤ 0,547). Varianty: A celá uzavírka (zvoleno); B 61 min po zprávě + okno po otevření
+(ignoruje zprávy v gapu); C beze změny.

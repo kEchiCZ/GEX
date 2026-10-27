@@ -20,11 +20,13 @@ Dvě fáze nad produkční PG (dialektově neutrální — v testech SQLite):
    pravidlem K1 (`reactions.contaminates`, `window_contaminated`) nad
    klasifikací po fázi 1 — kontaminuje jen jiný event s importance ≥ 2 a jinou
    kategorií, ve stejném rozsahu jako `ReactionJob._contaminating`
-   (61 min po zprávě). U deferred reakcí začíná okno prvním obchodovaným
-   barem — ten se čte z archivu barů (`data/derived/{ES,NQ}/bars`, jen sloupec
-   `ts_min`). Denní okna kontaminaci nemají (vždy False), nemění se. Funkce
-   jsou v `gexlens_news.contamination` a sdílí je hodinový přepočet posledních
-   7 dní v news-engine (#1522); skript je potřeba pro starší historii.
+   (zpráva, začátek + okno). U deferred reakcí začíná okno prvním obchodovaným
+   barem po uzavírce (`closure_open_ts`, #1574; starší řádek bez něj z archivu
+   barů `data/derived/{ES,NQ}/bars`, jen sloupec `ts_min`) a kontaminuje celá
+   uzavírka i okno po otevření (#1659 = A, #1679). Denní okna kontaminaci
+   nemají (vždy False), nemění se. Funkce jsou v `gexlens_news.contamination`
+   a sdílí je hodinový přepočet posledních 7 dní v news-engine (#1522); skript
+   je potřeba pro starší historii.
 
 **Dry-run** (`--dry-run`) nic nezapisuje: PG spojení je `read only`, obě fáze
 se spočtou v paměti (kontaminace nad klasifikací po fázi 1) a vypíše se matice
@@ -569,7 +571,7 @@ def contamination_report(
         measured = [r for r in reactions if r._mapping[f"cont_{window}"] is not None]
         before = sum(bool(r._mapping[f"cont_{window}"]) for r in measured)
         after = 0
-        to_clean = to_dirty = 0
+        to_clean = to_dirty = deferred_clean = deferred_dirty = 0
         for r in measured:
             change = by_key.get((int(r.event_id), str(r.symbol)))
             old = bool(r._mapping[f"cont_{window}"])
@@ -577,6 +579,10 @@ def contamination_report(
             after += bool(new)
             to_clean += old and not new
             to_dirty += (not old) and bool(new)
+            # Odložené zvlášť: K1 přes celou uzavírku (#1679) mění jen je
+            if r._mapping["deferred_min"]:
+                deferred_clean += old and not new
+                deferred_dirty += (not old) and bool(new)
         rows.append(
             [
                 f"w{window}",
@@ -585,6 +591,7 @@ def contamination_report(
                 f"{after} ({after / max(1, len(measured)):.0%})",
                 to_clean,
                 to_dirty,
+                f"{deferred_clean} / {deferred_dirty}",
                 f"{len(measured) - before} → {len(measured) - after}",
             ]
         )
@@ -596,6 +603,7 @@ def contamination_report(
             "po",
             "True→False",
             "False→True",
+            "z toho odložené T→F / F→T",
             "čistých vzorků",
         ],
         rows,
