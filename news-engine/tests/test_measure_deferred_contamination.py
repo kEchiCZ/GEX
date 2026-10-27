@@ -107,13 +107,21 @@ def test_varianty_k1_hranice(
     assert script.variant_flags(contaminators, "MACRO", news, start, window) == expected
 
 
-def test_c_odpovida_predikatu_jobu() -> None:
-    """C je dnešní `window_contaminated` nad eventy z `Contaminators.around`."""
+def test_c_je_stav_do_1679_a_a_predikat_jobu() -> None:
+    """C = rozsah do #1679 (eventy jen 61 min po zprávě), A = dnešní predikát jobu
+    a hodinového K1: `window_contaminated` nad `Contaminators.around` od začátku oken."""
     script = load_script()
     others = [NEWS + dt.timedelta(minutes=m) for m in (0, 1, 30, 61, 62)]
+    others += [OPEN + dt.timedelta(minutes=m) for m in (-1, 0, 4, 59, 60)]
     contaminators = Contaminators.build([(ts, "FED", 2) for ts in others])
     for start in (NEWS, NEWS + dt.timedelta(minutes=20), OPEN):
         for window in (1, 5, 15, 60):
-            expected = window_contaminated(NEWS, start, window, contaminators.around(NEWS, "MACRO"))
+            old = window_contaminated(
+                NEWS, start, window, contaminators.around(NEWS, "MACRO", NEWS)
+            )
+            new = window_contaminated(
+                NEWS, start, window, contaminators.around(NEWS, "MACRO", start)
+            )
             flags = script.variant_flags(contaminators, "MACRO", NEWS, start, window)
-            assert flags["C"] is expected
+            assert flags["C"] is old
+            assert flags["A"] is new

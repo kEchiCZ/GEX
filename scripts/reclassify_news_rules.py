@@ -20,11 +20,13 @@ Dvě fáze nad produkční PG (dialektově neutrální — v testech SQLite):
    pravidlem K1 (`reactions.contaminates`, `window_contaminated`) nad
    klasifikací po fázi 1 — kontaminuje jen jiný event s importance ≥ 2 a jinou
    kategorií, ve stejném rozsahu jako `ReactionJob._contaminating`
-   (61 min po zprávě). U deferred reakcí začíná okno prvním obchodovaným
-   barem — ten se čte z archivu barů (`data/derived/{ES,NQ}/bars`, jen sloupec
-   `ts_min`). Denní okna kontaminaci nemají (vždy False), nemění se. Funkce
-   jsou v `gexlens_news.contamination` a sdílí je hodinový přepočet posledních
-   7 dní v news-engine (#1522); skript je potřeba pro starší historii.
+   (zpráva, začátek + okno). U deferred reakcí začíná okno prvním obchodovaným
+   barem po uzavírce (`closure_open_ts`, #1574; starší řádek bez něj z archivu
+   barů `data/derived/{ES,NQ}/bars`, jen sloupec `ts_min`) a kontaminuje celá
+   uzavírka i okno po otevření (#1659 = A, #1679). Denní okna kontaminaci
+   nemají (vždy False), nemění se. Funkce jsou v `gexlens_news.contamination`
+   a sdílí je hodinový přepočet posledních 7 dní v news-engine (#1522); skript
+   je potřeba pro starší historii.
 
 **Dry-run** (`--dry-run`) nic nezapisuje: PG spojení je `read only`, obě fáze
 se spočtou v paměti (kontaminace nad klasifikací po fázi 1) a vypíše se matice

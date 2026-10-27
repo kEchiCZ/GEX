@@ -53,6 +53,7 @@ from gexlens_news.reactions import (
     compute_reactions,
     contaminates,
     immature_closure_start,
+    reaction_window_start,
 )
 
 logger = logging.getLogger(__name__)
@@ -320,10 +321,17 @@ class ReactionJob:
             rows = conn.execute(stmt).fetchall()
         return [(int(row.id), _as_utc(row.ts_event), row.category) for row in rows]
 
-    def _contaminating(self, around: dt.datetime, category: str | None) -> list[dt.datetime]:
-        """Časy jiných významných eventů jiné kategorie, které můžou spadnout do oken."""
+    def _contaminating(
+        self, around: dt.datetime, category: str | None, start: dt.datetime
+    ) -> list[dt.datetime]:
+        """Časy jiných významných eventů jiné kategorie, které můžou spadnout do oken.
+
+        `start` = začátek oken: čas zprávy, u odložené reakce první obchodovaný
+        bar po uzavírce. Kontaminuje zpráva v (zpráva, začátek + okno) — u odložené
+        reakce celá uzavírka i okno po otevření (#1659 = A, #1679).
+        """
         span = dt.timedelta(minutes=max(self._windows) + 1)
-        until = around + span
+        until = start + span
         stmt = select(news_events.c.ts_event, news_events.c.category).where(
             and_(
                 news_events.c.ts_event > around,
@@ -619,19 +627,26 @@ class ReactionJob:
         backfillu barů (`scripts/backfill_minute_reactions.py`, #1494).
         """
         source = bars if bars is not None else self._bars
-        others = self._contaminating(ts_event, category)
-        rows: list[MinuteRow] = []
-        # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
-        closed_flags: list[bool] = []
-        for symbol in self._symbols:
-            window_end = ts_event + dt.timedelta(minutes=max(self._windows) + 1)
-            # Dozadu přes celé zavření, dopředu k prvnímu obchodovanému baru
-            # — jinak deferred okno nemá základní cenu ani cíl (#339)
-            symbol_bars = source.load_range(
+        window_end = ts_event + dt.timedelta(minutes=max(self._windows) + 1)
+        # Dozadu přes celé zavření, dopředu k prvnímu obchodovanému baru
+        # — jinak deferred okno nemá základní cenu ani cíl (#339)
+        loaded = {
+            symbol: source.load_range(
                 symbol,
                 ts_event - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS),
                 window_end + dt.timedelta(days=CLOSURE_LOOKAHEAD_DAYS),
             )
+            for symbol in self._symbols
+        }
+        # Kontaminující eventy až k nejpozdějšímu začátku oken symbolů (#1679);
+        # okno každého symbolu si z nich `window_contaminated` vybere své
+        starts = [reaction_window_start(ts_event, symbol_bars) for symbol_bars in loaded.values()]
+        latest = max((start for start in starts if start is not None), default=ts_event)
+        others = self._contaminating(ts_event, category, latest)
+        rows: list[MinuteRow] = []
+        # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
+        closed_flags: list[bool] = []
+        for symbol, symbol_bars in loaded.items():
             reactions = compute_reactions(
                 ts_event,
                 symbol_bars,

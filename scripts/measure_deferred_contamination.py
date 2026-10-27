@@ -1,13 +1,15 @@
 """Rozsah kontaminace K1 u odložené reakce (#1659) — jen čtení.
 
 Odložená reakce (`deferred_min`) měří minutová okna od prvního obchodovaného
-baru po uzavírce (`closure_open_ts`, #1574), K1 ale hledá kontaminující eventy
-jen v (zpráva, zpráva + 61 min] (`ReactionJob._contaminating`). Skript pro každé
-změřené minutové okno odložené reakce spočítá příznak K1 ve třech variantách:
+baru po uzavírce (`closure_open_ts`, #1574), K1 ale do #1679 hledal kontaminující
+eventy jen v (zpráva, zpráva + 61 min]. Skript pro každé změřené minutové okno
+odložené reakce spočítá příznak K1 ve třech variantách:
 
-* **C** — dnešní stav: jiná významná zpráva v (zpráva, zpráva + 61 min]
-  a před koncem okna (`window_contaminated`); sloupec `cont_<w>` by měl sedět;
+* **C** — stav do #1679: jiná významná zpráva v (zpráva, zpráva + 61 min]
+  a před koncem okna (`window_contaminated`);
 * **A** — celá uzavírka: jiná významná zpráva v (zpráva, začátek + okno);
+  rozhodnutí #1659, od #1679 pravidlo jobu i hodinového K1 (`cont_<w>`
+  po retro přepisu sedí);
 * **B** — 61 min po zprávě + okno po otevření: C ∪ [začátek, začátek + okno).
 
 Všechny varianty berou jen zprávy před koncem okna (pozdější výnos neovlivnily).
