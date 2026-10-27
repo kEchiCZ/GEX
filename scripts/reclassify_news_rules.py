@@ -571,7 +571,7 @@ def contamination_report(
         measured = [r for r in reactions if r._mapping[f"cont_{window}"] is not None]
         before = sum(bool(r._mapping[f"cont_{window}"]) for r in measured)
         after = 0
-        to_clean = to_dirty = 0
+        to_clean = to_dirty = deferred_clean = deferred_dirty = 0
         for r in measured:
             change = by_key.get((int(r.event_id), str(r.symbol)))
             old = bool(r._mapping[f"cont_{window}"])
@@ -579,6 +579,10 @@ def contamination_report(
             after += bool(new)
             to_clean += old and not new
             to_dirty += (not old) and bool(new)
+            # Odložené zvlášť: K1 přes celou uzavírku (#1679) mění jen je
+            if r._mapping["deferred_min"]:
+                deferred_clean += old and not new
+                deferred_dirty += (not old) and bool(new)
         rows.append(
             [
                 f"w{window}",
@@ -587,6 +591,7 @@ def contamination_report(
                 f"{after} ({after / max(1, len(measured)):.0%})",
                 to_clean,
                 to_dirty,
+                f"{deferred_clean} / {deferred_dirty}",
                 f"{len(measured) - before} → {len(measured) - after}",
             ]
         )
@@ -598,6 +603,7 @@ def contamination_report(
             "po",
             "True→False",
             "False→True",
+            "z toho odložené T→F / F→T",
             "čistých vzorků",
         ],
         rows,

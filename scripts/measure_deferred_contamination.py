@@ -209,10 +209,13 @@ def report(windows: Sequence[DeferredWindow], skipped: Counter[str]) -> list[str
     lines.append(
         f"Odložená minutová okna: {total} (reakcí {reactions}, uzavírek × symbol {closures})."
     )
-    parity = sum(1 for w in windows if w.flags["C"] != w.stored)
-    lines.append(
-        f"Parita C × uložené `cont_<w>`: {total - parity}/{total} shodných ({parity} rozdílných)."
-    )
+    # Do #1679 sedí na uložené `cont_<w>` varianta C, po retro přepisu A
+    for variant in ("C", "A"):
+        parity = sum(1 for w in windows if w.flags[variant] != w.stored)
+        lines.append(
+            f"Parita {variant} × uložené `cont_<w>`: {total - parity}/{total} shodných "
+            f"({parity} rozdílných)."
+        )
     lines.append(f"Odložených řádků bez `closure_open_ts` (přeskočeno): {skipped['closure']}.")
     lines += [
         "",

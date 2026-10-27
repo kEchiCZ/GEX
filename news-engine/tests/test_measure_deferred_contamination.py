@@ -125,3 +125,47 @@ def test_c_je_stav_do_1679_a_a_predikat_jobu() -> None:
             flags = script.variant_flags(contaminators, "MACRO", NEWS, start, window)
             assert flags["C"] is old
             assert flags["A"] is new
+
+
+def test_report_parita_c_i_a_s_ulozenymi() -> None:
+    """Report přizná paritu C (stav do #1679) i A (po retro přepisu) s `cont_<w>`."""
+    from collections import Counter
+
+    from gexlens_news.model_stats import ReactionSample
+
+    script = load_script()
+
+    def window(event_id: int, stored: bool, flags: dict[str, bool]) -> Any:
+        sample = ReactionSample(
+            category="FED",
+            importance=3,
+            surprise_z=None,
+            sentiment_dir=None,
+            symbol="ES",
+            window_min=60,
+            ret_bp=5.0,
+            contaminated=False,
+            deferred=True,
+            gex_regime=None,
+            ts_event=NEWS,
+            closure_open=OPEN,
+        )
+        return script.DeferredWindow(
+            event_id=event_id,
+            symbol="ES",
+            window_min=60,
+            ts_event=NEWS,
+            closure_open=OPEN,
+            stored=stored,
+            flags=flags,
+            sample=sample,
+        )
+
+    # Řádek 1 už přepsaný podle A (True), řádek 2 ještě podle C (False)
+    windows = [
+        window(1, True, {"C": False, "A": True, "B": False}),
+        window(2, False, {"C": False, "A": True, "B": True}),
+    ]
+    lines = script.report(windows, Counter())
+    assert "Parita C × uložené `cont_<w>`: 1/2 shodných (1 rozdílných)." in lines
+    assert "Parita A × uložené `cont_<w>`: 1/2 shodných (1 rozdílných)." in lines

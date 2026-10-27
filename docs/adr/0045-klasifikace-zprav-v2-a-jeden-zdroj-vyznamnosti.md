@@ -240,6 +240,14 @@ bar po otevření, tedy shodný výnos (GEOPOLITICS|1 deferred ~370 vzorků na ~
 Varianta „proxy klíč z kalendáře“ zamítnuta: na svátek nebo halt by rozdělila nebo spojila
 uzavírky jinak než trh.
 
+## Dodatek 2026-10-08 — Yahoo headline feedy místo zrušeného `rssindex` (#1451)
+
+Yahoo `rssindex` vrací od 23. 9. 2026 HTTP 404. Rozhodnutím uživatele z 8. 10. ho v `rss_news`
+nahradily headline feedy indexů `^GSPC` a `^IXIC`. Strop agregátoru z bodu 2 pro ně platí dál
+(`feed_of` pozná Yahoo podle `yahoo.com` v URL feedu). Vzorek ^GSPC z 8. 10.: Yahoo 8, Fool 3,
+BeInCrypto 3, Benzinga 2, TheStreet 2, Stocktwits 2, Trefis 1. Převažují názorové a souhrnné
+články, strop tedy sedí. Korpus má na 24. 9. zlom: jde o jiný feed, ne o pokračování.
+
 ## Dodatek 2026-10-27 — bod 7 u odložených reakcí: K1 přes celou uzavírku (#1659, #1679)
 
 Odložená reakce (`deferred_min`) měří okna od prvního obchodovaného baru po uzavírce
@@ -261,11 +269,3 @@ kontaminovaných odložených oken C (stav do #1679) 95 567, A 187 485 z 229 996
 bucketů 17 193 → 12 072, bucketů s n ≥ 30 112 → 96, otevřené gate 4 → 3 jiné (všechny na hraně,
 Wilson LB ≤ 0,547). Varianty: A celá uzavírka (zvoleno); B 61 min po zprávě + okno po otevření
 (ignoruje zprávy v gapu); C beze změny.
-
-## Dodatek 2026-10-08 — Yahoo headline feedy místo zrušeného `rssindex` (#1451)
-
-Yahoo `rssindex` vrací od 23. 9. 2026 HTTP 404. Rozhodnutím uživatele z 8. 10. ho v `rss_news`
-nahradily headline feedy indexů `^GSPC` a `^IXIC`. Strop agregátoru z bodu 2 pro ně platí dál
-(`feed_of` pozná Yahoo podle `yahoo.com` v URL feedu). Vzorek ^GSPC z 8. 10.: Yahoo 8, Fool 3,
-BeInCrypto 3, Benzinga 2, TheStreet 2, Stocktwits 2, Trefis 1. Převažují názorové a souhrnné
-články, strop tedy sedí. Korpus má na 24. 9. zlom: jde o jiný feed, ne o pokračování.
