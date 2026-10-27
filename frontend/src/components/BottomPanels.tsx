@@ -109,7 +109,7 @@ const fmtSigned = (value: number, peak = Infinity): string => {
 
 /** Objem opcí pod crosshairem (#1635): null = objem se neměřil, „—“ s důvodem, ne 0. */
 const VOLUME_GAP_TITLE =
-  'Objem se neměřil (řetěz z fallbacku tastytrade, díra ve sběru nebo koš s takovou minutou) — ne minuta bez obchodů'
+  'Objem se neměřil — fallback tastytrade, díra ve sběru, expirace po settle nebo vzdálená expirace jen z tastytrade (bez objemu, #616); u koše TF stačí jedna taková minuta. Není to minuta bez obchodů.'
 const volumeLabel = (value: number | null | undefined): React.ReactNode =>
   value === null || value === undefined ? <span title={VOLUME_GAP_TITLE}>—</span> : fmtInt(value)
 

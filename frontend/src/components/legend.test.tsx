@@ -78,9 +78,10 @@ describe('obsah legendy', () => {
     expect(cum.up).toMatch(/^Od v6/)
   })
 
-  test('Opt Vol přizná minutu po mezeře v objemu a FA stav kalibrace (#1632)', () => {
+  test('Opt Vol přizná minutu bez objemu, minutu po mezeře a FA stav kalibrace (#1632, #1635)', () => {
     const optVol = allItems.find((item) => item.name === 'Opt Vol')!
-    expect(optVol.how).toMatch(/První minuta po mezeře v objemu .* je 0/)
+    expect(optVol.how).toMatch(/První minuta po mezeře v objemu je 0/)
+    expect(optVol.how).toMatch(/šedý pás s „—“, ne 0/)
     const fa = allItems.find((item) => item.name === 'Zdroj OI: FA odhad')!
     expect(fa.how).toMatch(/nekalibrováno n\/5/)
     // #1666: model pod v6 a jeho limity (ADR-0061)

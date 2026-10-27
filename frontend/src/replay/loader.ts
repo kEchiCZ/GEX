@@ -1372,9 +1372,15 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   // Catch-up minuta (#518) přírůstek nekreslí — její kumulativy dohánějí celou
   // dobu výpadku, ne jednu minutu obchodů; referenci přírůstků jen posune
   const isCatchUp = (minuteIdx: number): boolean => inputs.catchUpMinutes.has(minuteKeys[minuteIdx])
+  // Rozdělaná minuta na živé hraně (#1635): engine po cyklu pošle provizorní bar
+  // další minuty dřív než její snapshot — objem se ještě neměřil, ale není to
+  // mezera; po finálním baru bez snapshotu se sloupec přepočte jako díra (#459)
+  const provisionalIso = new Set(inputs.bars.filter((bar) => bar.final === false).map((bar) => bar.tsIso)) // prettier-ignore
+  const isPending = (minuteIdx: number): boolean =>
+    !hasSnapshot(minuteIdx) && provisionalIso.has(minuteKeys[minuteIdx])
   // Odvozené řady per minuta (#515): dopočítají se jen sloupce od poslední
   // změny (append/přepis živé minuty = 1 sloupec) a memoizují se na inputs
-  const series = ensureDerived(inputs, hasSnapshot, isCatchUp)
+  const series = ensureDerived(inputs, hasSnapshot, isCatchUp, isPending)
   const maxPain = series.maxPain.slice(0, minutes)
 
   // Flip na řídké OI páteři (#664): minuty s nadpoloviční dírou v OI se kreslí
@@ -1749,7 +1755,8 @@ Sémantika sloupců je shodná s původními celodenními průchody:
   Sloupec závisí jen na sobě a na předchozím, takže memo `upTo` platí dál.
 * Minuta bez měřeného objemu (#1635) — žádný strike strany objem nenese (tasty
   fallback, díra ve sběru #459): strana minuty je null, ne 0. Panel ji kreslí
-  jako mezeru s „—“, tichá minuta bez obchodů zůstává 0 (SPEC 3.7).
+  jako mezeru s „—“, tichá minuta bez obchodů zůstává 0 (SPEC 3.7). Rozdělaná
+  minuta (provizorní bar bez snapshotu, `isPending`) je 0: snapshot teprve přijde.
 * Evo OI (#573) — Σ OI přes striky; minuta bez snapshotu drží schod
 
 Cache se mutuje in-place — je to čistá memoizace (výsledek téhož vstupu),
@@ -1758,6 +1765,7 @@ function ensureDerived(
   inputs: ReplayInputs,
   hasSnapshot: (minuteIdx: number) => boolean,
   isCatchUp: (minuteIdx: number) => boolean,
+  isPending: (minuteIdx: number) => boolean,
 ): DerivedSeriesCache {
   const minutes = inputs.minutes.length
   const stride = inputs.minuteCapacity
@@ -1843,10 +1851,11 @@ function ensureDerived(
         }
       }
     }
-    cache.optVolCall[minuteIdx] = callMeasured ? optVolCall : null
-    cache.optVolPut[minuteIdx] = putMeasured ? optVolPut : null
-    cache.deltaFlowCall[minuteIdx] = callMeasured ? deltaFlowCall : null
-    cache.deltaFlowPut[minuteIdx] = putMeasured ? deltaFlowPut : null
+    const pending = isPending(minuteIdx)
+    cache.optVolCall[minuteIdx] = callMeasured || pending ? optVolCall : null
+    cache.optVolPut[minuteIdx] = putMeasured || pending ? optVolPut : null
+    cache.deltaFlowCall[minuteIdx] = callMeasured || pending ? deltaFlowCall : null
+    cache.deltaFlowPut[minuteIdx] = putMeasured || pending ? deltaFlowPut : null
   }
   cache.upTo = minutes
   inputs.derived = cache

@@ -352,7 +352,7 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         what: 'Kolik opčních kontraktů se v dané minutě zobchodovalo, rozdělené na strany.',
         up: 'Skok zelených sloupců → čerstvý zájem o cally. Nová zeď se často objeví do pár minut po takovém skoku.',
         down: 'Skok červených sloupců → nakupuje se ochrana, staví se put pozice pod cenou.',
-        how: 'Počítá se jen objem nad dosavadním maximem kontraktu v seanci (#1602). První minuta po mezeře v objemu (fallback tastytrade, díra ve sběru) je 0 — nesla by objem celé mezery, ne jedné minuty; součet dne v Daily ho započte. Platí i pro Δ Flow C/P.',
+        how: 'Počítá se jen objem nad dosavadním maximem kontraktu v seanci (#1602). Minuta bez měřeného objemu (fallback tastytrade, díra ve sběru, expirace po settle, vzdálená expirace jen z tastytrade) je šedý pás s „—“, ne 0; koš vyššího TF s takovou minutou taky (#1635). První minuta po mezeře v objemu je 0 — nesla by objem celé mezery, ne jedné minuty; součet dne v Daily ho započte. Platí i pro Δ Flow C/P.',
       },
       {
         name: 'Δ Flow C/P',

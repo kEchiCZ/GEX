@@ -1557,6 +1557,28 @@ test('minuta bez snapshotu (díra ve sběru #459) je mezera i pro objem (#1632)'
   expect(day.panels.optVolCall).toEqual([0, null, 0, 20])
 })
 
+test('rozdělaná minuta na živé hraně není mezera, finální díra ano (#1635)', () => {
+  // Engine po cyklu minuty 1 pošle provizorní bar minuty 2 dřív než její snapshot
+  let inputs = decodeBundle(volumeBundle([1000, 1010], [800, 805]))
+  inputs = appendMinute(inputs, {
+    tsIso: minuteIso(2),
+    rows: [],
+    bar: { close: 7000, volume: 3, final: false },
+  })
+  const live = assembleReplayDay(inputs)
+  expect(live.panels.optVolCall).toEqual([0, 10, 0])
+  // 0, ne null: koš TF s rozdělanou minutou tak nese součet měřených minut
+  // (`sumMeasured`), ne mezeru, dokud minuta neskončí
+  expect(live.panels.deltaFlowPut.at(-1)).toBe(0)
+  // Bar se uzavře a snapshot nepřijde (opční sweep neběžel) → díra (#459)
+  const closed = appendMinute(inputs, {
+    tsIso: minuteIso(2),
+    rows: [],
+    bar: { close: 7000, volume: 3, final: true },
+  })
+  expect(assembleReplayDay(closed).panels.optVolCall).toEqual([0, 10, null])
+})
+
 test('catch-up minuta referenci jen posune (#518, #1602)', () => {
   // Minuta 2 je catch-up: dohání výpadek (1000 → 1500), přírůstek se nekreslí,
   // ale další minuta počítá proti 1500; propad pod maximum nic nepřidá
