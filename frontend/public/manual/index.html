@@ -786,8 +786,17 @@ klouzání vypne) a <strong>Od flip crossu</strong> (od posledního průchodu ce
 flipem). Nedostupné volby jsou šedé s důvodem (před openem, bez flip crossu).
 Časy jsou DST-korektní z téže tabulky jako markery seancí.</p>
 <h3>Okenní profil a P/C</h3>
-<p>Pruhy profilu ukazují <strong>objem zobchodovaný v okně</strong> (rozdíl kumulativů — OI
-zůstává statické k času t2, otevřené pozice nejsou tok). P/C panel v okenním
+<p>Pruhy profilu ukazují <strong>objem zobchodovaný v okně</strong>: součet přírůstků denního
+objemu kontraktu nad dosavadním maximem v seanci, stejně jako panel Opt Vol
+(#1631). Kmitání a propad IBKR na hranici okna ani strike, který vstoupil do
+pásma až v okně, okno nenafouknou celým denním objemem; objem z mezery uvnitř
+okna se do okna započte. <strong>Hranice okna v minutě bez měřeného objemu</strong> (fallback
+tastytrade, díra ve sběru) se posune na nejbližší měřenou minutu uvnitř okna
+a chip to přizná, např. „objem měřen 19:19–20:00“: objem mezery se nedá rozdělit
+na část před hranicí a po ní, takže okno spočítá přesně jen měřenou část. Okno
+celé v mezeře (i vzdálená expirace bez objemu) ukáže „objem se v okně neměřil“
+a profil přizná chybějící objem místo nul (rozhodnutí 27. 10.). OI zůstává
+statické k času t2, otevřené pozice nejsou tok. P/C panel v okenním
 režimu ukazuje <strong>premium jako hlavní číslo a kusový poměr vedle</strong> — rozdíl
 obou je sám o sobě informace (kusově vyrovnané okno může být penězi drtivě
 jednostranné). Tooltip nese <strong>top 5 striků dle podílu na prémiích</strong>
