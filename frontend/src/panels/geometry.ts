@@ -9,9 +9,25 @@ export function seriesPeak(values: (number | null)[]): number {
  *
  * `peak` lze předat explicitně (sdílená škála pro C/P), jinak se bere vrchol řady.
  */
-export function barHeights(values: number[], maxHeight: number, peak?: number): number[] {
+export function barHeights(values: (number | null)[], maxHeight: number, peak?: number): number[] {
   const normalizer = peak ?? seriesPeak(values)
-  return values.map((value) => (Math.abs(value) / normalizer) * maxHeight)
+  return values.map((value) => (Math.abs(value ?? 0) / normalizer) * maxHeight)
+}
+
+/** Souvislé úseky mezery řady sloupců (#1635) jako [první, poslední] index —
+panel je kreslí pásem, aby se neměřený objem nečetl jako minuta bez obchodů. */
+export function gapRuns(length: number, isGap: (index: number) => boolean): [number, number][] {
+  const runs: [number, number][] = []
+  let start = -1
+  for (let index = 0; index <= length; index += 1) {
+    const gap = index < length && isGap(index)
+    if (gap && start < 0) start = index
+    if (!gap && start >= 0) {
+      runs.push([start, index - 1])
+      start = -1
+    }
+  }
+  return runs
 }
 
 export interface CumDeltaGeometry {

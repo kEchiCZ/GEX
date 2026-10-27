@@ -6,7 +6,7 @@ import { LiveSocket } from '../api/ws'
 import { BottomPanels } from '../components/BottomPanels'
 import { FakeWebSocket } from '../test/fakeWs'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
-import { cumDeltaAreas, cumDeltaSegments, barHeights, cvdLineSegments, evoOiDisplay, evoOiStepPath, sentimentCandleGeometry, visibleCumDelta, CUMDELTA_MIDPOINT_REASON } from './geometry' // prettier-ignore
+import { cumDeltaAreas, cumDeltaSegments, barHeights, cvdLineSegments, evoOiDisplay, evoOiStepPath, gapRuns, sentimentCandleGeometry, visibleCumDelta, CUMDELTA_MIDPOINT_REASON } from './geometry' // prettier-ignore
 import type { PanelSeries } from '../components/BottomPanels'
 
 const DATA: PanelSeries = {
@@ -30,6 +30,17 @@ beforeEach(() => {
 
 test('barHeights normalizuje maximem', () => {
   expect(barHeights([100, 200, 400], 80)).toEqual([20, 40, 80])
+  expect(barHeights([100, null, 400], 80)).toEqual([20, 0, 80]) // mezera nemá sloupec
+})
+
+test('gapRuns vrací souvislé úseky mezery včetně okrajů (#1635)', () => {
+  const series = [null, null, 5, 0, null, 7, null]
+  expect(gapRuns(series.length, (index) => series[index] === null)).toEqual([
+    [0, 1],
+    [4, 4],
+    [6, 6],
+  ])
+  expect(gapRuns(3, () => false)).toEqual([])
 })
 
 test('cumDeltaAreas dělí plochu nad/pod nulou a drží rezervu od okrajů (#169)', () => {
@@ -443,6 +454,45 @@ test('crosshair ukazuje hodnoty ukazatelů vpravo (issue #104)', () => {
   const flow = screen.getByLabelText('Δ Flow panel').querySelector('.panel-value')!
   expect(flow.textContent).toContain('C 20')
   expect(flow.textContent).toContain('P 12')
+})
+
+test('minuta bez měřeného objemu: Opt Vol a Δ Flow kreslí pás mezery a „—“, tichá minuta 0 (#1635)', () => {
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={{
+          ...DATA,
+          optVolCall: [10, null, null, 0],
+          optVolPut: [15, null, null, 0],
+          deltaFlowCall: [5, null, null, 0],
+          deltaFlowPut: [7, null, null, 0],
+        }}
+        visible={{
+          vol: false,
+          optVol: true,
+          delta: false,
+          deltaFlow: true,
+          evoOi: false,
+          sentiment: false,
+        }}
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  const optVol = screen.getByLabelText('Opt Vol panel')
+  const bands = optVol.querySelectorAll('[data-part="optvol-gap"]')
+  expect(bands).toHaveLength(1) // minuty 1–2 jako jeden pás
+  expect(Number(bands[0].getAttribute('width'))).toBeCloseTo(24) // 2 × krok 12 px
+  const flow = screen.getByLabelText('Δ Flow panel')
+  expect(flow.querySelectorAll('[data-part="deltaflow-gap"]')).toHaveLength(1)
+  const svg = optVol.querySelector('svg')!
+  fireEvent.pointerMove(svg, { clientX: 18, clientY: 20 }) // krok 12 px → minuta 1
+  const value = optVol.querySelector('.panel-value')!
+  expect(value.textContent).toBe('C — / P —')
+  expect(value.querySelector('span[title]')!.getAttribute('title')).toContain('neměřil')
+  expect(flow.querySelector('.panel-value')!.textContent).toBe('C — / P —')
+  fireEvent.pointerMove(svg, { clientX: 42, clientY: 20 }) // minuta 3: měřená, bez obchodů
+  expect(optVol.querySelector('.panel-value')!.textContent).toBe('C 0 / P 0')
 })
 
 test('crosshair drží i mimo data (posun grafu do budoucna) — issue #109', () => {

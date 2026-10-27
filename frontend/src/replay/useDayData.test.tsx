@@ -676,7 +676,7 @@ test('živá minuta z WS nese mid pro P/C v prémiích (#835)', async () => {
 test('živá minuta s volume null (tasty fallback) nezaloží referenci nulou (#1602)', async () => {
   // Strike 7610 se poprvé objeví za fallbacku (volume null), pak z IBKR s denním
   // kumulativem 500 — přírůstek musí být 0, ne 500, a fallback minuta nese
-  // volumeMissing (#1067), ne objem 0
+  // volumeMissing (#1067) a v panelu mezeru (#1635), ne objem 0
   vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
   const socket = makeSocket()
   const { result } = renderHook(() =>
@@ -699,7 +699,7 @@ test('živá minuta s volume null (tasty fallback) nezaloží referenci nulou (#
     })
     await vi.advanceTimersByTimeAsync(500)
   })
-  expect(result.current.day.panels.optVolCall).toEqual([0, 0, 0])
+  expect(result.current.day.panels.optVolCall).toEqual([0, null, 0])
   expect(result.current.day.profileByMinute!.rowsAt(1)[0].volumeMissing).toBe(true)
 })
 
