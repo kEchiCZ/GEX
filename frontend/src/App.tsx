@@ -73,7 +73,7 @@ import { sessionBoundsUtc, sessionDateIso } from './instrument/tz'
 import { EM_COLOR, EM_DASH, REF_COLOR, REF_DASH, SETUP_COLORS, VWAP_COLOR, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
 import { computeExpectedMove, emUsage } from './instrument/expectedmove'
 import { vwapSeriesForAxis } from './instrument/referencelevels'
-import { decodeRange, encodeRange, followUpRange, panelWindowCumDelta, prePostWindows, rangeBuckets, rangeLabel, reactionWindow, windowProfileRows } from './instrument/rangeselect' // prettier-ignore
+import { decodeRange, encodeRange, followUpRange, panelWindowCumDelta, prePostWindows, rangeBuckets, rangeLabel, reactionWindow, windowProfileRows, windowVolumes } from './instrument/rangeselect' // prettier-ignore
 import { diffProfileRows } from './profile/diff'
 import type { RangeSelection } from './instrument/rangeselect'
 import { RANGE_PRESETS, presetDisabledReason, presetRange } from './instrument/rangepresets'
@@ -1514,12 +1514,12 @@ function MainContent() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- posun okna s minutou, viz výše
     if (result) setRange(result)
   }, [rangePresetMode, presetInputs, playback.isLive])
-  // Okenní profil V KLIENTOVI (posudek #484): diff kumulativních řádků t2 − t1,
-  // baseline = poslední snapshot PŘED oknem (sémantika API from, #483); díry
-  // v ose se přeskakují couváním na nejbližší minutu se snapshotem.
+  // Okenní profil V KLIENTOVI (posudek #484): řádky k t2 s objemem okna z 1m
+  // matic (Σ přírůstků proti průběžnému maximu, #1631 — sémantika API from);
+  // díry v ose se u t2 přeskakují couváním na nejbližší koš se snapshotem.
   const windowRowsForSpan = useCallback(
-    (span: { startBucket: number; endBucket: number } | null) => {
-      if (!span || !day.profileByMinute) return null
+    (span: { startBucket: number; endBucket: number; fromIdx: number; toIdx: number } | null) => {
+      if (!span || !day.profileByMinute || !day.raw) return null
       // profileByMinute je po agregaci KOŠOVÝ (rowsAt bere index koše, #503) —
       // proto se sahá přes startBucket/endBucket, ne 1m indexy (#507 třída chyb)
       const source = day.profileByMinute
@@ -1533,13 +1533,10 @@ function MainContent() {
         rows2 = source.rowsAt(idx)
       }
       if (rows2.length === 0) return null
-      let rows1: ReturnType<typeof source.rowsAt> = []
-      for (let idx = fromIdx - 1; idx >= 0 && rows1.length === 0; idx -= 1) {
-        rows1 = source.rowsAt(idx)
-      }
-      return windowProfileRows(rows2, rows1)
+      const volumes = windowVolumes(day.raw, span.fromIdx, span.toIdx)
+      return volumes ? windowProfileRows(rows2, volumes) : null
     },
-    [day.profileByMinute],
+    [day.profileByMinute, day.raw],
   )
   const rangeWindowRows = useMemo(() => windowRowsForSpan(rangeSpan), [windowRowsForSpan, rangeSpan]) // prettier-ignore
   const rangeWindowRowsB = useMemo(() => windowRowsForSpan(rangeSpanB), [windowRowsForSpan, rangeSpanB]) // prettier-ignore

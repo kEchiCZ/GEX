@@ -1,14 +1,16 @@
 /** Range selector (#484) — čisté funkce okna [t1, t2] nad denními daty.
 
 Okenní profil se počítá V KLIENTOVI z už načteného /replay bundlu (posudek
-#484): volume ve snapshotech je kumulativní denní (SPEC 4.3), takže okno je
-rozdíl řádků dvou minut — identická aritmetika jako API /profile?from=&to=
-(#483), jen bez roundtripu. OI zůstává statické k t2 (otevřené pozice nejsou
-tok), |Δ| k t2 se zpětně odvodí z komponenty (component = vol × |Δ|).
+#484): volume ve snapshotech je kumulativní denní (SPEC 4.3), objem okna je
+Σ přírůstků proti průběžnému maximu kontraktu přes minuty okna
+(`windowVolumes`, #1631) — identická aritmetika jako API /profile?from=&to=
+(`window_volumes`), jen bez roundtripu. OI zůstává statické k t2 (otevřené
+pozice nejsou tok), |Δ| k t2 se zpětně odvodí z komponenty (component = vol × |Δ|).
 
 Rozsah se drží jako pár ISO minut (1m osa) — přežije přepnutí timeframu
 i přetáčení playbacku; na koše aktuálního TF se mapuje až při kreslení.
 */
+import type { RawDay } from '../heatmap/modes'
 import type { ProfileRow } from '../profile/bars'
 
 export interface RangeSelection {
@@ -16,17 +18,57 @@ export interface RangeSelection {
   toIso: string
 }
 
-/** Okenní profil: rozdíl kumulativních volume řádků t2 − t1 (clamp na 0).
+/** Objem okna per strike: call a put strana. */
+export type WindowVolumes = Map<number, { call: number; put: number }>
 
-`rows1` prázdné = okno od začátku dat (baseline 0 — shodné s API, kde
-`from` před prvním snapshotem znamená „od začátku seance"). OI složky
-a vzdálenost od spotu zůstávají z t2. */
-export function windowProfileRows(rows2: ProfileRow[], rows1: ProfileRow[]): ProfileRow[] {
-  const baseline = new Map(rows1.map((row) => [row.strike, row]))
+/** Objem okna [fromIdx, toIdx] (1m indexy, obě meze včetně) per strike (#1631).
+
+Σ přírůstků kumulativního volume proti průběžnému maximu kontraktu — tentýž
+vzorec jako panel Opt Vol (`ensureDerived`) a API `window_volumes`, vč. catch-up
+minuty a minuty po mezeře (objem okna, ne minutový obchod). Kmitání ani propad
+IBKR v t1 nebo t2 okno nezkreslí, minuta bez objemu (maska 0) nic nepřidá
+a strike bez měření před oknem první hodnotou v okně jen založí stav. Bez
+snapshotu před oknem = okno od začátku seance: celý kumulativ do t2 (shodně
+s API, kde `from` před prvním snapshotem). null = den bez masky objemu. */
+export function windowVolumes(raw: RawDay, fromIdx: number, toIdx: number): WindowVolumes | null {
+  const { callVolumeKnown, putVolumeKnown, snapshotMinutes } = raw
+  if (!callVolumeKnown || !putVolumeKnown || !snapshotMinutes) return null
+  const stride = raw.stride ?? raw.minutes
+  const last = Math.min(toIdx, raw.minutes - 1)
+  const fromStart = !snapshotMinutes.slice(0, Math.max(0, fromIdx)).some(Boolean)
+  const side = (volume: Float32Array, known: Float32Array, row: number): number => {
+    let max = Number.NaN
+    let base = Number.NaN
+    let first = Number.NaN
+    for (let minuteIdx = 0; minuteIdx <= last; minuteIdx += 1) {
+      if (known[row + minuteIdx] === 0) continue
+      const value = volume[row + minuteIdx]
+      if (minuteIdx >= fromIdx && Number.isNaN(first)) first = value
+      if (Number.isNaN(max) || value > max) max = value
+      if (minuteIdx < fromIdx) base = max
+    }
+    if (Number.isNaN(max)) return 0
+    if (fromStart) return max
+    return Number.isNaN(base) ? (Number.isNaN(first) ? 0 : max - first) : max - base
+  }
+  const result: WindowVolumes = new Map()
+  raw.strikes.forEach((strike, strikeIdx) => {
+    const row = strikeIdx * stride
+    result.set(strike, {
+      call: side(raw.callVolume, callVolumeKnown, row),
+      put: side(raw.putVolume, putVolumeKnown, row),
+    })
+  })
+  return result
+}
+
+/** Okenní profil: řádky k t2 s objemem okna z `windowVolumes` (#1631). OI
+složky a vzdálenost od spotu zůstávají z t2; strike bez objemu okna má 0. */
+export function windowProfileRows(rows2: ProfileRow[], volumes: WindowVolumes): ProfileRow[] {
   return rows2.map((row) => {
-    const base = baseline.get(row.strike)
-    const callVolume = Math.max(0, row.callVolume - (base?.callVolume ?? 0))
-    const putVolume = Math.max(0, row.putVolume - (base?.putVolume ?? 0))
+    const window = volumes.get(row.strike)
+    const callVolume = window?.call ?? 0
+    const putVolume = window?.put ?? 0
     // |Δ| k t2 z komponenty: component = vol × |Δ| → škálování poměrem okna
     const callComponent =
       row.callVolume > 0 ? row.callVolComponent * (callVolume / row.callVolume) : 0

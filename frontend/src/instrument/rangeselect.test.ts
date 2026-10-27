@@ -11,7 +11,10 @@ import {
   rangeLabel,
   reactionWindow,
   windowProfileRows,
+  windowVolumes,
 } from './rangeselect'
+import type { WindowVolumes } from './rangeselect'
+import type { RawDay } from '../heatmap/modes'
 import type { ProfileRow } from '../profile/bars'
 
 /** Řádek jako z profileByMinute: kumulativní volume, component = vol × |Δ|. */
@@ -31,11 +34,12 @@ function row(strike: number, callVol: number, putVol: number): ProfileRow {
 }
 
 describe('windowProfileRows', () => {
-  it('okno = diff kumulativů, |Δ| k t2 se zachová, OI složky statické', () => {
-    // Parita s API (#483): fixture vzor — vol(t) = 10·(t+1) per strana
-    const rows1 = [row(7590, 15, 10)]
+  const volumes = (entries: [number, number, number][]): WindowVolumes =>
+    new Map(entries.map(([strike, call, put]) => [strike, { call, put }]))
+
+  it('objem okna z windowVolumes, |Δ| k t2 se zachová, OI složky statické', () => {
     const rows2 = [row(7590, 35, 30)]
-    const result = windowProfileRows(rows2, rows1)
+    const result = windowProfileRows(rows2, volumes([[7590, 20, 20]]))
     expect(result[0].callVolume).toBe(20)
     expect(result[0].putVolume).toBe(20)
     expect(result[0].callVolComponent).toBeCloseTo(20 * 0.5, 10)
@@ -44,23 +48,60 @@ describe('windowProfileRows', () => {
     expect(result[0].callOi).toBe(100)
   })
 
-  it('prázdná baseline = okno od začátku dat (== plný kumulativ)', () => {
-    const rows2 = [row(7590, 35, 30)]
-    const result = windowProfileRows(rows2, [])
-    expect(result[0].callVolume).toBe(35)
-    expect(result[0].callVolComponent).toBeCloseTo(35 * 0.5, 10)
-  })
-
-  it('korekce dat (kumulativ klesl) se clampuje na 0', () => {
-    const result = windowProfileRows([row(7590, 10, 10)], [row(7590, 15, 10)])
+  it('strike bez objemu okna má 0', () => {
+    const result = windowProfileRows([row(7600, 12, 8)], volumes([[7590, 15, 10]]))
     expect(result[0].callVolume).toBe(0)
     expect(result[0].callVolComponent).toBe(0)
-    expect(result[0].putVolume).toBe(0)
+  })
+})
+
+/** Jeden strike 7590, call = `series`, put prázdný; `null` = volume NULL
+ * (maska 0), `undefined` = minuta bez snapshotu. */
+function rawOf(series: (number | null | undefined)[]): RawDay {
+  const minutes = series.length
+  const callVolume = Float32Array.from(series, (value) => value ?? 0)
+  const callVolumeKnown = Float32Array.from(series, (value) => (value == null ? 0 : 1))
+  const zeros = new Float32Array(minutes)
+  return {
+    minutes,
+    strikes: [7590],
+    callOi: zeros,
+    putOi: zeros,
+    callVolume,
+    putVolume: zeros,
+    callVolumeKnown,
+    putVolumeKnown: zeros,
+    snapshotMinutes: series.map((value) => value !== undefined),
+    spotSeries: series.map(() => null),
+    staleAge: null,
+  }
+}
+
+describe('windowVolumes (#1631)', () => {
+  // Tytéž řady jako API `test_window_volumes_proti_prubeznemu_maximu` (parita)
+  it.each([
+    ['propad v t1 se nezapočte znovu', [1000, 800, 760, 1000, 1010], 2, 4, 10],
+    ['t2 v propadu', [1000, 1005, 760], 1, 2, 5],
+    ['t1 ve fallbacku bere maximum, ne 0', [100, null, 130, 150], 2, 3, 50],
+    ['strike bez měření do t1 jen založí stav', [null, null, 500, 510], 2, 3, 10],
+    ['okno od začátku seance nese celý kumulativ', [100, null, 130, 150], 0, 3, 150],
+  ] as [string, (number | null)[], number, number, number][])(
+    '%s',
+    (_label, series, fromIdx, toIdx, expected) => {
+      expect(windowVolumes(rawOf(series), fromIdx, toIdx)?.get(7590)).toEqual({
+        call: expected,
+        put: 0,
+      })
+    },
+  )
+
+  it('bez snapshotu před oknem = od začátku seance i s barem před ním', () => {
+    // Minuta 0 má jen bar (osa začíná dřív než opční snímky)
+    expect(windowVolumes(rawOf([undefined, 100, 130]), 1, 2)?.get(7590)?.call).toBe(130)
   })
 
-  it('strike bez baseline řádku (přibyl posunem obálky) má baseline 0', () => {
-    const result = windowProfileRows([row(7600, 12, 8)], [row(7590, 15, 10)])
-    expect(result[0].callVolume).toBe(12)
+  it('den bez masky objemu (Daily, demo) okno nemá', () => {
+    expect(windowVolumes({ ...rawOf([100, 130]), callVolumeKnown: undefined }, 0, 1)).toBeNull()
   })
 })
 
