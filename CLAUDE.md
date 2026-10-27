@@ -15,5 +15,5 @@ doplňuje specifika Claude Code; nic z AGENTS.md neopakuje.
 - Při ~70 % kontextu nebo po kompakci nabídni novou session; po kompakci ověř den v týdnu, stav trhu
   a stav issues tvrdými daty (`gh issue view`, `/api/status`, `marketclock`), ne ze souhrnu.
 - Rozhodnutí předkládej jako varianty s výhodami/nevýhodami a doporučením (viz AGENTS.md
-  „Rozhodování"); připomínky s datem zakládej jako issue `Připomínka ~D. M.:` s `prio:*`.
+  „Rozhodování"); připomínky s datem zakládej jako issue `[AI Agent] Připomínka ~D. M.:` s `prio:*`.
 - Epiky a větší funkce: skill `/epika`.

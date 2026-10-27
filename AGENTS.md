@@ -185,6 +185,12 @@ frontend (nginx :8080, React SPA) — heatmapa, profil, panely, playback, briefi
   `scripts/merge-when-green.sh <PR>` (po push počkat ~60 s, `gh pr checks` musí checky vidět).
   `gh pr checks --watch` samotné nestačí (vrací 0 i při failu).
 - Delší texty do `gh issue/pr comment` **vždy `--body-file`** (české uvozovky usekávají inline body).
+- **Značka `[AI Agent]`** (vlastník 26. 10. 2026, #1698): agent píše pod účtem vlastníka, takže všechno,
+  co zapíše na GitHub, začíná `[AI Agent]` — titulek nového issue i jeho změna
+  (`[AI Agent] fix(engine): …`), první řádek těla issue a každé jeho úpravy, komentáře k issue a PR,
+  těla PR a review (`[AI Agent] <role> · <model> · <D. M.>`, např. `[AI Agent] session · Opus 5.5 · 26. 10.`).
+  Titulek PR značku nenese (při squash merge je to první řádek commitu). Text bez značky napsal
+  vlastník; u textů před 26. 10. značka chybí a autora nepoznáš.
 - Milestones M1→M5 (SPEC kap. 9) a dále roadmapa #629: neimplementuj napřed věci z pozdějších fází.
 - **Definition of done** pro feature PR:
   1. testy (golden při změně výpočtu), lint, mypy, build zelené;
