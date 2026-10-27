@@ -22,6 +22,7 @@ import {
   cvdLineSegments,
   evoOiDisplay,
   evoOiStepPath,
+  gapRuns,
   sentimentCandleGeometry,
   seriesPeak,
 } from '../panels/geometry'
@@ -32,8 +33,10 @@ import { useRenderTimer } from '../perf/meter'
 
 export interface PanelSeries {
   vol: number[]
-  optVolCall: number[]
-  optVolPut: number[]
+  /** Přírůstek objemu opcí per strana; null = strana minuty bez měřeného objemu
+  (tasty fallback, díra ve sběru — #1635), kreslí se mezera s „—“, ne 0. */
+  optVolCall: (number | null)[]
+  optVolPut: (number | null)[]
   /** null = mezera trade větve (ADR-0057 bod 3) — plocha se přeruší, žádná spojnice. */
   cumDelta: (number | null)[]
   /** Paralelně k `cumDelta`: minuta má znaménko z midpoint testu (zdroj ≠
@@ -48,8 +51,8 @@ export interface PanelSeries {
   větve); prázdné/chybějící pole = řada se nekreslí vůbec. */
   futuresCvd?: (number | null)[]
   /** Delta-vážený opční tok per strana (|Δ| × přírůstek volume) — čtení C/P aktivity. */
-  deltaFlowCall: number[]
-  deltaFlowPut: number[]
+  deltaFlowCall: (number | null)[]
+  deltaFlowPut: (number | null)[]
   /** Evo OI (#573): Σ OI přes striky per sloupec, C/P zvlášť; prázdné = starší data. */
   evoOiCall?: (number | null)[]
   evoOiPut?: (number | null)[]
@@ -104,6 +107,12 @@ const fmtSigned = (value: number, peak = Infinity): string => {
   return (value > 0 ? '+' : '') + text
 }
 
+/** Objem opcí pod crosshairem (#1635): null = objem se neměřil, „—“ s důvodem, ne 0. */
+const VOLUME_GAP_TITLE =
+  'Objem se neměřil (řetěz z fallbacku tastytrade, díra ve sběru nebo koš s takovou minutou) — ne minuta bez obchodů'
+const volumeLabel = (value: number | null | undefined): React.ReactNode =>
+  value === null || value === undefined ? <span title={VOLUME_GAP_TITLE}>—</span> : fmtInt(value)
+
 /** Hodnota Evo OI pod crosshairem; null (za pozicí přetáčení, #1591) = „—", ne 0. */
 const evoOiLabel = (value: number | null | undefined, signed: boolean): string =>
   value === null || value === undefined ? '—' : signed ? fmtSigned(value) : fmtInt(value)
@@ -137,6 +146,8 @@ const COLORS = {
   // CVD podkladu (#829): studený odstín, ať se linka neplete s C/P barvami
   // opčního toku — jsou to různé veličiny, ne dvě strany téže
   cvd: '#8ab4f8',
+  // Pás mezery v objemu opcí (#1635): odliší neměřené minuty od tichých
+  volumeGap: 'rgba(125, 133, 150, 0.14)',
 }
 
 function usePanelPointer(minutes: number, width: number, time: TimeTransform) {
@@ -331,6 +342,23 @@ function BottomPanelsBase({
   const volPeak = seriesPeak(data.vol)
   const optPeak = Math.max(seriesPeak(data.optVolCall), seriesPeak(data.optVolPut))
   const flowPeak = Math.max(seriesPeak(data.deltaFlowCall), seriesPeak(data.deltaFlowPut))
+  // Mezera objemu (#1635) je společná Opt Vol i Δ Flow — obě řady stojí na téže masce
+  const volumeGaps = gapRuns(
+    data.optVolCall.length,
+    (index) => data.optVolCall[index] === null || data.optVolPut[index] === null,
+  )
+  const volumeGapBands = (part: string, panelHeight: number) =>
+    volumeGaps.map(([first, last]) => (
+      <rect
+        key={`gap${first}`}
+        data-part={part}
+        x={first * step}
+        y={0}
+        width={(last - first + 1) * step}
+        height={panelHeight}
+        fill={COLORS.volumeGap}
+      />
+    ))
   const cum = visibleCumDelta(data.cumDelta, data.cumDeltaMidpoint, hideMidpointCumDelta)
   const cumPeak = seriesPeak(cum.values)
 
@@ -531,9 +559,9 @@ function BottomPanelsBase({
         <span className="panel-title muted">Opt Vol</span>
         {idx !== null && (
           <PanelValue>
-            <span style={{ color: COLORS.call }}>C {fmtInt(data.optVolCall[idx])}</span>
+            <span style={{ color: COLORS.call }}>C {volumeLabel(data.optVolCall[idx])}</span>
             {' / '}
-            <span style={{ color: COLORS.put }}>P {fmtInt(data.optVolPut[idx])}</span>
+            <span style={{ color: COLORS.put }}>P {volumeLabel(data.optVolPut[idx])}</span>
           </PanelValue>
         )}
         {axisValue('optvol', optPeak, false, height)}
@@ -547,6 +575,7 @@ function BottomPanelsBase({
           {...panelInteractions}
         >
           <g transform={transform}>
+            {volumeGapBands('optvol-gap', height)}
             <g transform={yTransform('optvol', height)}>
               {callHeights.map((barHeight, index) => (
                 <rect
@@ -592,9 +621,9 @@ function BottomPanelsBase({
         <span className="panel-title muted">Δ Flow C/P</span>
         {idx !== null && (
           <PanelValue>
-            <span style={{ color: COLORS.call }}>C {fmtInt(data.deltaFlowCall[idx])}</span>
+            <span style={{ color: COLORS.call }}>C {volumeLabel(data.deltaFlowCall[idx])}</span>
             {' / '}
-            <span style={{ color: COLORS.put }}>P {fmtInt(data.deltaFlowPut[idx])}</span>
+            <span style={{ color: COLORS.put }}>P {volumeLabel(data.deltaFlowPut[idx])}</span>
           </PanelValue>
         )}
         {axisValue('deltaflow', flowPeak, false, height)}
@@ -608,6 +637,7 @@ function BottomPanelsBase({
           {...panelInteractions}
         >
           <g transform={transform}>
+            {volumeGapBands('deltaflow-gap', height)}
             <g transform={yTransform('deltaflow', height)}>
               {callHeights.map((barHeight, index) => (
                 <rect

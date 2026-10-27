@@ -919,9 +919,9 @@ test('přírůstkové panely nepočítají přes díru ve sběru (#459, #1632)',
   // (30+20 = 50) — falešný špic po každém výpadku. Přírůstek přes díru (22
   // proti M0) nese objem celé díry, ne minuty obchodů: minuta po mezeře
   // v objemu se kreslí jako 0 a referenci jen posune (#1632, rozhodnutí B)
-  expect(day.panels.optVolCall[1]).toBe(0) // díra sama nic nenaměřila
+  expect(day.panels.optVolCall[1]).toBeNull() // díra nic nenaměřila = mezera (#1635)
   expect(day.panels.optVolCall[2]).toBe(0)
-  expect(day.panels.deltaFlowCall[1]).toBe(0)
+  expect(day.panels.deltaFlowCall[1]).toBeNull()
   expect(day.panels.deltaFlowCall[2]).toBe(0)
   // CumΔ je kumulativní: v díře drží poslední známou hodnotu, nepropadá na nulu
   expect(day.panels.cumDelta).toEqual([50, 50, 30])
@@ -1429,10 +1429,11 @@ test('minuta bez objemu (řetěz z tasty fallbacku) nese volumeMissing, ne nulu 
 /** Řady z #1602 — stejné jako `VOLUME_SERIES` v `api/tests/test_api.py`
  * (parita s API `volume_increments`): propad a návrat k maximu, kmitání IBKR
  * o 1 kontrakt, NULL uprostřed seance, první výskyt až v průběhu seance.
- * `null` = řádek s volume NULL (tasty fallback). Výjimka z parity: minuta po
+ * `null` = řádek s volume NULL (tasty fallback). Výjimky z parity: minuta po
  * mezeře v objemu je v panelu 0 (#1632, B), Daily v API ji dál počítá
- * ([100, NULL, 130] tam dá 0, 0, 30). */
-const VOLUME_SERIES: [(number | null)[], number[]][] = [
+ * ([100, NULL, 130] tam dá 0, 0, 30); minuta bez měřeného objemu je v panelu
+ * mezera null, ne 0 (#1635). */
+const VOLUME_SERIES: [(number | null)[], (number | null)[]][] = [
   [
     [1000, 800, 760, 1000, 1010],
     [0, 0, 0, 0, 10],
@@ -1443,11 +1444,11 @@ const VOLUME_SERIES: [(number | null)[], number[]][] = [
   ],
   [
     [100, null, 130, 150],
-    [0, 0, 0, 20],
+    [0, null, 0, 20],
   ],
   [
     [null, null, 500, 510],
-    [0, 0, 0, 10],
+    [null, null, 0, 10],
   ],
 ]
 
@@ -1488,20 +1489,23 @@ test.each(VOLUME_SERIES)(
     const day = buildReplayDay(volumeBundle(series, series))
     expect(day.panels.optVolCall).toEqual(expected)
     expect(day.panels.optVolPut).toEqual(expected)
-    expect(day.panels.deltaFlowCall).toEqual(expected.map((v) => v * 0.5))
-    expect(day.panels.deltaFlowPut.map((v) => Math.round(v * 1e6) / 1e6)).toEqual(
-      expected.map((v) => v * 0.4),
-    )
+    const scaled = (factor: number) => expected.map((v) => (v === null ? null : v * factor))
+    expect(day.panels.deltaFlowCall).toEqual(scaled(0.5))
+    expect(
+      day.panels.deltaFlowPut.map((v) => (v === null ? null : Math.round(v * 1e6) / 1e6)),
+    ).toEqual(scaled(0.4))
   },
 )
 
 test('chybějící řádek ani NULL uprostřed seance nepřidají celý kumulativ (#1602, #1632)', () => {
   // Call: řádek v minutě 1 chybí; put: NULL v minutě 2. Před #1602 minuta po
   // mezeře nesla celý denní kumulativ (130, resp. 310), před #1632 přírůstek
-  // celé mezery (30, resp. 5); teď je 0 a další minuta počítá proti 130 / 310
+  // celé mezery (30, resp. 5); teď je 0 a další minuta počítá proti 130 / 310.
+  // Strana bez měřeného objemu v minutě je mezera null (#1635), call v minutě 4
+  // chybí stejně jako v minutě 1
   const day = buildReplayDay(volumeBundle([100, undefined, 130, 131], [300, 305, null, 310, 312]))
-  expect(day.panels.optVolCall).toEqual([0, 0, 0, 1, 0])
-  expect(day.panels.optVolPut).toEqual([0, 5, 0, 0, 2])
+  expect(day.panels.optVolCall).toEqual([0, null, 0, 1, null])
+  expect(day.panels.optVolPut).toEqual([0, 5, null, 0, 2])
 })
 
 test('minuta po mezeře v objemu je v panelu 0, per strike (#1632)', () => {
@@ -1535,8 +1539,8 @@ test('minuta po mezeře v objemu je v panelu 0, per strike (#1632)', () => {
 })
 
 test('minuta bez snapshotu (díra ve sběru #459) je mezera i pro objem (#1632)', () => {
-  // Minuta 1 má jen bar (opční sweep neběžel): maska objemu 0 → minuta 2 je
-  // první po mezeře a kreslí 0, minuta 3 počítá proti 130
+  // Minuta 1 má jen bar (opční sweep neběžel): maska objemu 0 → mezera null
+  // (#1635), minuta 2 je první po mezeře a kreslí 0, minuta 3 počítá proti 130
   const cells: Cell[] = [100, 130, 150].map((volume, i) => ({
     ts: minuteIso([0, 2, 3][i]),
     strike: 7600,
@@ -1550,7 +1554,7 @@ test('minuta bez snapshotu (díra ve sběru #459) je mezera i pro objem (#1632)'
     ts_min: minuteIso(minuteIdx),
   }))
   const day = buildReplayDay(bundleFor(cells, bars, [], []))
-  expect(day.panels.optVolCall).toEqual([0, 0, 0, 20])
+  expect(day.panels.optVolCall).toEqual([0, null, 0, 20])
 })
 
 test('catch-up minuta referenci jen posune (#518, #1602)', () => {
@@ -1581,8 +1585,9 @@ test('živý append a přepis starší minuty dají totéž jako plný build (#5
   const live = assembleReplayDay(inputs)
   expect(live.panels.optVolCall).toEqual(full.panels.optVolCall)
   expect(live.panels.optVolPut).toEqual(full.panels.optVolPut)
-  // Živá minuta s volume null (fallback) referenci nemění; první minuta po ní
-  // je mezera v objemu (#1632) — 0, reference 1012, další minuta +3
+  // Živá minuta s volume null (fallback) referenci nemění a sama je mezera
+  // (#1635); první minuta po ní je mezera v objemu (#1632) — 0, reference
+  // 1012, další minuta +3
   const withNull = appendMinute(inputs, {
     tsIso: minuteIso(5),
     rows: [{ strike: 7600, right: 'C', oi: 100, volume: null, delta: 0.5 }],
@@ -1601,7 +1606,7 @@ test('živý append a přepis starší minuty dají totéž jako plný build (#5
   // Cache po appendu drží prefix 0..6, dopočítá se jen nový sloupec
   expect(next.derived?.upTo).toBe(7)
   const liveDay = assembleReplayDay(next)
-  expect(liveDay.panels.optVolCall.slice(5)).toEqual([0, 0, 3])
+  expect(liveDay.panels.optVolCall.slice(5)).toEqual([null, 0, 3])
   expect(liveDay.panels).toEqual(assembleReplayDay({ ...next, derived: undefined }).panels)
   // Přepis starší minuty stáhne cache a reference se přepočte z prefixu:
   // minuta 1 nově 1005 → +5 v ní a minuta 4 počítá proti 1005, ne 1000

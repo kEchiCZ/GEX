@@ -42,6 +42,20 @@ function sumSeries(values: number[], plan: BucketPlan): number[] {
   return result
 }
 
+/** Přírůstková řada s mezerami (Opt Vol, Δ Flow — #1635): součet koše; koš
+s minutou bez měřeného objemu je mezera (null), ne neúplný součet — stejně
+jako okno CumΔ přes mezeru (`panelWindowCumDelta`). */
+function sumMeasured(values: (number | null)[], plan: BucketPlan): (number | null)[] {
+  const result: (number | null)[] = Array.from({ length: plan.buckets }, () => 0)
+  values.forEach((value, index) => {
+    const bucketIdx = plan.bucketOf[index]
+    if (bucketIdx === undefined) return
+    const current = result[bucketIdx]
+    result[bucketIdx] = value === null || current === null ? null : current + value
+  })
+  return result
+}
+
 /** Řada s dírami (levels, spot, CumΔ s mezerou, Evo OI): poslední ne-null hodnota koše. */
 function lastNonNull<T>(values: (T | null)[], plan: BucketPlan): (T | null)[] {
   return Array.from({ length: plan.buckets }, (_, bucketIdx) => {
@@ -256,8 +270,8 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
     overlays: aggregateOverlays(day.overlays, plan),
     panels: {
       vol: sumSeries(day.panels.vol, plan),
-      optVolCall: sumSeries(day.panels.optVolCall, plan),
-      optVolPut: sumSeries(day.panels.optVolPut, plan),
+      optVolCall: sumMeasured(day.panels.optVolCall, plan),
+      optVolPut: sumMeasured(day.panels.optVolPut, plan),
       // Mezera trade větve (ADR-0057 bod 3): koš nese poslední měřenou úroveň,
       // koš celý v mezeře zůstane null — žádná spojnice ani nula (#1588)
       cumDelta: lastNonNull(day.panels.cumDelta, plan),
@@ -270,8 +284,8 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       // CVD podkladu (#829) je kumulativ s dírami — poslední ne-null hodnota
       // koše; koš bez dat zůstane null, ne nula (#1578)
       futuresCvd: day.panels.futuresCvd && lastNonNull(day.panels.futuresCvd, plan),
-      deltaFlowCall: sumSeries(day.panels.deltaFlowCall, plan),
-      deltaFlowPut: sumSeries(day.panels.deltaFlowPut, plan),
+      deltaFlowCall: sumMeasured(day.panels.deltaFlowCall, plan),
+      deltaFlowPut: sumMeasured(day.panels.deltaFlowPut, plan),
       // Evo OI (#573) je úroveň, ne tok — koš přebírá poslední hodnotu
       evoOiCall: lastNonNull(day.panels.evoOiCall ?? [], plan),
       evoOiPut: lastNonNull(day.panels.evoOiPut ?? [], plan),
