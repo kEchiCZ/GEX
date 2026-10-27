@@ -180,7 +180,7 @@ Skládané pruhy: složka Vol a složka OI Δ vizuálně odlišené odstínem; d
 
 ### 5.1 Parquet snapshoty
 - Partice `data/snapshots/{symbol}/{expiry}/{YYYY-MM-DD}.parquet`, řádek = (ts_min, strike, right) se sloupci: bid, ask, last, volume, iv, delta, gamma, theta, vega, oi, stale_age.
-- Trade printy z dxFeed: `data/tasty_trades/{symbol}/{YYYY-MM-DD}.parquet` (ts, streamer_symbol, price, size, aggressor, spread_leg, eth) — #795; původní `data/ticks/` z IBKR hot zóny zrušeno (ADR-0032).
+- Trade printy z dxFeed: `data/trades/{symbol}/{YYYY-MM-DD}.parquet` (ts, streamer_symbol, price, size, aggressor, spread_leg, eth) — #795; původní `data/ticks/` z IBKR hot zóny zrušeno (ADR-0032).
 - Odvozené řady (levels, walls, CumΔ, flowΔ): `data/derived/…` — počítané při zápisu, replay je nečte znovu z raw dat.
 
 ### 5.2 Retence (R3, R4)

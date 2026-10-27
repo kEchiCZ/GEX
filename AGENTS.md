@@ -164,7 +164,7 @@ tastytrade DXLink ┘   ├─ ibkr/ connection, discovery, scheduler, underlyin
                       ├─ compute/ gex, levels, walls, cumdelta, profile, setups, coach, …
                       └─ storage/ parquet_store, oi_archive, *_store (PG), retention
 news-engine (python -m gexlens_news) ─► sentiment, klasifikace zpráv, signály, SentIndex
-        │ Parquet (data/snapshots, derived, tasty_trades) + PostgreSQL
+        │ Parquet (data/snapshots, derived, trades) + PostgreSQL
         ▼ HTTP push /internal/*
 api (FastAPI, host :8010 → kontejner :8000) — REST + WS /ws/live; jen čte storage, nepočítá (výjimky ADR-0045/5, ADR-0059/8)
         ▼
@@ -172,7 +172,7 @@ frontend (nginx :8080, React SPA) — heatmapa, profil, panely, playback, briefi
 ```
 - Balíky: `gexlens_engine`, `gexlens_api`, `gexlens_news`; frontend `src/{heatmap,panels,profile,
   replay,setups,journal,stats,state,api,components}`.
-- Partice: `data/snapshots/{sym}/{exp}/{den}.parquet`, `data/derived/…`, `data/tasty_trades/…`;
+- Partice: `data/snapshots/{sym}/{exp}/{den}.parquet`, `data/derived/…`, `data/trades/{sym}/{den}.parquet`;
   ad-hoc (equity) pohledy píší do `snapshots/`, `levels` pro ně nejsou.
 - Docker bind mount je pomalý (~20 ms/soubor): endpointy nad particemi cachovat, měřit v kontejneru.
 
