@@ -1603,7 +1603,7 @@ def test_profile_window_diff_values(client: TestClient) -> None:
         # Propad IBKR v t1 (800 pod maximem 1000): okno nese jen objem nad maximem,
         # ne návrat 800 → 1010 (dřív 210)
         ([1000.0, 800.0, 760.0, 1000.0, 1010.0], 1, 10.0),
-        # t2 v propadu: okno 0, ne záporný rozdíl ani pokles
+        # t2 v propadu: okno nese jen přírůstek 1005 (5), ne záporný rozdíl 760 − 1000
         ([1000.0, 1005.0, 760.0], 0, 5.0),
         # t1 = minuta 1 s NULL: při volání s touto bází nese okno přírůstky (1, 3]
         # (posun báze řeší `profile`, rozhodnutí B — test_profile_window_t1_ve_fallbacku)
@@ -1728,6 +1728,28 @@ def test_flow_window_opt_vol_bez_catch_up(settings: Settings) -> None:
     )
     assert payload["window"]["opt_vol"] == pytest.approx(120.0)  # jen minuta 2
     assert [row["opt_vol"] for row in payload["opt_vol"]] == pytest.approx([0.0, 120.0, 120.0])
+
+
+def test_okno_s_hranici_v_dire_sberu(settings: Settings) -> None:
+    """#1631 = B: minuta bez řádku (díra ve sběru, #1646) posune bázi okna stejně
+    jako minuta s NULL, v `/profile` i ve `/flow`; from uvnitř minuty ji nevynechá."""
+    writer = SnapshotWriter(settings)
+    for minute in (3, 5, 6):  # minuta 4 bez řádku
+        writer.write_minute("ES", "20260716", DAY, snapshot_rows(minute))
+    client = TestClient(create_app(settings))
+    for start, base in ((ts(4), ts(5)), (ts(5) + dt.timedelta(seconds=30), ts(5))):
+        params = {"date": DAY.isoformat(), "from": start.isoformat(), "to": ts(6).isoformat()}
+        window = client.get("/flow/ES", params=params).json()["window"]
+        assert window["opt_vol"] == pytest.approx(120.0)  # jen přírůstek minuty 6
+        assert window["opt_vol_from_ts"] == base.isoformat()
+        assert window["opt_vol_to_ts"] == ts(6).isoformat()
+        profile = client.get(
+            "/profile/ES/20260716", params={**params, "variant": "vol", "spot": 7600.0}
+        ).json()
+        row = next(r for r in profile["profile"] if r["strike"] == 7600.0)
+        assert row["call_volume"] == pytest.approx(20.0)  # 10 · 2 za minutu 6
+        assert profile["from_ts"] == base.isoformat()
+        assert profile["to_ts"] == ts(6).isoformat()
 
 
 def test_profile_window_param_validation(client: TestClient) -> None:

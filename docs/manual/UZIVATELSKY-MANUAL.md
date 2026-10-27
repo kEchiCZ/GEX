@@ -638,7 +638,8 @@ Pruhy profilu ukazují **objem zobchodovaný v okně**: součet přírůstků de
 objemu kontraktu nad dosavadním maximem v seanci, stejně jako panel Opt Vol
 (#1631). Kmitání a propad IBKR na hranici okna ani strike, který vstoupil do
 pásma až v okně, okno nenafouknou celým denním objemem; objem z mezery uvnitř
-okna se do okna započte. **Hranice okna v minutě bez měřeného objemu** (fallback
+okna se do okna započte (panel Opt Vol minutu po výpadku enginu vynechává,
+součet profilu okna tak může být o objem výpadku vyšší, ADR-0024). **Hranice okna v minutě bez měřeného objemu** (fallback
 tastytrade, díra ve sběru) se posune na nejbližší měřenou minutu uvnitř okna
 a chip to přizná, např. „objem měřen 19:19–20:00“: objem mezery se nedá rozdělit
 na část před hranicí a po ní, takže okno spočítá přesně jen měřenou část. Okno

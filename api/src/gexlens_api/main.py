@@ -1251,15 +1251,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         minute = eligible["ts_min"].max()
         rows = eligible[eligible["ts_min"] == minute].dropna(subset=["delta"])
 
-        # Začátek okna: poslední snapshot ≤ from; nic před from = okno „od
-        # začátku seance". Objem okna per kontrakt z přírůstků (#1631)
+        # Začátek okna: minuta from; nic před from = okno „od začátku seance".
+        # Objem okna per kontrakt z přírůstků (#1631)
         window_volume: dict[tuple[float, str], float] = {}
         baseline_minute: pd.Timestamp | None = None
         measured_end: pd.Timestamp | None = None
         if window:
-            before = frame[frame["ts_min"] <= from_ts]
-            if not before.empty:
-                baseline_minute = before["ts_min"].max()
+            if not frame[frame["ts_min"] <= from_ts].empty:
+                # Minuta from, ne poslední snapshot ≤ from: minuta bez řádku (díra
+                # ve sběru, #1646) se tak posune stejně jako minuta s NULL (B)
+                baseline_minute = pd.Timestamp(from_ts).floor("min")
             # Hranice v minutě bez měřeného objemu (B): okno jen přes měřenou část
             measured = sorted(eligible.loc[eligible["volume"].notna(), "ts_min"].unique())
             baseline_minute, measured_end = measured_bounds(measured, baseline_minute, minute)
@@ -1437,10 +1438,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         flow_frame = repository.session_frame(lambda d: repository.flow(symbol, d), date)
         flow_records = _records(flow_frame)
-        opt_vol = _opt_vol_series(repository, symbol, date)
+        window = from_ts is not None or to_ts is not None
+        opt_vol, counted = _opt_vol_series(repository, symbol, date, with_counted=window)
         vol = _underlying_vol_series(repository, symbol, date)
         payload: dict[str, object] = {"flow": flow_records, "opt_vol": opt_vol, "vol": vol}
-        if from_ts is not None or to_ts is not None:
+        if window:
             if from_ts is None or to_ts is None or from_ts > to_ts:
                 raise HTTPException(422, "Okenní mód vyžaduje from ≤ to")
 
@@ -1478,9 +1480,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # s objemem, hranice v mezeře se posune na nejbližší měřenou minutu
             measured = [pd.Timestamp(str(record["ts_min"])) for record in opt_vol]
             first = measured[0] if measured else None
-            base = pd.Timestamp(from_ts) if first is not None and first <= from_ts else None
+            # Báze = minuta from: from uvnitř minuty ji nevynechá
+            base = pd.Timestamp(from_ts).floor("min") if first is not None and first <= from_ts else None  # noqa: E501 # fmt: skip
             opt_base, opt_end = measured_bounds(measured, base, pd.Timestamp(to_ts))
-            counted = _opt_vol_series(repository, symbol, date, exclude_catch_up=True)
             opt_vol_window = (
                 series_sum(counted, "opt_vol", opt_base, opt_end) if opt_end is not None else 0.0
             )
@@ -1819,15 +1821,17 @@ def _spot_at(
 
 
 def _opt_vol_series(
-    repository: DataRepository, symbol: str, day: dt.date, *, exclude_catch_up: bool = False
-) -> list[dict[str, object]]:
+    repository: DataRepository, symbol: str, day: dt.date, *, with_counted: bool = False
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """OptVol per minuta: součet minutových přírůstků kumulativního volume přes
     expirace; přírůstek proti průběžnému maximu kontraktu (`volume_increments`, #1602).
 
-    `exclude_catch_up` vynechá catch-up minuty expirace (#518, ADR-0024): přírůstek
-    referenci posune, ale do součtu nejde — okno `/flow` (#1631), shodně s panelem.
+    `with_counted` vrátí z téhož čtení partic i řadu bez catch-up minut expirace
+    (#518, ADR-0024): přírůstek referenci posune, ale do součtu nejde — okno `/flow`
+    (#1631), shodně s panelem. Bez něj je druhá řada prázdná.
     """
     total: pd.Series | None = None
+    counted: pd.Series | None = None
     for expiry in repository.list_expiries(symbol):
         try:
             frame = repository.session_frame(
@@ -1846,7 +1850,8 @@ def _opt_vol_series(
             continue
         volume = frame.pivot(index=["strike", "right"], columns="ts_min", values="volume")
         series = volume_increments(volume).sum(axis=0)
-        if exclude_catch_up:
+        total = series if total is None else total.add(series, fill_value=0.0)
+        if with_counted:
             try:
                 catch_up = repository.session_frame(
                     lambda d: repository.catch_up(symbol, expiry, d),  # noqa: B023
@@ -1854,11 +1859,15 @@ def _opt_vol_series(
                 )
             except PartitionNotFoundError:
                 catch_up = pd.DataFrame(columns=["ts_min"])
-            series = series[~series.index.isin(set(catch_up["ts_min"]))]
-        total = series if total is None else total.add(series, fill_value=0.0)
-    if total is None:
-        return []
-    return [{"ts_min": ts.isoformat(), "opt_vol": float(value)} for ts, value in total.items()]
+            kept = series[~series.index.isin(set(catch_up["ts_min"]))]
+            counted = kept if counted is None else counted.add(kept, fill_value=0.0)
+
+    def records(values: pd.Series | None) -> list[dict[str, object]]:
+        if values is None:
+            return []
+        return [{"ts_min": ts.isoformat(), "opt_vol": float(v)} for ts, v in values.items()]
+
+    return records(total), records(counted)
 
 
 def _underlying_vol_series(
