@@ -142,6 +142,12 @@ def test_smycka_neztrati_minutu_po_pretazenem_kole() -> None:
     assert labels == [LOOP_MINUTE + i * MINUTE for i in range(len(durations))]
 
 
+def test_smycka_ztrati_minutu_az_kdyz_start_zaostane_o_vic_nez_okno() -> None:
+    """Řada přetažených kol se sčítá: ani jedno nemá 2 min, třetí start padne za okno."""
+    labels = simulate_loop(at(10.0), [100.0, 85.0, 35.0])
+    assert labels == [LOOP_MINUTE, LOOP_MINUTE + MINUTE, LOOP_MINUTE + 3 * MINUTE]
+
+
 def test_smycka_preskoci_minutu_az_po_kole_delsim_nez_okno(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -157,7 +163,8 @@ def test_smycka_preskoci_minutu_az_po_kole_delsim_nez_okno(
     assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
         (
             logging.WARNING,
-            "Smyčka přeskočila 1 min (19:52–19:52): kolo přetáhlo přes okno své minuty",
+            "Smyčka přeskočila 1 min (19:52): start iterace zaostal za oknem minuty"
+            " — přetažená kola, nebo skok hodin vpřed",
         ),
         (
             logging.ERROR,

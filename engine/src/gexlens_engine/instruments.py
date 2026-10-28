@@ -2151,11 +2151,13 @@ def log_cycle_gap(minute: dt.datetime, last_full: dt.datetime | None) -> None:
             f"{last_full:%H:%M}",
         )
     elif step > dt.timedelta(minutes=1):
+        first = f"{last_full + dt.timedelta(minutes=1):%H:%M}"
+        last = f"{minute - dt.timedelta(minutes=1):%H:%M}"
         logger.warning(
-            "Smyčka přeskočila %d min (%s–%s): kolo přetáhlo přes okno své minuty",
+            "Smyčka přeskočila %d min (%s): start iterace zaostal za oknem minuty"
+            " — přetažená kola, nebo skok hodin vpřed",
             step // dt.timedelta(minutes=1) - 1,
-            f"{last_full + dt.timedelta(minutes=1):%H:%M}",
-            f"{minute - dt.timedelta(minutes=1):%H:%M}",
+            first if first == last else f"{first}–{last}",
         )
 
 
