@@ -45,7 +45,8 @@ class DxFlowRow:
 
     Štítek `ts_min` = N je „stav k N“: řádek nese tisky od minulé uzávěrky
     do uzávěrky N. Pod tisky (v6, #1586) se uzavírá na hranici minuty
-    (`plan_dx_flush`), obsah je [N−1, N) jako u štítku živého flow. Pod v5
+    (`plan_dx_flush`), obsah je [N−1, N); živý flow nese totéž posunuté o fázi
+    cyklu (`CYCLE_PHASE_S`, #1713). Pod v5
     perioda driftuje: obsah je [N−1+φ, N+φ) s fází φ 0–60 s a co 2–5 h jeden
     štítek chybí — tok se neztrácí, nesou ho sousední řádky, takže chybějící
     štítek = poslední kumulativ (ADR-0057 bod 7).
