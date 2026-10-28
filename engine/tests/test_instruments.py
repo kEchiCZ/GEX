@@ -31,6 +31,7 @@ from gexlens_engine.ibkr.mock import MockIB, MockOIFetcher, MockQuoteStreamer
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.instruments import (
+    CYCLE_PHASE_S,
     OI_ARCHIVE_RESERVE_S,
     OI_RETRY_CYCLES,
     SETUP_RETRY_CYCLES,
@@ -40,8 +41,11 @@ from gexlens_engine.instruments import (
     WatchlistReader,
     advance_oi_archives,
     aggregate_status,
+    cycle_minute,
     gather_metrics,
+    log_cycle_gap,
     merge_symbols,
+    next_cycle_wait,
     parse_multiplier,
     plan_instruments,
 )
@@ -75,6 +79,91 @@ def test_parse_multiplier() -> None:
     assert parse_multiplier("") == 1.0
     assert parse_multiplier(None) == 1.0
     assert parse_multiplier("nesmysl") == 1.0  # varování, engine nesmí spadnout
+
+
+# 27. 10. 2026 19:50 UTC: kolo s vedlejší expirací trvalo ~71 s (#1713)
+LOOP_MINUTE = dt.datetime(2026, 10, 27, 19, 50, tzinfo=dt.UTC)
+MINUTE = dt.timedelta(minutes=1)
+
+
+def at(seconds: float) -> dt.datetime:
+    return LOOP_MINUTE + dt.timedelta(seconds=seconds)
+
+
+def simulate_loop(start: dt.datetime, durations: Sequence[float]) -> list[dt.datetime]:
+    """Štítky plných iterací hlavní smyčky nad danými délkami kol (#1713)."""
+    wall, planned, labels = start, None, []
+    for duration in durations:
+        label = cycle_minute(wall, planned)
+        labels.append(label)
+        wall += dt.timedelta(seconds=duration)
+        wall += dt.timedelta(seconds=next_cycle_wait(wall, label))
+        planned = label + MINUTE
+    return labels
+
+
+def test_cycle_minute_stitek_z_okna_minuty() -> None:
+    """#1713: štítek M patří oknu [M:10, M+1:10), ne floor(start)."""
+    assert CYCLE_PHASE_S == 10.0
+    assert cycle_minute(at(10.0), LOOP_MINUTE) == LOOP_MINUTE
+    assert cycle_minute(at(10.0), None) == LOOP_MINUTE  # start enginu
+    assert cycle_minute(at(5.0), None) == LOOP_MINUTE - MINUTE  # před oknem
+    # přetažené kolo: start ještě v okně své minuty štítek nepřeskočí
+    assert cycle_minute(at(69.9), LOOP_MINUTE) == LOOP_MINUTE
+
+
+def test_cycle_minute_probuzeni_tesne_pred_oknem_patri_planu() -> None:
+    """Časovač běží na `loop.time`, nástěnné hodiny se rozjedou o milisekundy."""
+    assert cycle_minute(at(9.998), LOOP_MINUTE) == LOOP_MINUTE
+    # NOTIFY (#207) plán nemá: doplňkový běh minulé minuty, ne plná minuta předčasně
+    assert cycle_minute(at(9.998), None) == LOOP_MINUTE - MINUTE
+
+
+def test_cycle_minute_preskok_a_skok_hodin_zpet() -> None:
+    # kolo delší než okno: štítek z hodin, plánovaná minuta se přeskočí
+    assert cycle_minute(at(75.0), LOOP_MINUTE) == LOOP_MINUTE + MINUTE
+    # hodiny zpět o víc než minutu: štítek se srovná s hodinami
+    assert cycle_minute(at(-120.0), LOOP_MINUTE) == LOOP_MINUTE - 3 * MINUTE
+
+
+def test_next_cycle_wait_do_okna_dalsi_minuty() -> None:
+    assert next_cycle_wait(at(45.0), LOOP_MINUTE) == 25.0
+    assert next_cycle_wait(at(75.0), LOOP_MINUTE) == 0.0  # přetaženo → hned
+    # hodiny zpět: čekání nejvýš minutu, smyčka nestojí o celý skok
+    assert next_cycle_wait(at(-300.0), LOOP_MINUTE) == 60.0
+
+
+def test_smycka_neztrati_minutu_po_pretazenem_kole() -> None:
+    """#1713: 27. 10. 2026 trvala kola s vedlejší expirací (každá 3. minuta)
+    60–71 s, 28. 10. FA validace ES po finalitě OI zdržela kolo o ~25 s. Fáze
+    dřív klouzala o každé přetažení a start za hranicí ztratil minutu ES i NQ."""
+    durations = [35.0, 35.0, 71.0] * 40 + [60.0, 95.0, 35.0, 35.0]
+    labels = simulate_loop(at(59.0), durations)  # start enginu v ~:59 jako 28. 10.
+    assert labels == [LOOP_MINUTE + i * MINUTE for i in range(len(durations))]
+
+
+def test_smycka_preskoci_minutu_az_po_kole_delsim_nez_okno(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    labels = simulate_loop(at(10.0), [35.0, 130.0, 35.0])
+    assert labels == [LOOP_MINUTE, LOOP_MINUTE + MINUTE, LOOP_MINUTE + 3 * MINUTE]
+
+    caplog.set_level(logging.INFO, logger="gexlens_engine")
+    log_cycle_gap(labels[1], labels[0])
+    log_cycle_gap(labels[0], None)  # start enginu
+    assert caplog.records == []
+    log_cycle_gap(labels[2], labels[1])
+    log_cycle_gap(labels[0], labels[2])
+    assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+        (
+            logging.WARNING,
+            "Smyčka přeskočila 1 min (19:52–19:52): kolo přetáhlo přes okno své minuty",
+        ),
+        (
+            logging.ERROR,
+            "Nástěnné hodiny šly zpět: štítek 19:50 po 19:53 — smyčka se srovnala s hodinami",
+        ),
+    ]
 
 
 def test_merge_symbols_dedupe_uppercase_base_first() -> None:
