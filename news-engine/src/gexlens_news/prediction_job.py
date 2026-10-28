@@ -24,6 +24,8 @@ from gexlens_engine.storage.sentiment import (
     news_predictions,
     news_reactions,
     news_weights,
+    outcome_reaction_onclause,
+    outcome_window_clean,
     unpivot_reaction,
 )
 from gexlens_news.predictions import (
@@ -167,12 +169,16 @@ class PredictionJob:
                 news_prediction_outcomes.join(
                     news_predictions,
                     news_predictions.c.id == news_prediction_outcomes.c.prediction_id,
-                ).join(news_events, news_events.c.id == news_predictions.c.event_id)
+                )
+                .join(news_events, news_events.c.id == news_predictions.c.event_id)
+                .outerjoin(news_reactions, outcome_reaction_onclause())
             )
             .where(
                 news_prediction_outcomes.c.symbol == symbol,
                 news_events.c.ts_event >= since,
                 news_events.c.category.is_not(None),
+                # Okno, které po vyhodnocení přešlo na kontaminované (#1708)
+                outcome_window_clean(),
             )
         )
         with self._engine.connect() as conn:

@@ -4,7 +4,7 @@ import datetime as dt
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, insert, select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
@@ -210,6 +210,26 @@ def test_outcome_is_written_per_window_and_skips_contaminated(tmp_path: Path) ->
     assert row.window_min == 5
     assert row.realized_dir == 1
     assert row.correct is True
+
+
+def test_okno_kontaminovane_po_vyhodnoceni_vahy_nectou(tmp_path: Path) -> None:
+    """#1708 = A: retro K1 (#1679) nebo hodinový K1 přepne vyhodnocené okno na
+    kontaminované. Outcome zůstane v DB, váhy ho při čtení vynechají."""
+    engine, job = make(tmp_path)
+    seed(engine, direction=1, ret_bp=5.0)
+    later = seed(engine, direction=1, ret_bp=6.0)
+    job.create_predictions(NOW)
+    assert job.evaluate(NOW) == 2
+    assert len(job.load_outcomes(NOW, "ES")) == 2
+
+    with engine.begin() as conn:
+        conn.execute(
+            update(news_reactions).where(news_reactions.c.event_id == later).values(cont_5=True)
+        )
+    assert len(job.load_outcomes(NOW, "ES")) == 1  # jen čisté okno první zprávy
+    with engine.connect() as conn:  # nic se nemaže
+        assert len(conn.execute(select(news_prediction_outcomes)).fetchall()) == 2
+    assert job.evaluate(NOW) == 0  # kontaminované okno se znovu nevyhodnotí
 
 
 def test_weights_land_in_db_and_map_defaults_to_neutral(tmp_path: Path) -> None:

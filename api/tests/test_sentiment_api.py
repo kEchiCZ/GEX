@@ -18,6 +18,8 @@ from gexlens_engine.storage.sentiment import (
     ReactionWindow,
     ensure_sentiment_schema,
     news_events,
+    news_prediction_outcomes,
+    news_predictions,
     news_reactions,
     reaction_row_values,
     sentiment_daily,
@@ -161,6 +163,56 @@ def test_news_detail_includes_classification_history(client: TestClient) -> None
     assert detail["classifications"] == []
     assert detail["predictions"] == []
     assert client.get("/news/999999").status_code == 404
+
+
+def test_news_detail_vynecha_outcome_okna_kontaminovaneho_po_vyhodnoceni(
+    client: TestClient,
+) -> None:
+    """#1708 = A: retro K1 (#1679) přepne vyhodnocené okno na kontaminované —
+    detail jeho outcome neukáže, stejně jako ho vynechají váhy."""
+    engine = cast(FastAPI, client.app).state.meta_repository.engine()
+    event_id = client.get("/news").json()["news"][0]["id"]
+    windows = [
+        ReactionWindow(
+            window_min=window,
+            ret_bp=2.0,
+            range_bp=4.0,
+            vol_z=None,
+            contaminated=window == 15,
+            deferred=False,
+            gex_regime=None,
+            computed_at=NOW,
+        )
+        for window in (5, 15)
+    ]
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_reactions).values(
+                event_id=event_id, symbol="ES", **reaction_row_values(windows)
+            )
+        )
+        key = conn.execute(
+            insert(news_predictions).values(
+                event_id=event_id, predicted_dir=1, predictor="rule", created_at=NOW
+            )
+        ).inserted_primary_key
+        assert key is not None
+        conn.execute(
+            insert(news_prediction_outcomes),
+            [
+                {
+                    "prediction_id": int(key[0]),
+                    "symbol": "ES",
+                    "window_min": window,
+                    "realized_dir": 1,
+                    "correct": True,
+                    "computed_at": NOW,
+                }
+                for window in (5, 15)
+            ],
+        )
+    detail = client.get(f"/news/{event_id}").json()
+    assert [outcome["window_min"] for outcome in detail["outcomes"]] == [5]
 
 
 def test_sentiment_index_reads_series_and_survives_missing_day(client: TestClient) -> None:
