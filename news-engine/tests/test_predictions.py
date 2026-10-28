@@ -4,7 +4,7 @@ import datetime as dt
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, insert, select, update
+from sqlalchemy import create_engine, delete, insert, select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
@@ -230,6 +230,44 @@ def test_okno_kontaminovane_po_vyhodnoceni_vahy_nectou(tmp_path: Path) -> None:
     with engine.connect() as conn:  # nic se nemaže
         assert len(conn.execute(select(news_prediction_outcomes)).fetchall()) == 2
     assert job.evaluate(NOW) == 0  # kontaminované okno se znovu nevyhodnotí
+
+
+def test_kontaminace_se_cte_podle_symbolu_a_vratit_jde(tmp_path: Path) -> None:
+    """#1708: spojení s reakcí jde přes symbol, okno zpět na čisté se znovu
+    započte a outcome bez řádku reakce se čte jako dosud (LEFT OUTER)."""
+    engine, job = make(tmp_path)
+    event_id = seed(engine, direction=1, ret_bp=5.0)
+    job.create_predictions(NOW)
+    assert job.evaluate(NOW) == 1
+    nq = ReactionWindow(
+        window_min=5,
+        ret_bp=-5.0,
+        range_bp=10.0,
+        vol_z=None,
+        contaminated=True,
+        deferred=False,
+        gex_regime=None,
+        computed_at=NOW,
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_reactions).values(
+                event_id=event_id, symbol="NQ", **reaction_row_values([nq])
+            )
+        )
+    assert len(job.load_outcomes(NOW, "ES")) == 1  # kontaminace NQ outcome ES neskryje
+
+    es_reaction = news_reactions.c.event_id == event_id, news_reactions.c.symbol == "ES"
+    with engine.begin() as conn:
+        conn.execute(update(news_reactions).where(*es_reaction).values(cont_5=True))
+    assert job.load_outcomes(NOW, "ES") == []
+    with engine.begin() as conn:
+        conn.execute(update(news_reactions).where(*es_reaction).values(cont_5=False))
+    assert len(job.load_outcomes(NOW, "ES")) == 1  # zpět na čisté = znovu ve vahách
+
+    with engine.begin() as conn:
+        conn.execute(delete(news_reactions).where(*es_reaction))
+    assert len(job.load_outcomes(NOW, "ES")) == 1
 
 
 def test_weights_land_in_db_and_map_defaults_to_neutral(tmp_path: Path) -> None:
