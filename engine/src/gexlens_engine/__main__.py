@@ -95,9 +95,12 @@ from gexlens_engine.instruments import (
     WatchlistReader,
     advance_oi_archives,
     aggregate_status,
+    cycle_minute,
     expiry_expired,
     gather_metrics,
+    log_cycle_gap,
     merge_symbols,
+    next_cycle_wait,
     parse_multiplier,
     plan_instruments,
     read_watchlist,
@@ -3186,13 +3189,16 @@ async def main() -> None:
         reconnect_seen,
     )
     last_full_minute: dt.datetime | None = None
+    # Minuta, na jejíž start smyčka čeká (#1713); po startu a NOTIFY probuzení není
+    planned_minute: dt.datetime | None = None
 
     # Symbol → remediační pokus BS fallbacku, o jehož čekání na konec RTH už
     # log ví (#1315) — WARNING jednou na pokus, ne každou minutu RTH
     bs_wait_logged: dict[str, int] = {}
     while True:
-        cycle_start = asyncio.get_running_loop().time()
-        now = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
+        # Štítek z okna minuty podle nástěnných hodin (#1713), ne floor(start):
+        # start klouzal o přetažení kol a přetečení hranice ztratilo minutu
+        now = cycle_minute(dt.datetime.now(dt.UTC), planned_minute)
 
         # Watchlist se čte každý k-tý cyklus (uživatel přidal/odebral ticker v UI)
         # nebo hned po NOTIFY probuzení (#207)
@@ -3396,6 +3402,7 @@ async def main() -> None:
         full_run = now != last_full_minute
         if full_run:
             run_list = list(pipelines.values())
+            log_cycle_gap(now, last_full_minute)
             last_full_minute = now
         else:
             run_list = [pipelines[symbol] for symbol in plan.start if symbol in pipelines]
@@ -3624,15 +3631,22 @@ async def main() -> None:
             )
 
         # OI archiv po dávkách ve zbytku minuty (#1646) — až po sweepech a statusu,
-        # aby dávka nikdy neběžela souběžně se sweepem a nezdržela další cyklus
-        await advance_oi_archives(list(pipelines.values()), cycle_start + 60.0)
+        # aby dávka nikdy neběžela souběžně se sweepem a nezdržela další cyklus.
+        # Po plném i doplňkovém běhu je `now` poslední plná minuta; další iterace
+        # startuje v okně minuty po ní (#1713), po přetaženém kole hned
+        await advance_oi_archives(
+            list(pipelines.values()),
+            asyncio.get_running_loop().time() + next_cycle_wait(dt.datetime.now(dt.UTC), now),
+        )
 
         cycle += 1
-        elapsed = asyncio.get_running_loop().time() - cycle_start
         # Místo sleep čekání na NOTIFY (#207) — změna watchlistu probudí smyčku hned
-        if await watchlist_listener.wait(max(1.0, 60.0 - elapsed)):
+        if await watchlist_listener.wait(next_cycle_wait(dt.datetime.now(dt.UTC), now)):
+            planned_minute = None
             force_watchlist = True
             logger.info("Watchlist NOTIFY — okamžité přeplánování instrumentů")
+        else:
+            planned_minute = now + dt.timedelta(minutes=1)
 
 
 async def _guarded_main() -> None:

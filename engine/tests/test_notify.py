@@ -33,6 +33,15 @@ async def test_wait_returns_on_trigger_and_clears() -> None:
     assert await listener.wait(0.05) is False
 
 
+async def test_wait_bez_cekani_vrati_notify_z_doby_kola() -> None:
+    """#1713: po přetaženém kole smyčka čeká 0 s — NOTIFY z kola se nesmí ztratit."""
+    listener = WatchlistListener("sqlite+pysqlite:///meta.sqlite")
+    assert await listener.wait(0.0) is False
+    listener.trigger()
+    assert await listener.wait(0.0) is True
+    assert await listener.wait(0.0) is False
+
+
 @pytest.mark.skipif(
     not os.environ.get("GEXLENS_TEST_PG_DSN"),
     reason="GEXLENS_TEST_PG_DSN nenastaveno (integrace s reálným PostgreSQL)",

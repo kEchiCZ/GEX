@@ -79,6 +79,11 @@ class WatchlistListener:
 
     async def wait(self, timeout_s: float) -> bool:
         """Čeká na notifikaci max timeout_s; True = probuzení změnou watchlistu."""
+        # NOTIFY během přetaženého kola (#1713): smyčka čeká 0 s a `wait_for`
+        # s nulovým timeoutem vyprší dřív, než nastavený event uvidí
+        if self._event.is_set():
+            self._event.clear()
+            return True
         try:
             await asyncio.wait_for(self._event.wait(), timeout=timeout_s)
         except TimeoutError:
