@@ -53,6 +53,8 @@ from gexlens_engine.storage.sentiment import (
     news_predictions,
     news_reactions,
     news_sources,
+    outcome_reaction_onclause,
+    outcome_window_clean,
     reaction_contaminated,
     reaction_ret,
     release_hypotheses,
@@ -704,11 +706,18 @@ def build_sentiment_router(
         outcomes: list[dict[str, Any]] = []
         if predictions:
             ids = [int(p["id"]) for p in predictions]
+            # Okno, které po vyhodnocení přešlo na kontaminované (#1708), se
+            # neukáže — tytéž outcomes čtou váhy v news-engine
             outcomes = _rows(
                 engine,
-                select(news_prediction_outcomes).where(
-                    news_prediction_outcomes.c.prediction_id.in_(ids)
-                ),
+                select(news_prediction_outcomes)
+                .select_from(
+                    news_prediction_outcomes.join(
+                        news_predictions,
+                        news_predictions.c.id == news_prediction_outcomes.c.prediction_id,
+                    ).outerjoin(news_reactions, outcome_reaction_onclause())
+                )
+                .where(news_prediction_outcomes.c.prediction_id.in_(ids), outcome_window_clean()),
             )
         return {
             "event": event[0],
