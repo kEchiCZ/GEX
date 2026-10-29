@@ -135,6 +135,9 @@ týdne hodnocený naslepo):
     zprávy (zvoleno); B skript dopíše outcomes s `computed_at` = čas zprávy + okno; C přijmout.
     Okna přepnutá z False na True (~18 tis. w5) si dřívější outcomes ponechají — v okně vah
     jen za posledních 90 dní.
+    *Revize 28. 10. 2026 (#1708, vlastník: varianta A):* okno přepnuté z False na True váhy
+    a detail zprávy při čtení vynechají podle aktuálního `cont_<w>` reakce; outcome se nemaže
+    (Dodatek 2026-10-28).
 
 ## Zvažované varianty
 
@@ -200,8 +203,9 @@ kontaminace w5 48 % → 24 %) — před ostrým během se přeměří.
   hlídka (#403) může po přepočtu ohlásit posun — přepočítává nálezy celé znovu, reset není
   potřeba. Po ostrém běhu ověřit v logu přepočtu model stats.
 - **SentIndex**: bez vah korelace úrovní ~0,78, σ ~0,54× — retro přepočet (ADR-0036) a přeměření
-  epizod #565 (ADR-0037, připomínka ~5. 11.) na nové řadě; `news_weights` se přepočtou v noci
-  z outcomes zpráv posledních 90 dní (bod 10), ngram `category_mean` při dalším tréninku.
+  epizod #565 (ADR-0037, připomínka ~5. 11.) na nové řadě; `news_weights` se přepočítávají
+  v každém cyklu reakcí news-engine (à `reaction_interval_s` = 300 s) z outcomes zpráv
+  posledních 90 dní (bod 10), ngram `category_mean` při dalším tréninku.
 - **Kalendář mimo USD** přestane být významný; `news_anomaly` se přestane kotvit na datech CAD,
   NZD, GBP. Burst dotažení výsledku (#386, `importance ≥ 3`) běží jen u USD High, cizí měny dostanou
   výsledek hodinovým dotažením. `publisher.upcoming` (T−10 min, `importance ≥ 3`) nově ohlásí
@@ -247,3 +251,44 @@ nahradily headline feedy indexů `^GSPC` a `^IXIC`. Strop agregátoru z bodu 2 p
 (`feed_of` pozná Yahoo podle `yahoo.com` v URL feedu). Vzorek ^GSPC z 8. 10.: Yahoo 8, Fool 3,
 BeInCrypto 3, Benzinga 2, TheStreet 2, Stocktwits 2, Trefis 1. Převažují názorové a souhrnné
 články, strop tedy sedí. Korpus má na 24. 9. zlom: jde o jiný feed, ne o pokračování.
+
+## Dodatek 2026-10-27 — bod 7 u odložených reakcí: K1 přes celou uzavírku (#1659, #1679)
+
+Odložená reakce (`deferred_min`) měří okna od prvního obchodovaného baru po uzavírce
+(`closure_open_ts`, #1574) a její výnos nese gap celé uzavírky. K1 do #1679 hledal kontaminující
+zprávy jen 61 min po zprávě, takže víkendová nebo noční zpráva jiné kategorie v gapu okno
+nekazila. Rozhodnutí vlastníka 24. 10. (#1659, varianta A):
+
+- **Odložené okno** [začátek, začátek + okno) je kontaminované právě tehdy, když jiná významná
+  zpráva jiné kategorie leží v (zpráva, začátek + okno): celá uzavírka i okno po otevření.
+  Neodložené okno beze změny, (zpráva, zpráva + okno).
+- **Parita (bod 7):** `ReactionJob._contaminating` i hodinový přepočet (`Contaminators.around`)
+  hledají až k začátku oken + 61 min a konec okna dořízne táž `window_contaminated`. Hodinový
+  přepočet bere začátek z `closure_open_ts`, starší řádek bez něj z prvního baru archivu.
+- **Historie:** `scripts/reclassify_news_rules.py --phase contamination` (dry-run, pak ostrý běh
+  po záloze PG); buckety a gate přepočte noční `ModelStatsJob`.
+
+Měření 24. 10. (`scripts/measure_deferred_contamination.py`, #1659 issuecomment-6387299449):
+kontaminovaných odložených oken C (stav do #1679) 95 567, A 187 485 z 229 996; Σ n odložených
+bucketů 17 193 → 12 072, bucketů s n ≥ 30 112 → 96, otevřené gate 4 → 3 jiné (všechny na hraně,
+Wilson LB ≤ 0,547). Varianty: A celá uzavírka (zvoleno); B 61 min po zprávě + okno po otevření
+(ignoruje zprávy v gapu); C beze změny.
+
+## Dodatek 2026-10-28 — bod 10: okno kontaminované po vyhodnocení (#1708)
+
+`PredictionJob.evaluate` zapisuje outcome jen pro okno, které v době vyhodnocení kontaminované
+není, a outcome nemaže. Okno ale může na kontaminované přejít později: retro K1 přes celou
+uzavírku (#1679, dry-run 27. 10.: 73 238 vyhodnocených oken) a hodinový K1 při pozdním příjmu
+zprávy (#1522, 29. 10. už 49 989 z 2 053 060 outcomes). Bod 10 takové outcomes nechával ve
+vahách 90 dní, takže predictoru zůstal přičtený cizí pohyb (SPEC 5.1). Rozhodnutí vlastníka
+27. 10. ve 23:05 UTC (#1708, varianta A):
+
+- **Čtení** (`PredictionJob.load_outcomes` → `news_weights`, outcomes v `GET /news/{id}`) spojí
+  outcome přes predikci s reakcí téže zprávy a symbolu a vynechá okno, jehož `cont_<w>` je dnes
+  True (`storage/sentiment.outcome_window_clean`). Chybějící reakce nebo NULL se čtou jako čisté,
+  jako v `evaluate`.
+- **Nic se nemaže:** vrátí-li se okno na čisté (T → F), outcome se zase započte.
+- Cena: `load_outcomes` 12,2–12,5 s → 12,3–13,6 s na symbol a cyklus reakcí (prod 29. 10.).
+
+Varianty: A vynechat při čtení (zvoleno); B smazat outcomes při přechodu F → T v retro skriptu
+i hodinovém K1 (mazání odvozených dat, potřebuje idempotenci); C přijmout a zdokumentovat.

@@ -30,7 +30,7 @@ from gexlens_news.reactions import DEFAULT_WINDOWS, contaminates, window_contami
 
 logger = logging.getLogger(__name__)
 
-#: Rozsah kontaminujících eventů po zprávě — jako `ReactionJob._contaminating`
+#: Rozsah kontaminujících eventů po začátku oken — jako `ReactionJob._contaminating`
 CONTAMINATION_SPAN = dt.timedelta(minutes=max(DEFAULT_WINDOWS) + 1)
 #: Hodinový přepočet (#1522 D): drift K1 je vidět nejvýš hodinu
 CONTAMINATION_REFRESH_EVERY = dt.timedelta(hours=1)
@@ -97,10 +97,16 @@ class Contaminators:
         )
         return cls([ts for ts, _ in items], [category for _, category in items])
 
-    def around(self, ts: dt.datetime, category: str | None) -> list[dt.datetime]:
-        """Kontaminující eventy v (ts, ts + 61 min] — jako `ReactionJob._contaminating`."""
+    def around(
+        self, ts: dt.datetime, category: str | None, start: dt.datetime
+    ) -> list[dt.datetime]:
+        """Kontaminující eventy v (ts, začátek + 61 min] — jako `ReactionJob._contaminating`.
+
+        `start` = začátek oken (u odložené reakce první obchodovaný bar po
+        uzavírce, #1679); konec každého okna dořízne `window_contaminated`.
+        """
         lo = bisect.bisect_right(self.times, ts)
-        hi = bisect.bisect_right(self.times, ts + CONTAMINATION_SPAN)
+        hi = bisect.bisect_right(self.times, start + CONTAMINATION_SPAN)
         return [
             self.times[index]
             for index in range(lo, hi)
@@ -125,8 +131,10 @@ def recompute_contamination(
 ) -> list[ContaminationChange]:
     """Nové `cont_<w>` pro řádky reakcí; vrací jen řádky, kde se něco mění.
 
-    Okno bez měření (NULL) zůstává NULL. Deferred řádek bez prvního baru
-    (partice mezitím chybí) se nemění — nic se nehádá.
+    Okno bez měření (NULL) zůstává NULL. Odložený řádek začíná uloženým
+    otevřením po uzavírce (`closure_open_ts`, #1574), starší řádek bez něj
+    prvním barem z archivu; bez obojího (partice mezitím chybí) se nemění —
+    nic se nehádá. Kontaminuje zpráva v (zpráva, začátek + okno) (#1679).
     """
     changes: list[ContaminationChange] = []
     for row in reactions:
@@ -136,11 +144,16 @@ def recompute_contamination(
         ts_event, category = event
         start = ts_event
         if row.deferred_min:
-            first_bar = first_bars.first_at_or_after(str(row.symbol), ts_event)
+            opened = row.closure_open_ts
+            first_bar = (
+                _utc(opened)
+                if opened is not None
+                else first_bars.first_at_or_after(str(row.symbol), ts_event)
+            )
             if first_bar is None:
                 continue
             start = first_bar
-        others = contaminators.around(ts_event, category)
+        others = contaminators.around(ts_event, category, start)
         old = {window: row._mapping[f"cont_{window}"] for window in windows}
         new = {
             window: (
@@ -164,6 +177,7 @@ def reaction_rows(conn: Connection, since: dt.datetime | None = None) -> list[An
         news_reactions.c.event_id,
         news_reactions.c.symbol,
         news_reactions.c.deferred_min,
+        news_reactions.c.closure_open_ts,
         *(news_reactions.c[f"cont_{window}"] for window in DEFAULT_WINDOWS),
     ).where(news_reactions.c.computed_at_min.is_not(None))
     if since is not None:
@@ -217,9 +231,12 @@ def write_contamination(
 class ContaminationJob:
     """Hodinový přepočet K1 reakcí posledních 7 dní (#1522, varianta D).
 
-    Kontaminující event reakce s `ts_event ≥ since` leží nejvýš 61 min po ní,
-    takže stačí eventy od `since`. Přepočet je úplný jako ve skriptu: chytí
-    pozdě zapsaný event (False → True) i změnu kategorie (True → False).
+    Kontaminující event reakce s `ts_event ≥ since` leží po ní (u odložené
+    reakce až do konce okna po otevření, #1679), takže stačí eventy od `since`.
+    Zpráva z uzavírky se přepočítává 7 dní od svého času — i nejdelší uzavírka
+    (víkend se svátkem, pod 4 dny) nechá po otevření přes 3 dny přepočtu.
+    Přepočet je úplný jako ve skriptu: chytí pozdě zapsaný event (False → True)
+    i změnu kategorie (True → False).
     """
 
     def __init__(

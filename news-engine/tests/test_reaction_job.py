@@ -656,9 +656,8 @@ def write_open_bars(data_dir: Path, symbol: str, day: dt.date, *, start_price: f
 
 def test_odlozena_zprava_se_nemeri_pred_uzavrenim_oken_po_otevreni(tmp_path: Path) -> None:
     """#1574: pátek 21:04 UTC po close. V neděli 22:02 (2 min po otevření) se nevybere
-    ani nezapíše nic; po 23:01 dostane plná okna od otevření. Rozsah kontaminace je
-    beze změny (zpráva + 61 min): zpráva v neděli 22:10 okna nekazí — rozsah pro
-    odložené zprávy rozhodne vlastník zvlášť (#1659)."""
+    ani nezapíše nic; po 23:01 dostane plná okna od otevření. Zpráva v neděli 22:10
+    kazí jen okna, která po otevření ještě běží (15 a 60 min, #1659 = A, #1679)."""
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
     ensure_sentiment_schema(engine)
     for symbol in ("ES", "NQ"):
@@ -689,7 +688,12 @@ def test_odlozena_zprava_se_nemeri_pred_uzavrenim_oken_po_otevreni(tmp_path: Pat
     # Okno 60 od otevření: poslední bar 22:59 (minuta dne 1379), ne bar v době měření
     base, last = 7000.0 + 1259 / 100, 7100.0 + 1379 / 100  # pá 20:59 a ne 22:59 UTC
     assert es[60].ret_bp == pytest.approx((last - base) / base * 10_000)
-    assert not any(es[minutes].contaminated for minutes in (1, 5, 15, 60))
+    assert {minutes: es[minutes].contaminated for minutes in (1, 5, 15, 60)} == {
+        1: False,
+        5: False,
+        15: True,
+        60: True,
+    }
     # Hodinový přepočet K1 počítá týmž rozsahem (ADR-0045 bod 7) — nic nezmění
     k1 = ContaminationJob(engine, tmp_path / "data")
     assert k1.run(open_ts + dt.timedelta(minutes=62)) == 0
@@ -731,3 +735,134 @@ def test_zprava_tesne_pred_close_se_vybere_az_po_zralosti_jako_odlozena(tmp_path
     assert job.run(dt.datetime(2026, 10, 18, 23, 1, tzinfo=dt.UTC)) >= 8
     windows = reaction_windows(engine, event_id)
     assert windows and all(window.deferred for _, window in windows)
+
+
+# ── K1 odložené reakce přes celou uzavírku (#1659 = A, #1679) ─────────
+
+FRIDAY_NEWS = dt.datetime(2026, 10, 16, 21, 4, tzinfo=dt.UTC)  # pá po close
+SUNDAY_OPEN = dt.datetime(2026, 10, 18, 22, 0, tzinfo=dt.UTC)
+NO_CONTAMINATION = {1: False, 5: False, 15: False, 60: False}
+ALL_CONTAMINATED = {1: True, 5: True, 15: True, 60: True}
+
+
+def make_closure_env(tmp_path: Path, *days: dt.date) -> tuple[Engine, ReactionJob]:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    for symbol in ("ES", "NQ"):
+        for index, day in enumerate(days):
+            write_open_bars(tmp_path / "data", symbol, day, start_price=7000.0 + 100 * index)
+    return engine, ReactionJob(engine, BarsRepository(tmp_path / "data"))
+
+
+def contamination_by_symbol(engine: Engine, event_id: int) -> dict[str, dict[int, bool]]:
+    result: dict[str, dict[int, bool]] = {}
+    for symbol, window in reaction_windows(engine, event_id):
+        result.setdefault(symbol, {})[window.window_min] = window.contaminated
+    return result
+
+
+@pytest.mark.parametrize(
+    ("other_ts", "other_category", "expected"),
+    [
+        # Sobota: uzavírka je celá před otevřením → kazí všechna okna
+        (dt.datetime(2026, 10, 17, 12, 0, tzinfo=dt.UTC), "GEOPOLITICS", ALL_CONTAMINATED),
+        # Neděle před otevřením
+        (SUNDAY_OPEN - dt.timedelta(minutes=30), "GEOPOLITICS", ALL_CONTAMINATED),
+        # V okně po otevření: jen okna, která v 22:10 ještě běží
+        (
+            SUNDAY_OPEN + dt.timedelta(minutes=10),
+            "GEOPOLITICS",
+            {1: False, 5: False, 15: True, 60: True},
+        ),
+        # Přesně na konci okna 15 min: [začátek, začátek + okno) ji nemá
+        (
+            SUNDAY_OPEN + dt.timedelta(minutes=15),
+            "GEOPOLITICS",
+            {1: False, 5: False, 15: False, 60: True},
+        ),
+        (SUNDAY_OPEN + dt.timedelta(minutes=60), "GEOPOLITICS", NO_CONTAMINATION),
+        # Stejná kategorie nekontaminuje (K1) ani přes uzavírku
+        (dt.datetime(2026, 10, 17, 12, 0, tzinfo=dt.UTC), "FED", NO_CONTAMINATION),
+    ],
+    ids=["sobota", "nedele-pred-otevrenim", "v-okne", "konec-okna", "konec-60", "stejna"],
+)
+def test_k1_odlozene_reakce_pres_celou_uzavirku(
+    tmp_path: Path, other_ts: dt.datetime, other_category: str, expected: dict[int, bool]
+) -> None:
+    engine, job = make_closure_env(tmp_path, dt.date(2026, 10, 16), dt.date(2026, 10, 18))
+    event_id = add_event(engine, FRIDAY_NEWS, importance=3, title="Páteční", category="FED")
+    add_event(engine, other_ts, importance=2, title="Jiná zpráva", category=other_category)
+
+    assert job.run(SUNDAY_OPEN + dt.timedelta(minutes=61)) >= 8
+    assert contamination_by_symbol(engine, event_id) == {"ES": expected, "NQ": expected}
+    # Parita job × hodinový K1 (ADR-0045 bod 7): přepočet nad týmiž daty nic nemění
+    assert ContaminationJob(engine, tmp_path / "data").run(SUNDAY_OPEN + dt.timedelta(hours=2)) == 0
+
+
+def test_k1_odlozene_reakce_v_denni_pauze(tmp_path: Path) -> None:
+    """Út 21:10 UTC v denní pauze (16:00–17:00 CT): zpráva ve 21:40, ještě v pauze,
+    kazí všechna okna od otevření 22:00; zpráva ve 22:30 jen okno 60 min."""
+    engine, job = make_closure_env(tmp_path, dt.date(2026, 10, 20))
+    news = dt.datetime(2026, 10, 20, 21, 10, tzinfo=dt.UTC)
+    event_id = add_event(engine, news, importance=3, title="Pauza", category="FED")
+    in_pause = add_event(
+        engine, news + dt.timedelta(minutes=30), importance=2, title="V pauze", category="MACRO"
+    )
+    job.run(dt.datetime(2026, 10, 20, 23, 2, tzinfo=dt.UTC))
+    assert contamination_by_symbol(engine, event_id)["ES"] == ALL_CONTAMINATED
+
+    # Kategorie zprávy v pauze se změní na stejnou → zbude jen zpráva ve 22:30
+    with engine.begin() as conn:
+        conn.execute(
+            news_events.update().where(news_events.c.id == in_pause).values(category="FED")
+        )
+    add_event(
+        engine,
+        dt.datetime(2026, 10, 20, 22, 30, tzinfo=dt.UTC),
+        importance=2,
+        title="Po otevření",
+        category="MACRO",
+    )
+    assert (
+        ContaminationJob(engine, tmp_path / "data").run(
+            dt.datetime(2026, 10, 20, 23, 3, tzinfo=dt.UTC)
+        )
+        >= 2
+    )
+    assert contamination_by_symbol(engine, event_id)["ES"] == {
+        1: False,
+        5: False,
+        15: False,
+        60: True,
+    }
+
+
+def test_hodinovy_k1_doplni_pozde_zapsanou_zpravu_z_uzavirky(tmp_path: Path) -> None:
+    """Pozdní příjem zprávy ze soboty nastaví K1 odložené reakce (False → True).
+
+    Začátek oken bere hodinový K1 z uloženého `closure_open_ts` (#1574); řádek
+    bez něj (starší data) z prvního baru archivu — výsledek je týž.
+    """
+    engine, job = make_closure_env(tmp_path, dt.date(2026, 10, 16), dt.date(2026, 10, 18))
+    event_id = add_event(engine, FRIDAY_NEWS, importance=3, title="Páteční", category="FED")
+    job.run(SUNDAY_OPEN + dt.timedelta(minutes=61))
+    assert contamination_by_symbol(engine, event_id)["ES"] == NO_CONTAMINATION
+
+    with engine.begin() as conn:
+        conn.execute(
+            news_reactions.update()
+            .where(news_reactions.c.event_id == event_id, news_reactions.c.symbol == "NQ")
+            .values(closure_open_ts=None)
+        )
+    add_event(
+        engine,
+        dt.datetime(2026, 10, 17, 9, 0, tzinfo=dt.UTC),
+        importance=3,
+        title="Sobotní geopolitika",
+        category="GEOPOLITICS",
+    )
+    assert ContaminationJob(engine, tmp_path / "data").run(SUNDAY_OPEN + dt.timedelta(hours=2)) == 2
+    assert contamination_by_symbol(engine, event_id) == {
+        "ES": ALL_CONTAMINATED,
+        "NQ": ALL_CONTAMINATED,
+    }

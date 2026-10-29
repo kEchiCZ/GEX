@@ -16,6 +16,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-28 — ztracená minuta počtvrté (po #1337, #1646, #1701): příčina v taktu smyčky, ne v jednom awaitu (#1713).**
+  Hlavní smyčka pouštěla další iteraci `max(1, 60 − elapsed)` s po startu předchozí a štítek brala
+  jako `floor(start)`. Fáze startů tak klouzala o každé přetažení kola. Když start přetekl přes hranici
+  minuty, štítek skočil o 2 a minuta ES i NQ chyběla: 27. 10. 7 minut RTH po kolech s vedlejší
+  expirací 60–71 s, 28. 10. 15:09 UTC po FA validaci ES, která kolo zdržela o ~25 s. Předchozí opravy
+  odstranily jednotlivé dlouhé awaity, ale při nepříznivé fázi (28. 10. start v ~:59) ztratilo minutu
+  každé další zdržení. Odhalil to rozbor fáze startů z řádků „runtime Cyklus“. → Periodickou smyčku se
+  štítkem minuty řídit nástěnnými hodinami s pevnou fází (`CYCLE_PHASE_S`, `cycle_minute`), takže
+  přetažení spotřebuje rezervu okna, ne štítek. U ztracené minuty měřit fázi startů, ne jen délku
+  kola. Pravidlo „Minutový cyklus nečeká na nic delšího než sweep“ platí dál: rezerva okna není
+  místo pro práci.
 - **2026-10-26 — sběrače „jednou po settle“ v minutovém cyklu: potřetí stejný vzorec (#1701, po #1337 a #1646).**
   Gamma útes (`_fill_next_metrics`) a volatilitní režim čtou partice barů celé historie
   (`session_ranges`, 703 souborů). Běžely přes `await asyncio.to_thread` v cyklu instrumentu, takže

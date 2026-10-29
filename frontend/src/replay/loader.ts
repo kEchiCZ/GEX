@@ -209,10 +209,11 @@ type MatrixKey =
 interface DerivedSeriesCache {
   upTo: number
   maxPain: (number | null)[]
-  optVolCall: number[]
-  optVolPut: number[]
-  deltaFlowCall: number[]
-  deltaFlowPut: number[]
+  /** null = strana minuty bez měřeného objemu (#1635). */
+  optVolCall: (number | null)[]
+  optVolPut: (number | null)[]
+  deltaFlowCall: (number | null)[]
+  deltaFlowPut: (number | null)[]
   evoOiCall: number[]
   evoOiPut: number[]
 }
@@ -1333,6 +1334,9 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
     putOi: inputs.putOi,
     callVolume: inputs.callVolume,
     putVolume: inputs.putVolume,
+    callVolumeKnown: inputs.callVolumeKnown,
+    putVolumeKnown: inputs.putVolumeKnown,
+    snapshotMinutes: inputs.snapshotMinutes,
     callVega: inputs.callVega,
     putVega: inputs.putVega,
     spotSeries,
@@ -1371,9 +1375,15 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   // Catch-up minuta (#518) přírůstek nekreslí — její kumulativy dohánějí celou
   // dobu výpadku, ne jednu minutu obchodů; referenci přírůstků jen posune
   const isCatchUp = (minuteIdx: number): boolean => inputs.catchUpMinutes.has(minuteKeys[minuteIdx])
+  // Rozdělaná minuta na živé hraně (#1635): engine po cyklu pošle provizorní bar
+  // další minuty dřív než její snapshot — objem se ještě neměřil, ale není to
+  // mezera; po finálním baru bez snapshotu se sloupec přepočte jako díra (#459)
+  const provisionalIso = new Set(inputs.bars.filter((bar) => bar.final === false).map((bar) => bar.tsIso)) // prettier-ignore
+  const isPending = (minuteIdx: number): boolean =>
+    !hasSnapshot(minuteIdx) && provisionalIso.has(minuteKeys[minuteIdx])
   // Odvozené řady per minuta (#515): dopočítají se jen sloupce od poslední
   // změny (append/přepis živé minuty = 1 sloupec) a memoizují se na inputs
-  const series = ensureDerived(inputs, hasSnapshot, isCatchUp)
+  const series = ensureDerived(inputs, hasSnapshot, isCatchUp, isPending)
   const maxPain = series.maxPain.slice(0, minutes)
 
   // Flip na řídké OI páteři (#664): minuty s nadpoloviční dírou v OI se kreslí
@@ -1743,9 +1753,13 @@ Sémantika sloupců je shodná s původními celodenními průchody:
   strana: buňka, jejíž strike v předchozí minutě osy objem nenesl (maska 0:
   NULL z tasty fallbacku, díra ve sběru #459, strike mimo pásmo), nese
   přírůstek celé mezery, ne minuty obchodů. Kreslí se jako 0 a referenci jen
-  posune, stejně jako catch-up; řada [100, NULL, 130, 150] dá 0, 0, 0, 20.
+  posune, stejně jako catch-up; řada [100, NULL, 130, 150] dá 0, null, 0, 20.
   Daily (API `daily_totals`) objem mezery dál počítá, součet dne se nemění.
   Sloupec závisí jen na sobě a na předchozím, takže memo `upTo` platí dál.
+* Minuta bez měřeného objemu (#1635) — žádný strike strany objem nenese (tasty
+  fallback, díra ve sběru #459): strana minuty je null, ne 0. Panel ji kreslí
+  jako mezeru s „—“, tichá minuta bez obchodů zůstává 0 (SPEC 3.7). Rozdělaná
+  minuta (provizorní bar bez snapshotu, `isPending`) je 0: snapshot teprve přijde.
 * Evo OI (#573) — Σ OI přes striky; minuta bez snapshotu drží schod
 
 Cache se mutuje in-place — je to čistá memoizace (výsledek téhož vstupu),
@@ -1754,6 +1768,7 @@ function ensureDerived(
   inputs: ReplayInputs,
   hasSnapshot: (minuteIdx: number) => boolean,
   isCatchUp: (minuteIdx: number) => boolean,
+  isPending: (minuteIdx: number) => boolean,
 ): DerivedSeriesCache {
   const minutes = inputs.minutes.length
   const stride = inputs.minuteCapacity
@@ -1813,12 +1828,15 @@ function ensureDerived(
     let optVolPut = 0
     let deltaFlowCall = 0
     let deltaFlowPut = 0
+    let callMeasured = false
+    let putMeasured = false
     for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
       const index = strikeIdx * stride + minuteIdx
       // Minuta po mezeře v objemu (#1632): předchozí sloupec téhož striku bez
       // objemu. Minuta 0 dne předchůdce nemá — reference je tam NaN a první
       // výskyt dá 0 i tak (index − 1 by četl cizí řádek matice)
       if (inputs.callVolumeKnown[index] !== 0) {
+        callMeasured = true
         const callIncrement = volumeIncrement(callReference, strikeIdx, inputs.callVolume[index])
         const callAfterGap = minuteIdx > 0 && inputs.callVolumeKnown[index - 1] === 0
         if (counted && !callAfterGap && callIncrement > 0) {
@@ -1827,6 +1845,7 @@ function ensureDerived(
         }
       }
       if (inputs.putVolumeKnown[index] !== 0) {
+        putMeasured = true
         const putIncrement = volumeIncrement(putReference, strikeIdx, inputs.putVolume[index])
         const putAfterGap = minuteIdx > 0 && inputs.putVolumeKnown[index - 1] === 0
         if (counted && !putAfterGap && putIncrement > 0) {
@@ -1835,10 +1854,11 @@ function ensureDerived(
         }
       }
     }
-    cache.optVolCall[minuteIdx] = optVolCall
-    cache.optVolPut[minuteIdx] = optVolPut
-    cache.deltaFlowCall[minuteIdx] = deltaFlowCall
-    cache.deltaFlowPut[minuteIdx] = deltaFlowPut
+    const pending = isPending(minuteIdx)
+    cache.optVolCall[minuteIdx] = callMeasured || pending ? optVolCall : null
+    cache.optVolPut[minuteIdx] = putMeasured || pending ? optVolPut : null
+    cache.deltaFlowCall[minuteIdx] = callMeasured || pending ? deltaFlowCall : null
+    cache.deltaFlowPut[minuteIdx] = putMeasured || pending ? deltaFlowPut : null
   }
   cache.upTo = minutes
   inputs.derived = cache

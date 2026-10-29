@@ -41,12 +41,15 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    and_,
+    case,
     false,
     select,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.sql.elements import ColumnElement
 
 sentiment_metadata = MetaData()
 
@@ -544,6 +547,34 @@ news_prediction_outcomes = Table(
     Column("correct", Boolean, nullable=False),
     Column("computed_at", DateTime(timezone=True), nullable=False),
 )
+
+
+def outcome_reaction_onclause() -> ColumnElement[bool]:
+    """Spojení outcome (přes jeho predikci) s reakcí téže zprávy a symbolu (#1708)."""
+    return and_(
+        news_reactions.c.event_id == news_predictions.c.event_id,
+        news_reactions.c.symbol == news_prediction_outcomes.c.symbol,
+    )
+
+
+def outcome_window_clean() -> ColumnElement[bool]:
+    """Okno outcome podle aktuální reakce není kontaminované (#1708, SPEC 5.1).
+
+    `PredictionJob.evaluate` zapisuje outcome jen pro okno, které v době
+    vyhodnocení kontaminované nebylo, a outcome nemaže. Retro K1 (#1679)
+    i hodinový K1 při pozdním příjmu zprávy (#1522) ale okno později přepnou
+    na kontaminované, takže čtení (váhy, detail zprávy) bere kontaminaci
+    z reakce, ne z doby zápisu. Dotaz připojí `news_reactions` přes
+    `outcome_reaction_onclause` jako LEFT OUTER: chybějící reakce = okno se
+    čte jako dosud.
+    """
+    contaminated = case(
+        *(
+            (news_prediction_outcomes.c.window_min == window, reaction_contaminated(window))
+            for window in REACTION_ALL_WINDOWS
+        )
+    )
+    return contaminated.is_not(True)
 
 
 # Váhy predictorů (SPEC 5.3): hit-rate per kategorie a predictor v klouzavém

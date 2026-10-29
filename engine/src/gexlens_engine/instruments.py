@@ -103,6 +103,13 @@ CYCLE_TIMEOUT_S = 240.0
 # před startem dalšího cyklu — dávka může přetáhnout `batch_timeout_s` o
 # kvalifikaci kontraktů a odhlášení subskripcí (22. 10. 2026: Ø 3,6 s na dávku)
 OI_ARCHIVE_RESERVE_S = 5.0
+# Fáze minutového cyklu (#1713): iterace štítku M startuje v M:00 + fáze podle
+# nástěnných hodin, ne 60 s po startu té předchozí. Do #1713 fáze klouzala
+# o každé přetažení kola (27. 10. 2026 kola s vedlejší expirací 60–71 s), a když
+# start přetekl přes hranici minuty, štítek skočil o 2 — minuta ES i NQ chyběla.
+# 10 s po hranici má cyklus M uzavřený bar M−1 (agregátor ho vydá s prvním 5s
+# barem minuty M, ~M:00:06) a řádek toku M nese tisky ~[M−1, M) posunuté o fázi.
+CYCLE_PHASE_S = 10.0
 
 
 @dataclass
@@ -2099,6 +2106,59 @@ async def advance_oi_archives(
         except Exception:
             logger.exception("OI archiv %s po dávkách selhal", pipeline.symbol)
             pipeline.drop_oi_archive("chyba")
+
+
+def cycle_minute(wall: dt.datetime, planned: dt.datetime | None) -> dt.datetime:
+    """Štítek iterace hlavní smyčky, která startuje ve `wall` (#1713).
+
+    Štítek M patří oknu [M:00 + CYCLE_PHASE_S, M+1:00 + CYCLE_PHASE_S): přetažené
+    kolo posune start další iterace uvnitř okna její minuty a štítek se neztratí.
+    `planned` je minuta, na jejíž start smyčka čekala a čekání vypršelo. Časovač
+    běží na hodinách smyčky (`loop.time`), ne na nástěnných, takže probuzení těsně
+    před oknem patří ještě plánované minutě. Start enginu a probuzení NOTIFY
+    (#207) plán nemají.
+    """
+    minute = (wall - dt.timedelta(seconds=CYCLE_PHASE_S)).replace(second=0, microsecond=0)
+    if planned is not None and minute == planned - dt.timedelta(minutes=1):
+        return planned
+    return minute
+
+
+def next_cycle_wait(wall: dt.datetime, last_full: dt.datetime) -> float:
+    """Sekundy z `wall` do startu iterace minuty po `last_full` (#1713).
+
+    0 = kolo přetáhlo a další iterace začne hned. Strop 60 s: čekání nepřesáhne
+    minutu, ani když nástěnné hodiny skočí zpět — smyčka by jinak stála o celý
+    skok; štítek se pak srovná s hodinami v `cycle_minute`.
+    """
+    start = last_full + dt.timedelta(minutes=1, seconds=CYCLE_PHASE_S)
+    return min(max((start - wall).total_seconds(), 0.0), 60.0)
+
+
+def log_cycle_gap(minute: dt.datetime, last_full: dt.datetime | None) -> None:
+    """Plná iterace, která nenavazuje na minulou plnou minutu (#1713), do logu.
+
+    Přeskočený štítek = minuta bez snapshotu a levels u všech instrumentů;
+    vzniká jen kolem delším než okno jedné minuty, nebo skokem hodin.
+    """
+    if last_full is None:
+        return
+    step = minute - last_full
+    if step < dt.timedelta(0):
+        logger.error(
+            "Nástěnné hodiny šly zpět: štítek %s po %s — smyčka se srovnala s hodinami",
+            f"{minute:%H:%M}",
+            f"{last_full:%H:%M}",
+        )
+    elif step > dt.timedelta(minutes=1):
+        first = f"{last_full + dt.timedelta(minutes=1):%H:%M}"
+        last = f"{minute - dt.timedelta(minutes=1):%H:%M}"
+        logger.warning(
+            "Smyčka přeskočila %d min (%s): start iterace zaostal za oknem minuty"
+            " — přetažená kola, nebo skok hodin vpřed",
+            step // dt.timedelta(minutes=1) - 1,
+            first if first == last else f"{first}–{last}",
+        )
 
 
 def aggregate_status(

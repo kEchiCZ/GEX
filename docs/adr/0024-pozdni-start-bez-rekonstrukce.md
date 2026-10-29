@@ -65,3 +65,23 @@ tohohle ADR: díra se poctivě ukáže, nedokresluje se.
 
 **Past (ADR-0027):** `/ESU6:XCME` s hlubokým `fromTime` vrací svíčky z roku
 2016. Symbol musí nést plný rok a bere se výhradně z chain endpointu.
+
+## Dodatek 2026-10-27 (#1631): catch-up minuta v okně Rozsah ⧉
+
+Bod Důsledky „okenní analýza musí catch-up minutu přeskočit / přiznat“ hlídá,
+aby se skok kumulativu nepřiřkl **jedné minutě**. Okno se tak čte dvojím
+způsobem:
+
+* **Minutový tok okna** (`/flow` `window.opt_vol`, panel Opt Vol) catch-up minutu
+  vynechává. Je to součet minutového obchodu a skok výpadku minutovým obchodem
+  není.
+* **Profil okna** (`/profile?from&to`, `rangeselect.windowVolumes`) catch-up
+  přírůstek započte, pokud celý výpadek leží uvnitř okna. Objem se v okně
+  opravdu zobchodoval, jen nejde rozdělit po minutách, a profil okna po
+  minutách nedělí. Leží-li hranice okna ve výpadku, posune se na první měřenou
+  minutu uvnitř okna (rozhodnutí B 27. 10. v #1385). Catch-up přírůstek se pak
+  stane bází a do okna nejde, takže objem z doby před oknem se do okna
+  nepřipíše.
+
+Součet profilu okna proto může převýšit `window.opt_vol` téhož okna, a to
+o objem výpadku uvnitř okna. Uživatelský manuál to přiznává (okenní profil).

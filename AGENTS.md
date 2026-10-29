@@ -164,7 +164,7 @@ tastytrade DXLink ┘   ├─ ibkr/ connection, discovery, scheduler, underlyin
                       ├─ compute/ gex, levels, walls, cumdelta, profile, setups, coach, …
                       └─ storage/ parquet_store, oi_archive, *_store (PG), retention
 news-engine (python -m gexlens_news) ─► sentiment, klasifikace zpráv, signály, SentIndex
-        │ Parquet (data/snapshots, derived, tasty_trades) + PostgreSQL
+        │ Parquet (data/snapshots, derived, trades) + PostgreSQL
         ▼ HTTP push /internal/*
 api (FastAPI, host :8010 → kontejner :8000) — REST + WS /ws/live; jen čte storage, nepočítá (výjimky ADR-0045/5, ADR-0059/8)
         ▼
@@ -172,7 +172,7 @@ frontend (nginx :8080, React SPA) — heatmapa, profil, panely, playback, briefi
 ```
 - Balíky: `gexlens_engine`, `gexlens_api`, `gexlens_news`; frontend `src/{heatmap,panels,profile,
   replay,setups,journal,stats,state,api,components}`.
-- Partice: `data/snapshots/{sym}/{exp}/{den}.parquet`, `data/derived/…`, `data/tasty_trades/…`;
+- Partice: `data/snapshots/{sym}/{exp}/{den}.parquet`, `data/derived/…`, `data/trades/{sym}/{den}.parquet`;
   ad-hoc (equity) pohledy píší do `snapshots/`, `levels` pro ně nejsou.
 - Docker bind mount je pomalý (~20 ms/soubor): endpointy nad particemi cachovat, měřit v kontejneru.
 
@@ -185,6 +185,12 @@ frontend (nginx :8080, React SPA) — heatmapa, profil, panely, playback, briefi
   `scripts/merge-when-green.sh <PR>` (po push počkat ~60 s, `gh pr checks` musí checky vidět).
   `gh pr checks --watch` samotné nestačí (vrací 0 i při failu).
 - Delší texty do `gh issue/pr comment` **vždy `--body-file`** (české uvozovky usekávají inline body).
+- **Značka `[AI Agent]`** (vlastník 26. 10. 2026, #1698): agent píše pod účtem vlastníka, takže všechno,
+  co zapíše na GitHub, začíná `[AI Agent]` — titulek nového issue i jeho změna
+  (`[AI Agent] fix(engine): …`), první řádek těla issue a každé jeho úpravy, komentáře k issue a PR,
+  těla PR a review (`[AI Agent] <role> · <model> · <D. M.>`, např. `[AI Agent] session · Opus 5.5 · 26. 10.`).
+  Titulek PR značku nenese (při squash merge je to první řádek commitu). Text bez značky napsal
+  vlastník; u textů před 26. 10. značka chybí a autora nepoznáš.
 - Milestones M1→M5 (SPEC kap. 9) a dále roadmapa #629: neimplementuj napřed věci z pozdějších fází.
 - **Definition of done** pro feature PR:
   1. testy (golden při změně výpočtu), lint, mypy, build zelené;

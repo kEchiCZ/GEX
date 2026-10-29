@@ -63,6 +63,12 @@ export interface RawDay {
   módy čtoucí OI tam nekreslí nic, čistě objemové módy beze změny. Chybí = OI
   všude, kde je snímek. */
   oiGapMinutes?: boolean[]
+  /** Maska objemu per buňka (1 = volume změřené, 0 = NULL z tasty fallbacku nebo
+  chybějící řádek) a minuty se snímkem — objem okna Rozsah ⧉ (#1631). Chybí =
+  den bez matice objemu (Daily, demo), okno pak objem nemá. */
+  callVolumeKnown?: Float32Array
+  putVolumeKnown?: Float32Array
+  snapshotMinutes?: boolean[]
 }
 
 /** Módy jen z objemu — FA mezera (`oiGapMinutes`) se jich netýká. */

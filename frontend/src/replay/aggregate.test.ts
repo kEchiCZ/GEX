@@ -134,6 +134,30 @@ test('aggregateDay: kumulativní vrstvy berou poslední minutu koše, Vol se sč
   expect(day.overlays.sessions![0].minuteIdx).toBe(1)
 })
 
+test('aggregateDay: koš s minutou bez měřeného objemu je v Opt Vol a Δ Flow mezera (#1635)', () => {
+  const base = sampleDay()
+  const day = aggregateDay(
+    {
+      ...base,
+      panels: {
+        ...base.panels,
+        optVolCall: [1, null, 3, 0],
+        optVolPut: [4, null, 2, 0],
+        deltaFlowCall: [1, null, 2, 0],
+        deltaFlowPut: [2, null, 1, 0],
+      },
+    },
+    2,
+  )
+  // Koš 0 by bez minuty 1 nesl jen část toku — mezera, ne neúplný součet;
+  // koš 1 s tichou minutou (0) je měřený
+  expect(day.panels.optVolCall).toEqual([null, 3])
+  expect(day.panels.optVolPut).toEqual([null, 2])
+  expect(day.panels.deltaFlowCall).toEqual([null, 2])
+  expect(day.panels.deltaFlowPut).toEqual([null, 1])
+  expect(day.panels.vol).toEqual([30, 70]) // futures objem mezeru nemá
+})
+
 test('aggregateDay: koš končící v díře přebírá profil poslední minuty se snapshotem (#503)', () => {
   const measuredRow: ProfileRow = {
     strike: 100,

@@ -123,7 +123,7 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
     // Denní součty (#1206): balík `?resolution=daily` nese jen poslední minutu,
     // součty dne spočítalo API stejným vzorcem — plný balík se sčítá tady
     const totals = day.dailyTotals
-    const sum = (series: number[]) => series.reduce((acc, value) => acc + value, 0)
+    const sum = (series: (number | null)[]) => series.reduce<number>((acc, value) => acc + (value ?? 0), 0) // prettier-ignore
     vol[dayIdx] = totals ? totals.vol : sum(day.panels.vol)
     optVolCall[dayIdx] = totals ? totals.optVolCall : sum(day.panels.optVolCall)
     optVolPut[dayIdx] = totals ? totals.optVolPut : sum(day.panels.optVolPut)
