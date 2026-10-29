@@ -7,7 +7,8 @@ na průkaz edge +0,2 R a za kolik seancí je při dnešním tempu nasbírá — 
 že je okno brány při dnešním tempu nepojme. Verdikt brány počítají tytéž
 funkce jako engine
 (`risk.affordable_rows` + `risk.template_gate`, okno `risk.gate_window_start`)
-— Knihovna je druhý volající, ne druhá implementace. Poslední uložený verdikt
+— Knihovna je druhý volající, ne druhá implementace; vstup brány (hrubé R do v5,
+čisté R od v6, #1402) dává obojím `gate_results`. Poslední uložený verdikt
 by u vzácných šablon klamal stářím (ES gamma_momentum měl 1. 10. poslední
 verdikt z 25. 9.).
 
@@ -41,6 +42,7 @@ from gexlens_engine.compute.risk import (
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setup_summary import SetupFact, net_r, net_usd_micro
 from gexlens_engine.compute.setups import (
+    NET_R_GATE,
     TEMPLATE_REGISTRY,
     SetupParams,
     UserStage,
@@ -57,28 +59,56 @@ class CellEvidence:
     #: Po nákladech ADR-0030 na 1 mikro (`setup_summary.net_r`); None, když
     #: některý řádek vzorku nejde ocenit (průměr by byl z jiného vzorku)
     avg_net_r: float | None
-    #: Vzorek pro průkaz edge +0,2 R (`risk.samples_needed`); None, když ho
-    #: malý vzorek neumí odhadnout (pod 2 vzorky, nulové σ pod minimem brány)
+    #: Vzorek pro průkaz edge +0,2 R (`risk.samples_needed`) nad týmž vstupem
+    #: jako brána (`gate_results`); None, když ho malý vzorek neumí odhadnout
+    #: (pod 2 vzorky, nulové σ pod minimem brány)
     n_needed: int | None
 
 
+def gate_results(
+    rows: Sequence[RealizedSetup], point_values: Mapping[str, float], *, net: bool
+) -> list[float]:
+    """Vstup brány šablon z řádků `risk.affordable_rows` — jediný pro engine i Knihovnu.
+
+    `net=False` (mechanika do v5) = hrubé R; `net=True` (v6, #1402, kritérium A
+    z #1334) = čisté R po nákladech ADR-0030 se skluzem na stranu (`net_r`).
+    Řádek, který nejde ocenit (mikro bez hodnoty bodu, nulový stop), do vzorku
+    nevstoupí: brána z něj edge prokázat nesmí. U ES a NQ nenastává — stop 0 b
+    není v rozpočtu a `affordable_rows` ho vyřadí dřív."""
+    if not net:
+        return [row.outcome_r for row in rows]
+    nets = (
+        net_r(row.outcome_r, abs(row.entry - row.stop), row.symbol, point_values, per_side=True)
+        for row in rows
+    )
+    return [value for value in nets if value is not None]
+
+
 def cell_evidence(
-    rows: Sequence[RealizedSetup], point_values: Mapping[str, float], *, min_samples: int
+    rows: Sequence[RealizedSetup],
+    point_values: Mapping[str, float],
+    *,
+    min_samples: int,
+    net: bool = NET_R_GATE,
 ) -> CellEvidence:
     """ØR hrubě/čistě a potřebný vzorek z řádků `risk.affordable_rows` —
     jediný výpočet pro push nového setupu i Knihovnu. `min_samples` = minimum
-    brány (`template_gate_min_samples`), pod které n potřebné neklesne."""
+    brány (`template_gate_min_samples`), pod které n potřebné neklesne.
+    `net` = konvence mechaniky: od v6 čisté R se skluzem na stranu i pro n
+    potřebné (týž vstup jako brána), do v5 n potřebné z hrubého R a čisté R
+    s 1 tickem na obchod jako dosud."""
     if not rows:
         return CellEvidence(avg_r=None, avg_net_r=None, n_needed=None)
     results = [row.outcome_r for row in rows]
     nets = [
-        net_r(row.outcome_r, abs(row.entry - row.stop), row.symbol, point_values) for row in rows
+        net_r(row.outcome_r, abs(row.entry - row.stop), row.symbol, point_values, per_side=net)
+        for row in rows
     ]
     priced = [value for value in nets if value is not None]
     return CellEvidence(
         avg_r=sum(results) / len(results),
         avg_net_r=sum(priced) / len(priced) if len(priced) == len(rows) else None,
-        n_needed=samples_needed(results, min_samples=min_samples),
+        n_needed=samples_needed(gate_results(rows, point_values, net=net), min_samples=min_samples),
     )
 
 
@@ -88,6 +118,7 @@ def cell_net_usd(
     *,
     point_value_usd: float,
     point_values: Mapping[str, float],
+    per_side: bool = NET_R_GATE,
 ) -> float | None:
     """Σ čistý P/L vzorku brány v reálných mikro dolarech při skutečném sizingu
     (#1323): kontrakty z kontextu setupu, starší řádky bez nich dopočte
@@ -110,7 +141,12 @@ def cell_net_usd(
                 risk_max_pct=params.risk_max_pct,
             ).contracts
         value = net_usd_micro(
-            row.outcome_r, abs(row.entry - row.stop), contracts, row.symbol, point_values
+            row.outcome_r,
+            abs(row.entry - row.stop),
+            contracts,
+            row.symbol,
+            point_values,
+            per_side=per_side,
         )
         if value is None:
             return None
@@ -217,6 +253,7 @@ def library_cells(
     now: dt.datetime,
     mechanics_version: int,
     point_values: Mapping[str, float],
+    net_gate: bool = NET_R_GATE,
 ) -> list[LibraryCell]:
     """Buňky Knihovny (#1323), řazené podle průkaznosti.
 
@@ -263,14 +300,13 @@ def library_cells(
                 risk_pct=params.risk_pct,
                 risk_max_pct=params.risk_max_pct,
             )
-            results = [row.outcome_r for row in rows]
             gate = template_gate(
-                results,
+                gate_results(rows, point_values, net=net_gate),
                 min_samples=params.template_gate_min_samples,
                 enabled=params.template_gate_enabled,
             )
             evidence = cell_evidence(
-                rows, point_values, min_samples=params.template_gate_min_samples
+                rows, point_values, min_samples=params.template_gate_min_samples, net=net_gate
             )
             stage = params.stage_of(ticker, template)
             trial_state: TrialState | None = None
@@ -334,7 +370,11 @@ def library_cells(
                     avg_r=evidence.avg_r,
                     avg_net_r=evidence.avg_net_r,
                     net_usd=cell_net_usd(
-                        rows, params, point_value_usd=point_value, point_values=point_values
+                        rows,
+                        params,
+                        point_value_usd=point_value,
+                        point_values=point_values,
+                        per_side=net_gate,
                     ),
                     n_needed=evidence.n_needed,
                     sessions=sessions,

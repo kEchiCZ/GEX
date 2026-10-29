@@ -24,7 +24,9 @@ from gexlens_engine.compute.setup_summary import (
     fact_from_record,
     performance,
     regime_rows,
+    round_trip_cost_usd,
     summarize_setups,
+    usd_simulation,
 )
 from gexlens_engine.storage.setups_store import SetupsRepository
 
@@ -292,6 +294,23 @@ def test_usd_simulace_mikro_sizing_naklady_a_preskocene() -> None:
         rows, point_values=POINT_VALUES, simulation=SimulationInput(account_usd=0, risk_pct=1)
     )
     assert off.simulation is None
+
+
+def test_naklady_adr0030_v5_na_obchod_v6_na_stranu() -> None:
+    """#1402: v5 = komise 1,24 $ + 1 tick za obchod, v6 = + 1 tick na každou stranu."""
+    assert round_trip_cost_usd("MES", per_side=False) == 2.49
+    assert round_trip_cost_usd("MNQ", per_side=False) == 1.74
+    assert round_trip_cost_usd("MES", per_side=True) == 3.74
+    assert round_trip_cost_usd("MNQ", per_side=True) == 2.24
+    assert round_trip_cost_usd("M2K", per_side=True) == 2.5  # neznámý tick = default
+    rows = [
+        fact(id=1, outcome_r=2.0, entry=6400.0, stop=6390.0, closed_ts=utc("2026-08-20T12:00:00"))
+    ]
+    simulation = SimulationInput(account_usd=5000, risk_pct=2)
+    v5 = usd_simulation(rows, simulation, POINT_VALUES, per_side=False)
+    v6 = usd_simulation(rows, simulation, POINT_VALUES, per_side=True)
+    assert v5.total_usd == pytest.approx(200 - 2 * 2.49)
+    assert v6.total_usd == pytest.approx(200 - 2 * 3.74)
 
 
 def test_summarize_rozdeleni_poplatky_mechanika_a_legacy() -> None:

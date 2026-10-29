@@ -590,3 +590,29 @@ def test_brana_es_a_nq_maji_vlastni_vstup_a_verdikt(tmp_path: Path) -> None:
     # Význam template_gate* se změnil → nová verze pravidel v kontextu
     # (#1325 = 2; #1323 stádia buněk zvedla na 3)
     assert es["risk_rules_version"] == nq["risk_rules_version"] == RISK_RULES_VERSION == 3
+
+
+@pytest.mark.parametrize(
+    ("net_gate", "verdict", "rules", "lb"),
+    [(False, "pass", RISK_RULES_VERSION, 0.0553609547), (True, "block", 4, -0.256305712)],
+)
+def test_brana_enginu_pod_v6_nad_cistym_r(
+    tmp_path: Path, net_gate: bool, verdict: str, rules: int, lb: float
+) -> None:
+    """#1402 (kritérium A z #1334): ES se stopem 2,4 b a Ø +0,28 R hrubě projde
+    bránou mechaniky v5; pod v6 (náklad 3,74 $ / 12 $ = 0,312 R) má čistou dolní
+    mez zápornou a zablokuje. Golden `template_gate_net_1402.json`, případ ES."""
+    engine, repository = _setup_engine(tmp_path)
+    engine.net_gate = net_gate
+    shadow: dict[str, object] = {"affordable": True, "tradeable": False}
+    _history(repository, "ES", [0.8] * 20 + [-0.76] * 10, entry=7600.0, stop=7597.6, context=shadow)
+    now = OPEN + dt.timedelta(hours=16)
+    realized = engine._load_realized(now)
+    risk, _ = engine._risk_context(realized, "failed_break", 7600.0, 7597.6, 50.0, now)
+    assert (risk["template_gate"], risk["template_gate_n"]) == (verdict, 30)
+    assert risk["template_gate_lb"] == pytest.approx(lb, abs=1e-9)
+    assert risk["risk_rules_version"] == rules
+    assert risk["trade_block"] == (None if verdict == "pass" else "gate")
+    assert risk["template_gate_avg_r"] == pytest.approx(0.28)
+    cost = (3.74 if net_gate else 2.49) / (2.4 * 5.0)
+    assert risk["template_gate_avg_net_r"] == pytest.approx(0.28 - cost)

@@ -29,6 +29,7 @@ from gexlens_engine.compute.gexfield import gamma_edges
 from gexlens_engine.compute.paper import POINT_VALUES
 from gexlens_engine.compute.risk import (
     RISK_RULES_VERSION,
+    RISK_RULES_VERSION_NET,
     BrakeState,
     RealizedSetup,
     TrialUsage,
@@ -41,9 +42,10 @@ from gexlens_engine.compute.risk import (
     week_start,
 )
 from gexlens_engine.compute.settle import trading_session_date
-from gexlens_engine.compute.setup_library import cell_evidence
+from gexlens_engine.compute.setup_library import cell_evidence, gate_results
 from gexlens_engine.compute.setups import (
     CUMDELTA_PRINTS,
+    NET_R_GATE,
     PATH_GAP_WAIT,
     SETUP_MECHANICS_VERSION,
     TRADING_CLASS_KEY,
@@ -211,6 +213,9 @@ class SetupEngine:
     # přepnout; pod v5 zůstává srovnání přes reset i přírůstek proti poslední
     # hodnotě jako dosud (ADR-0057 bod 11).
     cumdelta_prints: bool = CUMDELTA_PRINTS
+    # Brána šablon a důkaz buňky nad čistým R se skluzem na stranu (#1402,
+    # mechanika v6); pole kvůli testům obou konvencí, pod v5 hrubé R jako dosud.
+    net_gate: bool = NET_R_GATE
 
     def apply_params(self, params: SetupParams, version: int | None) -> bool:
         """Přepne prahy za běhu (nová verze ve store). Vrací True při změně.
@@ -892,11 +897,13 @@ class SetupEngine:
             risk_max_pct=params.risk_max_pct,
         )
         gate = template_gate(
-            [row.outcome_r for row in rows],
+            gate_results(rows, POINT_VALUES, net=self.net_gate),
             min_samples=params.template_gate_min_samples,
             enabled=params.template_gate_enabled,
         )
-        evidence = cell_evidence(rows, POINT_VALUES, min_samples=params.template_gate_min_samples)
+        evidence = cell_evidence(
+            rows, POINT_VALUES, min_samples=params.template_gate_min_samples, net=self.net_gate
+        )
         stage: UserStage = params.stage_of(self.symbol, template)
         trial = self._trial_in_force(template, now)
         if stage == "trial" and trial is None:
@@ -916,7 +923,7 @@ class SetupEngine:
             else:
                 block = "gate"
         context: dict[str, object] = {
-            "risk_rules_version": RISK_RULES_VERSION,
+            "risk_rules_version": RISK_RULES_VERSION_NET if self.net_gate else RISK_RULES_VERSION,
             "account_equity_usd": params.account_equity_usd,
             "point_value_usd": point_value,
             "risk_budget_usd": size.risk_budget_usd,

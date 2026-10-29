@@ -39,6 +39,7 @@ from typing import Any, Literal
 
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setups import (
+    NET_R_GATE,
     born_after_settle,
     context_trading_class,
     excluded_reason,
@@ -55,27 +56,43 @@ BAND_GATES = frozenset({"pass", "block", "unknown"})
 #: `MICRO_SYMBOLS` kalkulačky pozice ve frontendu (instrument/position.ts)
 MICRO_SYMBOLS: dict[str, str] = {"ES": "MES", "NQ": "MNQ", "RTY": "M2K", "YM": "MYM"}
 #: Náklad round-trip na 1 mikro kontrakt (ADR-0030): komise 2 × 0,62 $ + 1 tick
-#: slippage na stranu; konstanty do doby, než je nahradí měřená exekuce
+#: slippage za celý obchod (tick MES 1,25 $, MNQ 0,50 $) — konvence mechaniky
+#: do v5. Text ADR-0030 uvádí 1 tick na stranu; konstanty ho neodrážely (#1326)
 ROUND_TRIP_COST_USD: dict[str, float] = {"MES": 2.49, "MNQ": 1.74}
+#: Táž komise + 1 tick slippage na každou stranu (ADR-0030 se skluzem, #1402) —
+#: konvence od mechaniky v6 (`NET_R_GATE`); konstanty do doby, než je nahradí
+#: měřená exekuce
+ROUND_TRIP_COST_PER_SIDE_USD: dict[str, float] = {"MES": 3.74, "MNQ": 2.24}
 DEFAULT_ROUND_TRIP_COST_USD = 2.5
 
 
+def round_trip_cost_usd(micro: str, *, per_side: bool) -> float:
+    """Round-trip náklad 1 mikra: `per_side` = skluz na každou stranu (v6), jinak na obchod (v5)."""
+    costs = ROUND_TRIP_COST_PER_SIDE_USD if per_side else ROUND_TRIP_COST_USD
+    return costs.get(micro, DEFAULT_ROUND_TRIP_COST_USD)
+
+
 def net_r(
-    outcome_r: float, stop_points: float, symbol: str, point_values: Mapping[str, float]
+    outcome_r: float,
+    stop_points: float,
+    symbol: str,
+    point_values: Mapping[str, float],
+    *,
+    per_side: bool = NET_R_GATE,
 ) -> float | None:
-    """R po nákladech ADR-0030 na 1 mikro kontrakt (#1323, Knihovna a push):
-    R − round-trip náklad mikra / (stop b × hodnota bodu mikra).
+    """R po nákladech ADR-0030 na 1 mikro kontrakt (#1323, Knihovna a push;
+    od v6 i brána, #1402): R − round-trip náklad mikra / (stop b × hodnota bodu mikra).
 
     Táž konvence jako USD simulace souhrnu (`usd_simulation`); na ES při
-    mediánu stopu T7 2,4 b stojí náklad ~0,2 R. None = mikro bez hodnoty
-    bodu nebo nulový stop (nic se nevymýšlí)."""
+    mediánu stopu T7 2,4 b stojí náklad ~0,2 R (v6 ~0,31 R). `per_side` volí
+    konvenci nákladu (`round_trip_cost_usd`), výchozí podle mechaniky.
+    None = mikro bez hodnoty bodu nebo nulový stop (nic se nevymýšlí)."""
     root = symbol_root(symbol)
     micro = MICRO_SYMBOLS.get(root, root)
     point = point_values.get(micro)
     if point is None or stop_points <= 0:
         return None
-    cost = ROUND_TRIP_COST_USD.get(micro, DEFAULT_ROUND_TRIP_COST_USD)
-    return outcome_r - cost / (stop_points * point)
+    return outcome_r - round_trip_cost_usd(micro, per_side=per_side) / (stop_points * point)
 
 
 def net_usd_micro(
@@ -84,6 +101,8 @@ def net_usd_micro(
     contracts: int,
     symbol: str,
     point_values: Mapping[str, float],
+    *,
+    per_side: bool = NET_R_GATE,
 ) -> float | None:
     """Čistý P/L v reálných mikro dolarech (#1323, Knihovna): kontrakty ×
     (R × stop b × hodnota bodu mikra − round-trip náklad mikra, ADR-0030).
@@ -95,7 +114,7 @@ def net_usd_micro(
     point = point_values.get(micro)
     if point is None:
         return None
-    cost = ROUND_TRIP_COST_USD.get(micro, DEFAULT_ROUND_TRIP_COST_USD)
+    cost = round_trip_cost_usd(micro, per_side=per_side)
     return contracts * (outcome_r * stop_points * point - cost)
 
 
@@ -596,10 +615,15 @@ def _daily_sums(items: Iterable[tuple[str, float]]) -> list[tuple[str, float, in
 
 
 def usd_simulation(
-    closed: Sequence[SetupFact], simulation: SimulationInput, point_values: Mapping[str, float]
+    closed: Sequence[SetupFact],
+    simulation: SimulationInput,
+    point_values: Mapping[str, float],
+    *,
+    per_side: bool = NET_R_GATE,
 ) -> UsdSimulation:
     """Mikro sizing #679: kontrakty = ⌊účet × riziko % / (stop b × bod mikra)⌋,
-    P/L = kontrakty × (R × stop × bod − round-trip náklad); 0 kontraktů = přeskočeno."""
+    P/L = kontrakty × (R × stop × bod − round-trip náklad); 0 kontraktů = přeskočeno.
+    Náklad podle konvence mechaniky (`round_trip_cost_usd`, od v6 skluz na stranu)."""
     risk_usd = simulation.account_usd * simulation.risk_pct / 100.0
     skipped = 0
     per_trade: list[tuple[str, float]] = []
@@ -614,7 +638,7 @@ def usd_simulation(
         if contracts <= 0:
             skipped += 1
             continue
-        cost = ROUND_TRIP_COST_USD.get(micro, DEFAULT_ROUND_TRIP_COST_USD)
+        cost = round_trip_cost_usd(micro, per_side=per_side)
         pnl = contracts * fact.outcome_r * fact.stop_points * point - contracts * cost
         assert fact.closed_ts is not None
         per_trade.append((trading_session_date(fact.closed_ts).isoformat(), pnl))

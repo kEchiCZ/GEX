@@ -97,6 +97,11 @@ SETUP_MECHANICS_VERSION = 5
 # ho bump v6 (#1403). Živé trackery z něj berou zdroj (`cumdelta.LIVE_SOURCE`),
 # runtime se pak ptá instance (`tracker.prints`), ne globálu.
 CUMDELTA_PRINTS = SETUP_MECHANICS_VERSION >= 6
+# Brána šablon a důkaz buňky nad čistým R po nákladech ADR-0030 se skluzem
+# 1 tick na stranu (#1402, kritérium A z #1334); zapne ho bump v6 (#1403).
+# Runtime se ptá pole instance (`SetupEngine.net_gate`) nebo parametru, ne
+# globálu, ať jdou v testech obě konvence; pod v5 brána beze změny nad hrubým R.
+NET_R_GATE = SETUP_MECHANICS_VERSION >= 6
 
 
 class SetupTemplate(enum.Enum):
