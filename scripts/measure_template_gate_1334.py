@@ -6,7 +6,9 @@ s kladnou dolní mezí jednostranného 95% intervalu Ø R při n ≥
 uzavřený setup mechaniky (výchozí v5) vzniklý v seancích [--from, --to] spočítá
 verdikt několika kritérií z řádků téže buňky uzavřených **před jeho vznikem**
 (point-in-time, okno `gate_window_start`) a porovná ho s výsledkem setupu po
-nákladech ADR-0030 (`net_r`: komise a 1 tick skluzu na stranu mikra).
+nákladech (`net_r`: komise + 1 tick skluzu na celý obchod mikra podle konstant
+`ROUND_TRIP_COST_USD`; text ADR-0030 uvádí 1 tick na stranu, rozpor řeší #1326
+a #1402).
 Otázka (#1325 bod 4) zní, zda verdikt předpovídá výsledek dalších setupů, ne
 zda by kritérium zpětně vydělalo.
 
@@ -25,6 +27,8 @@ a `risk.affordable_rows` (stop v rozpočtu). Stín se počítá jako obchodovate
 na `tradeable` se nefiltruje. Parametry brány a účtu bere z platné verze
 `setup_params` (bez řádku defaulty kódu). Parita: přepočtený verdikt LB se
 porovná s verdiktem, který živá brána uložila do `context.template_gate`.
+Parametry jsou dnešní verze, ne verze platná při vzniku setupu; parita ukáže,
+kde se rozcházejí.
 
 Spuštění z hostitele (URL se nikdy nevypisuje, PG jen čtením):
     uv run python scripts/measure_template_gate_1334.py [--from 2026-09-30] [--to 2026-10-27]
@@ -310,7 +314,7 @@ def report(
         f"{num(params.account_equity_usd, ',.0f')} $, riziko {num(params.risk_pct, 'g')} % "
         f"/ max {num(params.risk_max_pct, 'g')} %.",
         "- Čisté R = R − round-trip náklad mikra / (stop × bod mikra), ADR-0030 "
-        "(komise a 1 tick skluzu na stranu).",
+        "(komise + 1 tick skluzu na obchod, konstanty `ROUND_TRIP_COST_USD`; #1326).",
     ]
     if skipped:
         out.append(

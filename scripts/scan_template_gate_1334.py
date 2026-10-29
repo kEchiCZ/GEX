@@ -1,11 +1,15 @@
 """Průzkum #1334: pustí některé kritérium brány šablon setupy s kladným čistým R? — jen čtení.
 
-Navazuje na `measure_template_gate_1334.py` (stejný vzorek, okno a čisté R
-ADR-0030). Rodina kritérií je pevná předem (`FAMILY`); každé se hodnotí nad celým
-out-of-sample, nad polovinami H1/H2 a vnořeně: kritérium s nejvyšší Σ čistého R
-puštěných setupů v H1 a jeho výsledek v H2. Kladné Σ jen v celém OOS je výběr
-zpětně z týchž dat, ne důkaz. Druhá tabulka dělí setupy podle nákladu v R
-(hrubé − čisté R), který je známý už při vzniku ze stopu.
+Navazuje na `measure_template_gate_1334.py` (stejný vzorek a čisté R
+`setup_summary.net_r`: komise + 1 tick skluzu na celý obchod podle konstant
+`ROUND_TRIP_COST_USD`; text ADR-0030 uvádí 1 tick na stranu, rozpor řeší #1326
+a #1402). Rodina kritérií je pevná předem (`family`); okno a minimum brány bere
+z platné verze `setup_params` (dnešní, ne z doby vzniku setupu). Každé kritérium
+se hodnotí nad celým out-of-sample, nad polovinami H1/H2 a vnořeně: kritérium
+s nejvyšší Σ čistého R puštěných setupů v H1 a jeho výsledek v H2, rozepsaný
+i po buňkách. Kladné Σ jen v celém OOS je výběr zpětně z týchž dat, ne důkaz.
+Další tabulka dělí setupy podle nákladu v R (hrubé − čisté R), který je známý
+už při vzniku ze stopu.
 
 Spuštění z hostitele (URL se nikdy nevypisuje, PG jen čtením):
     uv run python scripts/scan_template_gate_1334.py [--from 2026-09-30] [--to 2026-10-27]
@@ -103,30 +107,38 @@ def avg_not_above(days: int, min_n: int) -> Criterion:
     return test
 
 
-FAMILY: tuple[tuple[str, Criterion], ...] = (
-    ("vše (bez brány)", lambda event: True),
-    ("LB čistě > 0", lb_above(60, 30, 0.0)),
-    ("LB čistě > −0,1", lb_above(60, 30, -0.1)),
-    ("LB čistě > −0,2", lb_above(60, 30, -0.2)),
-    ("LB čistě > −0,3", lb_above(60, 30, -0.3)),
-    ("Ø čistě > 0", avg_above(60, 30, 0.0)),
-    ("Ø čistě > +0,1", avg_above(60, 30, 0.1)),
-    ("Ø čistě > +0,2", avg_above(60, 30, 0.2)),
-    ("Ø čistě > 0, n ≥ 10", avg_above(60, 10, 0.0)),
-    ("Ø čistě > 0, n ≥ 20", avg_above(60, 20, 0.0)),
-    ("Ø čistě 20 seancí > 0, n ≥ 10", avg_above(20, 10, 0.0)),
-    ("Ø čistě posledních 10 obchodů > 0", last_trades_positive(10)),
-    ("Ø čistě posledních 20 obchodů > 0", last_trades_positive(20)),
-    ("šablona přes symboly Ø čistě > 0", avg_above(60, 30, 0.0, pooled=True)),
-    ("Ø čistě ≤ 0, n ≥ 10 (obráceně)", avg_not_above(60, 10)),
-)
+def family(days: int, min_n: int) -> tuple[tuple[str, Criterion], ...]:
+    """Rodina kritérií předem; `days` a `min_n` = okno a minimum brány z `setup_params`."""
+    return (
+        ("vše (bez brány)", lambda event: True),
+        ("LB čistě > 0", lb_above(days, min_n, 0.0)),
+        ("LB čistě > −0,1", lb_above(days, min_n, -0.1)),
+        ("LB čistě > −0,2", lb_above(days, min_n, -0.2)),
+        ("LB čistě > −0,3", lb_above(days, min_n, -0.3)),
+        ("Ø čistě > 0", avg_above(days, min_n, 0.0)),
+        ("Ø čistě > +0,1", avg_above(days, min_n, 0.1)),
+        ("Ø čistě > +0,2", avg_above(days, min_n, 0.2)),
+        ("Ø čistě > 0, n ≥ 10", avg_above(days, 10, 0.0)),
+        ("Ø čistě > 0, n ≥ 20", avg_above(days, 20, 0.0)),
+        ("Ø čistě 20 seancí > 0, n ≥ 10", avg_above(20, 10, 0.0)),
+        ("Ø čistě posledních 10 obchodů > 0", last_trades_positive(10)),
+        ("Ø čistě posledních 20 obchodů > 0", last_trades_positive(20)),
+        ("šablona přes symboly Ø čistě > 0", avg_above(days, min_n, 0.0, pooled=True)),
+        ("Ø čistě ≤ 0, n ≥ 10 (obráceně)", avg_not_above(days, 10)),
+    )
+
 
 #: Hranice pásem nákladu v R
 COST_EDGES = (0.0, 0.05, 0.10, 0.15, 0.25, 0.50, math.inf)
 
 
 def build_events(
-    realized, params: SetupParams, *, date_from: dt.date, date_to: dt.date | None
+    realized,
+    params: SetupParams,
+    *,
+    date_from: dt.date,
+    date_to: dt.date | None,
+    skipped: dict[str, int],
 ) -> list[Event]:
     cells = sorted({(row.template, row.symbol) for row in realized})
     rows_by_cell = {cell: cell_rows(realized, cell[0], cell[1], params) for cell in cells}
@@ -137,11 +149,15 @@ def build_events(
             row for (other, _), group in rows_by_cell.items() if other == template for row in group
         ]
         for row in rows:
-            own = nets[id(row)]
-            if row.created_ts is None or own is None:
+            if row.created_ts is None:
+                skipped["bez created_ts"] += 1
                 continue
             session = trading_session_date(row.created_ts)
             if session < date_from or (date_to is not None and session > date_to):
+                continue
+            own = nets[id(row)]
+            if own is None:
+                skipped["bez čistého R"] += 1
                 continue
 
             def history(source, created=row.created_ts):
@@ -182,7 +198,14 @@ def summary(values: Sequence[float]) -> str:
     return head.replace(".", ",")
 
 
-def report(events: Sequence[Event], split: dt.date) -> list[str]:
+def report(
+    events: Sequence[Event],
+    split: dt.date,
+    params: SetupParams,
+    *,
+    params_label: str,
+    skipped: dict[str, int],
+) -> list[str]:
     first = [event for event in events if event.session < split]
     second = [event for event in events if event.session >= split]
     by_cell_session: dict[tuple[str, str, dt.date], list[Event]] = defaultdict(list)
@@ -196,12 +219,21 @@ def report(events: Sequence[Event], split: dt.date) -> list[str]:
         f"- Σ hrubě {sum(e.gross for e in events):+.1f} R, "
         f"Σ čistě {sum(e.net for e in events):+.1f} R, "
         f"Σ nákladů {sum(e.cost_r for e in events):.1f} R".replace(".", ","),
+        f"- Parametry: {params_label}; okno {params.template_gate_days} seancí, "
+        f"n ≥ {params.template_gate_min_samples}.",
+    ]
+    if skipped:
+        out.append(
+            "- Vynecháno: " + ", ".join(f"{key} {count}" for key, count in sorted(skipped.items()))
+        )
+    out += [
         "",
         "| kritérium | pustí, celé OOS | buňko-seance | pustí v H1 | pustí v H2 |",
         "|---|---|---|---|---|",
     ]
-    best: tuple[str, float, list[float]] | None = None
-    for label, test in FAMILY:
+    criteria = family(params.template_gate_days, params.template_gate_min_samples)
+    best: tuple[str, float, list[float], Criterion] | None = None
+    for label, test in criteria:
         in_first = [e.net for e in first if test(e)]
         in_second = [e.net for e in second if test(e)]
         cell_sessions = [
@@ -212,17 +244,34 @@ def report(events: Sequence[Event], split: dt.date) -> list[str]:
             f"| {summary(cell_sessions)} | {summary(in_first)} | {summary(in_second)} |"
         )
         if (
-            label != FAMILY[0][0]
+            label != criteria[0][0]
             and len(in_first) >= 10
             and (best is None or sum(in_first) > best[1])
         ):
-            best = (label, sum(in_first), in_second)
+            best = (label, sum(in_first), in_second, test)
+    by_cell: dict[tuple[str, str], list[Event]] = defaultdict(list)
+    for event in events:
+        by_cell[(event.template, event.symbol)].append(event)
     if best is not None:
+        label, total_first, in_second, test = best
         out += [
             "",
-            f"Vnořeně: nejlepší v H1 = {best[0]} (Σ {best[1]:+.1f} R; ".replace(".", ",")
-            + f"v H2 {summary(best[2])}).",
+            f"Vnořeně: nejlepší v H1 = {label} (Σ {total_first:+.1f} R; ".replace(".", ",")
+            + f"v H2 {summary(in_second)}).",
+            "",
+            f"#### Puštěné po buňkách — {label}",
+            "",
+            "| buňka | puštěné, celé OOS | H1 | H2 | zablokované |",
+            "|---|---|---|---|---|",
         ]
+        for (template, symbol), group in sorted(by_cell.items()):
+            passed = [e for e in group if test(e)]
+            out.append(
+                f"| {template} {symbol} | {summary([e.net for e in passed])} "
+                f"| {summary([e.net for e in passed if e.session < split])} "
+                f"| {summary([e.net for e in passed if e.session >= split])} "
+                f"| {summary([e.net for e in group if not test(e)])} |"
+            )
     out += [
         "",
         "### Náklad v R při vzniku × výsledek",
@@ -248,9 +297,6 @@ def report(events: Sequence[Event], split: dt.date) -> list[str]:
         "| buňka | Ø náklad R | Σ hrubě | čistě H1 | čistě H2 |",
         "|---|---|---|---|---|",
     ]
-    by_cell: dict[tuple[str, str], list[Event]] = defaultdict(list)
-    for event in events:
-        by_cell[(event.template, event.symbol)].append(event)
     for (template, symbol), group in sorted(by_cell.items()):
         out.append(
             f"| {template} {symbol} | {_mean([e.cost_r for e in group]):.2f} "
@@ -275,11 +321,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     engine = make_engine(database_url(args.db), read_only=True)
     stored = SetupParamsRepository(engine).latest()
     params = stored.params if stored is not None else SetupParams()
+    params_label = f"store v{stored.version}" if stored is not None else "defaulty kódu"
     start = dt.datetime.combine(args.date_from, dt.time(), tzinfo=dt.UTC)
     since = gate_window_start(start, params.template_gate_days) - dt.timedelta(days=2)
     realized = SetupsRepository(engine).realized_since(since, mechanics_version=args.mechanics)
-    events = build_events(realized, params, date_from=args.date_from, date_to=args.date_to)
-    print("\n".join(report(events, args.split)))
+    skipped: dict[str, int] = defaultdict(int)
+    events = build_events(
+        realized, params, date_from=args.date_from, date_to=args.date_to, skipped=skipped
+    )
+    lines = report(events, args.split, params, params_label=params_label, skipped=dict(skipped))
+    print("\n".join(lines))
     return 0
 
 
