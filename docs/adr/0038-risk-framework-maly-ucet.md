@@ -104,8 +104,10 @@ v rozpočtu (n = 339, +0,06 R). Uživatel bude obchodovat účet ~5 000 $ na
   rozhodnutí. Do té doby jde bránu jen vypnout celou (Settings → Risk management,
   `template_gate_enabled`). Obchodovatelné jsou pak všechny šablony na všech symbolech se stopem
   v rozpočtu, chrání jen sizing a brzdy (varianta E z #1325 s jejími nevýhodami). Kritérium se zpětně
-  neladí: LB > 0 se přehodnotí walk-forwardem po ≥ 20 seancích od 30. 9. (~28. 10., připomínka #1334),
-  s náklady ADR-0030 (komise a skluz 1 tick).
+  neladí. Přehodnocení walk-forwardem po ≥ 20 seancích od 30. 9. proběhlo 28. 10. (#1334): platí
+  varianta A, tedy dolní mez Ø čistého R > 0 při n ≥ 30 za 60 seancí, nad čistým R po nákladech
+  mikra až s mechanikou v6 (#1402, dodatek ADR-0030 2026-10-30). Kritérium B (Ø čistě posledních
+  20 obchodů buňky > 0) se přeměří ve stínu na v6 (připomínka #1715).
 
 ## Dodatek 2026-10-01: stádia buněk, Zkouška a Knihovna setupů (#1323, fáze 1)
 
@@ -196,3 +198,22 @@ v rozpočtu (n = 339, +0,06 R). Uživatel bude obchodovat účet ~5 000 $ na
   i $ v Knihovně (ØR čistě vedle hrubého, `net_usd` v tooltipu).
   Fáze 2–4 (detail setupu, úpravy prahů s OOS ověřením, varianty, diskreční Fibonacci) jsou
   samostatná zadání.
+
+## Dodatek 2026-10-30: poplatky bez ×10 podle instrumentu (#1402, k bodu 1)
+
+- **Rozhodnutí vlastníka 30. 10. 2026** (#1385, Rozhodnuto 30. 10.): poplatky se nastavují
+  v Nastavení → Risk management a **nenásobí se ×10**. „Dolary ×10“ z bodu 1 dál platí pro
+  účet, sizing, rozpočet rizika a P/L, ne pro poplatky.
+- `fee_per_contract_usd` je reálný poplatek ES a NQ za kontrakt a obchod: IBKR 2 × 2,24 =
+  4,48 $ (params v2 z 30. 10. 10:03 UTC místo 10 $ = „1 $ na mikro × 10“).
+  `fee_per_micro_contract_usd` je poplatek MES a MNQ: 2 × 0,61 = 1,22 $. Rozpis ceníku a náklad
+  brány jsou v dodatku ADR-0030 2026-10-30.
+- **Účet v aplikaci** (`fee_usd` v kontextu setupu = kontrakty × poplatek instrumentu setupu,
+  u ES a NQ tedy plného kontraktu) odpovídá obchodu plnými kontrakty s reálným poplatkem.
+  Při obchodu mikry platí dělení ÷ 10 jen pro P/L, ne pro poplatky. Reálný čistý výsledek
+  v mikro dolarech ukazuje Knihovna (čistě v $) a USD simulace; obě počítají s poplatkem
+  mikra a od v6 i se skluzem. Tooltipy účtu a setupu to uvádějí.
+- **Paper** (ADR-0040) bere poplatek podle instrumentu orderu z platné verze parametrů, i po
+  změně za běhu. Do #1402 ho četl jen při startu enginu, takže po params v2 počítal dál 10 $.
+- Setupy a paper obchody uzavřené před změnou nesou poplatek své doby (`fee_usd`,
+  `fees_usd`) a nepřepisují se.

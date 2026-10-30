@@ -28,7 +28,9 @@ filů, a je to jiný broker než cílový (IBKR).
    equity účtu (fixed-fractional), ne z konstanty.
 3. **Účet** v jednotkách plného kontraktu (ADR-0038: 1 kontrakt = 1 mikro
    reálně): start 50 000 $, vklady/výběry jako události (`paper_events`),
-   equity = start + toky + Σ P/L po poplatcích (`fee_per_contract_usd`).
+   equity = start + toky + Σ P/L po poplatcích (`fee_per_contract_usd`; od #1402 podle
+   instrumentu orderu — MES a MNQ `fee_per_micro_contract_usd` — z platné verze parametrů
+   i za běhu, ADR-0038 dodatek 2026-10-30).
 4. **Deník**: uzavřený obchod engine zapíše jako `obchod` s tagem `paper`
    (plán vs. realita, MFE/MAE, P/L, poplatky, kontext orderu) — vstup
    kouče v1 (#933).
