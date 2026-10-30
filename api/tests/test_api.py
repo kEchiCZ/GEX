@@ -810,7 +810,9 @@ def test_setups_summary_z_cele_historie(settings: Settings) -> None:
     assert summary["all"]["closed"] == 210  # ne 200 ze stránky
     assert summary["all"]["sum_r"] == -210.0
     assert summary["all"]["gross_usd"] == -210 * 250.0
-    assert summary["all"]["fees_usd"] == 210 * 10.0  # default poplatek parametrů
+    # Default poplatek parametrů pro ES: reálně 2 × 2,24 $, bez × 10 (#1402)
+    assert summary["all"]["fees_usd"] == pytest.approx(210 * 4.48)
+    assert summary["fee_per_micro_contract_usd"] == 1.22
     assert summary["tradeable"]["closed"] == 105
     assert summary["shadow_reasons"] == {"gate": 105}
     assert summary["account"]["trades"] == 105

@@ -131,8 +131,9 @@ class Event:
 
 
 def row_net(row: RealizedSetup) -> float | None:
-    """Čisté R řádku (ADR-0030, mikro), stejně jako `cell_evidence`."""
-    return net_r(row.outcome_r, abs(row.entry - row.stop), row.symbol, POINT_VALUES)
+    """Čisté R řádku (ADR-0030, mikro), stejně jako `cell_evidence` pod v5:
+    konstanty `ROUND_TRIP_COST_USD` i po bumpu v6 (měření #1334 stojí na nich)."""
+    return net_r(row.outcome_r, abs(row.entry - row.stop), row.symbol, POINT_VALUES, per_side=False)
 
 
 def cell_rows(

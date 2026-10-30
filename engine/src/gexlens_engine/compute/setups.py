@@ -97,6 +97,11 @@ SETUP_MECHANICS_VERSION = 5
 # ho bump v6 (#1403). Živé trackery z něj berou zdroj (`cumdelta.LIVE_SOURCE`),
 # runtime se pak ptá instance (`tracker.prints`), ne globálu.
 CUMDELTA_PRINTS = SETUP_MECHANICS_VERSION >= 6
+# Brána šablon a důkaz buňky nad čistým R po nákladech ADR-0030 se skluzem
+# 1 tick na stranu (#1402, kritérium A z #1334); zapne ho bump v6 (#1403).
+# Runtime se ptá pole instance (`SetupEngine.net_gate`) nebo parametru, ne
+# globálu, ať jdou v testech obě konvence; pod v5 brána beze změny nad hrubým R.
+NET_R_GATE = SETUP_MECHANICS_VERSION >= 6
 
 
 class SetupTemplate(enum.Enum):
@@ -426,13 +431,18 @@ class SetupParams:
     disabled_templates: frozenset[str] = frozenset({SetupTemplate.DIVERGENCE_SPRING.value})
     # Risk framework malého účtu (#1185, rozhodnutí uživatele 15. 9. 2026; viz
     # compute.risk): účet v jednotkách plného kontraktu (50 000 $ ≡ 5 000 $ na
-    # mikro), riziko 1 % na setup, tvrdý strop 2 %, poplatek za kontrakt a
-    # obchod tamtéž (1 $ reálně na mikro × 10). Brzdy v R obchodovatelných
+    # mikro), riziko 1 % na setup, tvrdý strop 2 %. Brzdy v R obchodovatelných
     # setupů, brána šablon nad posledními N seancemi.
     account_equity_usd: float = 50000.0
     risk_pct: float = 1.0
     risk_max_pct: float = 2.0
-    fee_per_contract_usd: float = 10.0
+    # Poplatek za kontrakt a obchod (round-trip) reálně podle instrumentu, bez ×10
+    # (Rozhodnuto 30. 10. 2026, #1402; `setup_summary.contract_fee_usd`). Ceník
+    # IBKR USA do 1 000 kontraktů měsíčně: ES a NQ komise 0,85 + CME 1,38 + NFA
+    # 0,01 = 2,24 $ za stranu, MES a MNQ 0,25 + 0,35 + 0,01 = 0,61 $ za stranu.
+    # Poplatek mikra nese od mechaniky v6 i náklad brány (`round_trip_cost_usd`).
+    fee_per_contract_usd: float = 4.48
+    fee_per_micro_contract_usd: float = 1.22
     daily_brake_r: float = 3.0
     weekly_brake_r: float = 6.0
     max_template_stops_per_day: int = 2
@@ -450,7 +460,8 @@ class SetupParams:
     trial_budget_r: float = 3.0
 
     def __post_init__(self) -> None:
-        """Stádia nesmí jít uložit nekonzistentní — jinak ValueError (422 v API).
+        """Stádia nesmí jít uložit nekonzistentní ani poplatek záporný — jinak
+        ValueError (422 v API).
 
         Zkoušky se řadí podle buňky, ať dvě verze se stejným obsahem jsou si
         rovny (`apply_params` porovnává `==`).
@@ -472,6 +483,9 @@ class SetupParams:
                 raise ValueError(f"Zkouška {trial.cell!r}: mechanics_version musí být ≥ 1")
             _check_trial_budget(trial.budget_setups, trial.budget_r, f"Zkouška {trial.cell!r}")
         _check_trial_budget(self.trial_budget_setups, self.trial_budget_r, "Výchozí zkouška")
+        for name in ("fee_per_contract_usd", "fee_per_micro_contract_usd"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"Parametr {name} nesmí být záporný")
         object.__setattr__(self, "trial_cells", trials)
 
     def trial_of(self, ticker: str, template: str) -> TrialCell | None:
@@ -613,7 +627,8 @@ def params_from_dict(values: Mapping[str, object]) -> SetupParams:
     Chybějící klíče berou defaulty (starší verze parametrů se tak dá načíst
     novějším kódem — verze bez stádií = všechny buňky Auto); `bool` se za
     číslo neuznává (True by tiše prošlo jako 1). Formát buněk, známou šablonu,
-    buňku ve stínu i ve zkoušce a meze rozpočtu hlídá `SetupParams` (#1323).
+    buňku ve stínu i ve zkoušce, meze rozpočtu (#1323) a nezáporné poplatky
+    (#1402) hlídá `SetupParams`.
     """
     names = _params_field_names()
     unknown = sorted(set(values) - set(names))

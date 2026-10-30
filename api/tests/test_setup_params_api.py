@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gexlens_api.main import create_app
-from gexlens_engine.compute.setups import SetupParams, params_to_dict
+from gexlens_engine.compute.setups import NET_R_GATE, SetupParams, params_to_dict
 from gexlens_engine.config import Settings
 
 
@@ -26,7 +26,12 @@ def test_setup_params_read_and_append(settings: Settings) -> None:
     empty = client.get("/setups/params").json()
     assert empty["current"] is None and empty["history"] == []
     assert empty["defaults"] == params_to_dict(SetupParams())
+    # Poplatky podle instrumentu bez ×10 (#1402): ES/NQ a mikro zvlášť
+    assert empty["defaults"]["fee_per_contract_usd"] == 4.48
+    assert empty["defaults"]["fee_per_micro_contract_usd"] == 1.22
     assert isinstance(empty["mechanics_version"], int)
+    # Popisky brány v UI (#1402): čisté R až pod mechanikou v6
+    assert empty["net_r_gate"] is NET_R_GATE
 
     # Nová verze: jen změněné klíče, zbytek defaulty; created_by default „ui"
     created = client.post(
@@ -62,6 +67,12 @@ def test_setup_params_validation(settings: Settings) -> None:
         "/setups/params", json={"params": {"acceptance_minutes": 2.5}, "note": "půl minuty"}
     )
     assert bad_type.status_code == 422
+    # Záporný poplatek mikra (#1402)
+    negative_fee = client.post(
+        "/setups/params",
+        json={"params": {"fee_per_micro_contract_usd": -1.22}, "note": "záporný poplatek"},
+    )
+    assert negative_fee.status_code == 422 and "nesmí být záporný" in negative_fee.text
     # Bez důvodu se verze nezakládá (pydantic min_length)
     no_note = client.post("/setups/params", json={"params": {}, "note": ""})
     assert no_note.status_code == 422

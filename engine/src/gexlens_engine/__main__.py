@@ -867,6 +867,19 @@ def _chain_source_status(fallback: "ChainFallback | None") -> dict[str, object]:
     return {"chain_source": fallback.active_source}
 
 
+def _apply_setup_params(
+    running: Sequence[InstrumentPipeline], params: SetupParams, version: int | None
+) -> None:
+    """Nová verze parametrů setupů (#794 fáze 2) všem spotřebitelům pipeline: prahy
+    detektoru a poplatky paperu podle instrumentu (#1402 — paper dřív četl poplatek
+    jen při startu enginu, takže po params v2 počítal dál 10 $)."""
+    for pipeline in running:
+        if pipeline.setup_engine is not None:
+            pipeline.setup_engine.apply_params(params, version)
+        if pipeline.paper_broker is not None:
+            pipeline.paper_broker.apply_params(params)
+
+
 async def create_pipeline(
     ib: IB,
     manager: ConnectionManager,
@@ -1577,10 +1590,12 @@ async def create_pipeline(
                     )
                     for stored in read_bars(settings.derived_dir, symbol, since, until)
                 ],
-                fee_per_contract_usd=(
-                    setup_params[0].fee_per_contract_usd
+                # Poplatky podle instrumentu z platné verze (#1402); novou verzi
+                # předá smyčka nastavení za běhu (`apply_params`)
+                params=(
+                    setup_params[0]
                     if setup_params is not None
-                    else setup_params_from_settings(settings).fee_per_contract_usd
+                    else setup_params_from_settings(settings)
                 ),
             )
             if paper_repository is not None
@@ -3236,11 +3251,9 @@ async def main() -> None:
                     stored_params = await asyncio.to_thread(setup_params_repository.latest)
                     if stored_params is not None:
                         setup_params_current = (stored_params.params, stored_params.version)
-                        for pipeline in pipelines.values():
-                            if pipeline.setup_engine is not None:
-                                pipeline.setup_engine.apply_params(
-                                    stored_params.params, stored_params.version
-                                )
+                        _apply_setup_params(
+                            list(pipelines.values()), stored_params.params, stored_params.version
+                        )
                         logger.info(
                             "Parametry setupů přepnuty na verzi %d (%s: %s)",
                             stored_params.version,

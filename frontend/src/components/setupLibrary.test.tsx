@@ -96,6 +96,8 @@ const PARAMS = {
       template_gate_min_samples: 30,
       trial_budget_setups: 10,
       trial_budget_r: 3,
+      fee_per_contract_usd: 4.48,
+      fee_per_micro_contract_usd: 1.22,
       disabled_templates: ['divergence_spring'],
       shadow_cells: ['ES:trend_continuation'],
       trial_cells: {},
@@ -134,6 +136,7 @@ function summary(cells: LibraryCell[] | undefined, brakes: LibraryBrakes | undef
     after_settle_count: 0,
     excluded_count: 0,
     fee_per_contract_usd: 10,
+    fee_per_micro_contract_usd: 1.22,
     account_usd: 50000,
     unpriced_symbols: [],
     shadow_reasons: {},
@@ -551,6 +554,19 @@ test('Settings → Risk: bez důvodu nic, rozpočet zkoušky, bez checkboxu brá
     '10',
   )
   expect((screen.getByLabelText('Zkouška: výchozí ztráta (R)') as HTMLInputElement).value).toBe('3')
+  // Poplatky podle instrumentu bez × 10 (#1402): ES a NQ a mikra zvlášť, nápověda odrážkami
+  const fullFee = screen.getByLabelText(
+    'Poplatek za kontrakt a obchod (ES, NQ)',
+  ) as HTMLInputElement
+  const microFee = screen.getByLabelText(
+    'Poplatek za kontrakt a obchod (MES, MNQ)',
+  ) as HTMLInputElement
+  expect([fullFee.value, microFee.value]).toEqual(['4.48', '1.22'])
+  expect(fullFee.closest('label')?.getAttribute('title')).toContain('• za obchod 2 × 2,24 = 4,48 $')
+  expect(fullFee.closest('label')?.getAttribute('title')).not.toContain('= 10 $')
+  expect(microFee.closest('label')?.getAttribute('title')).toContain(
+    '• za obchod 2 × 0,61 = 1,22 $',
+  )
   const save = screen.getByRole('button', { name: 'Uložit jako novou verzi' }) as HTMLButtonElement
   expect(save.disabled).toBe(true)
   expect(screen.getByTestId('risk-note-required')).toBeDefined()
@@ -560,6 +576,7 @@ test('Settings → Risk: bez důvodu nic, rozpočet zkoušky, bez checkboxu brá
   fireEvent.change(screen.getByLabelText('Zkouška: výchozí počet setupů'), {
     target: { value: '5' },
   })
+  fireEvent.change(microFee, { target: { value: '1.3' } })
   expect(save.disabled).toBe(false)
   fireEvent.click(save)
   await waitFor(() =>
@@ -579,6 +596,9 @@ test('Settings → Risk: bez důvodu nic, rozpočet zkoušky, bez checkboxu brá
   }
   expect(body.note).toBe('kratší zkouška')
   expect(body.params.trial_budget_setups).toBe(5)
+  expect([body.params.fee_per_contract_usd, body.params.fee_per_micro_contract_usd]).toEqual([
+    4.48, 1.3,
+  ])
   // Stádia mění jen POST /setups/stage — starý snímek je nesmí přepsat
   expect(body.params).not.toHaveProperty('shadow_cells')
   expect(body.params).not.toHaveProperty('trial_cells')

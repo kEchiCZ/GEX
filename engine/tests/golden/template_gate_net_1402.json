@@ -1,0 +1,181 @@
+{
+ "_comment": "Golden brány šablon nad čistým R (#1402, kritérium A z #1334). Vstup brány = řádky buňky se stopem v rozpočtu; gross = hrubé R (mechanika do v5), net = R − round-trip náklad mikra / (stop b × bod mikra), náklad = poplatek mikra z parametrů (micro_fee_usd) + skluz 1 tick na stranu (ADR-0030; MES 1,22 + 2 × 1,25 = 3,72 $, MNQ 1,22 + 2 × 0,50 = 2,22 $; mechanika v6). Dolní mez jednostranného 95% intervalu Ø R (z = 1,645), pass při n ≥ 30 a LB > 0. Přegenerováno 30. 10. 2026: poplatek mikra z Nastavení podle ceníku IBKR (2 × 0,61 $, Rozhodnuto 30. 10. v #1385) nahradil komisi ADR-0030 2 × 0,62 $ (MES 3,74 → 3,72 $, MNQ 2,24 → 2,22 $); verdikty se nezměnily. Hodnoty spočítal ručně skript mimo engine.",
+ "min_samples": 30,
+ "micro_fee_usd": 1.22,
+ "cases": [
+  {
+   "name": "es_stop_2_4_naklad_meni_znamenko",
+   "note": "#1326: ES s mediánem stopu ~2,4 b. Hrubě Ø +0,28 R projde, náklad v6 3,72 $ / (2,4 b × 5 $) = 0,31 R na obchod udělá z Ø −0,03 R → block.",
+   "symbol": "ES",
+   "stop_points": 2.4,
+   "outcomes": [
+    [
+     0.8,
+     20
+    ],
+    [
+     -0.76,
+     10
+    ]
+   ],
+   "expected": {
+    "gross": {
+     "verdict": "pass",
+     "n": 30,
+     "lb": 0.0553609547
+    },
+    "net": {
+     "verdict": "block",
+     "n": 30,
+     "lb": -0.2546390453,
+     "avg": -0.03
+    }
+   }
+  },
+  {
+   "name": "mes_mikro_jako_es",
+   "note": "Mikro ticker nese týž náklad i bod jako ES (1 kontrakt aplikace = 1 mikro, ADR-0038) → stejné čisté R jako es_stop_2_4.",
+   "symbol": "MES",
+   "stop_points": 2.4,
+   "outcomes": [
+    [
+     0.8,
+     20
+    ],
+    [
+     -0.76,
+     10
+    ]
+   ],
+   "expected": {
+    "gross": {
+     "verdict": "pass",
+     "n": 30,
+     "lb": 0.0553609547
+    },
+    "net": {
+     "verdict": "block",
+     "n": 30,
+     "lb": -0.2546390453,
+     "avg": -0.03
+    }
+   }
+  },
+  {
+   "name": "esz6_pinovany_kontrakt",
+   "note": "Pinovaný kontrakt (ADR-0041 bod 3) má kořen ES → náklad MES.",
+   "symbol": "ESZ6",
+   "stop_points": 2.4,
+   "outcomes": [
+    [
+     0.8,
+     20
+    ],
+    [
+     -0.76,
+     10
+    ]
+   ],
+   "expected": {
+    "gross": {
+     "verdict": "pass",
+     "n": 30,
+     "lb": 0.0553609547
+    },
+    "net": {
+     "verdict": "block",
+     "n": 30,
+     "lb": -0.2546390453,
+     "avg": -0.03
+    }
+   }
+  },
+  {
+   "name": "nq_stop_10_skluz_vydrzi",
+   "note": "NQ se stopem 10 b: náklad v6 2,22 $ / (10 b × 2 $) = 0,111 R, Ø +0,5 → +0,389 R, brána projde v obou konvencích.",
+   "symbol": "NQ",
+   "stop_points": 10.0,
+   "outcomes": [
+    [
+     1.0,
+     20
+    ],
+    [
+     -0.5,
+     10
+    ]
+   ],
+   "expected": {
+    "gross": {
+     "verdict": "pass",
+     "n": 30,
+     "lb": 0.2840009179
+    },
+    "net": {
+     "verdict": "pass",
+     "n": 30,
+     "lb": 0.1730009179,
+     "avg": 0.389
+    }
+   }
+  },
+  {
+   "name": "es_sirsi_stop_8_lb_pod_nulou",
+   "note": "ES se stopem 8 b: náklad v6 3,72 / 40 = 0,093 R; Ø zůstane kladné (+0,187 R), ale dolní mez klesne pod nulu (hrubě +0,055 R) → block. Brána žádá kladnou dolní mez, ne kladný průměr.",
+   "symbol": "ES",
+   "stop_points": 8.0,
+   "outcomes": [
+    [
+     0.8,
+     20
+    ],
+    [
+     -0.76,
+     10
+    ]
+   ],
+   "expected": {
+    "gross": {
+     "verdict": "pass",
+     "n": 30,
+     "lb": 0.0553609547
+    },
+    "net": {
+     "verdict": "block",
+     "n": 30,
+     "lb": -0.0376390453,
+     "avg": 0.187
+    }
+   }
+  },
+  {
+   "name": "es_pod_minimem",
+   "note": "29 vzorků < template_gate_min_samples 30 → insufficient v obou konvencích.",
+   "symbol": "ES",
+   "stop_points": 2.4,
+   "outcomes": [
+    [
+     0.8,
+     19
+    ],
+    [
+     -0.76,
+     10
+    ]
+   ],
+   "expected": {
+    "gross": {
+     "verdict": "insufficient",
+     "n": 29,
+     "lb": 0.0315586912
+    },
+    "net": {
+     "verdict": "insufficient",
+     "n": 29,
+     "lb": -0.2784413088,
+     "avg": -0.0479310345
+    }
+   }
+  }
+ ]
+}

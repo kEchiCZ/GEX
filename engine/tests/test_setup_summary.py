@@ -14,21 +14,27 @@ from sqlalchemy import create_engine
 
 from gexlens_engine.compute.paper import POINT_VALUES
 from gexlens_engine.compute.setup_summary import (
+    MICRO_ROOTS,
+    ROUND_TRIP_COST_USD,
     SetupFact,
     SimulationInput,
     account_stats,
     annualized_sharpe,
     band_gate_stats,
+    contract_fee_usd,
     day_stats,
     expected_value,
     fact_from_record,
     performance,
     regime_rows,
+    round_trip_cost_usd,
     summarize_setups,
+    usd_simulation,
 )
 from gexlens_engine.storage.setups_store import SetupsRepository
 
 FEE = 10.0
+FEE_MICRO = 1.22
 ACCOUNT = 50_000.0
 DAY = dt.date(2026, 8, 17)
 
@@ -150,6 +156,7 @@ def test_day_stats_bilance_dne_a_riziko_z_aktivnich() -> None:
         DAY,
         point_values=POINT_VALUES,
         fee_per_contract_usd=FEE,
+        fee_per_micro_contract_usd=FEE_MICRO,
         account_usd=ACCOUNT,
     )
     assert (stats.trades, stats.closed, stats.active) == (4, 3, 1)
@@ -178,14 +185,24 @@ def test_day_stats_seance_ne_kalendarni_den() -> None:
 
     def trades(day: dt.date, rows: list[SetupFact]) -> int:
         return day_stats(
-            rows, day, point_values=POINT_VALUES, fee_per_contract_usd=FEE, account_usd=ACCOUNT
+            rows,
+            day,
+            point_values=POINT_VALUES,
+            fee_per_contract_usd=FEE,
+            fee_per_micro_contract_usd=FEE_MICRO,
+            account_usd=ACCOUNT,
         ).trades
 
     assert trades(dt.date(2026, 8, 17), [night, crossing]) == 0
     assert trades(dt.date(2026, 8, 18), [night, crossing]) == 2
     assert trades(dt.date(2026, 8, 17), [running]) == 1
     empty = day_stats(
-        [], DAY, point_values=POINT_VALUES, fee_per_contract_usd=FEE, account_usd=ACCOUNT
+        [],
+        DAY,
+        point_values=POINT_VALUES,
+        fee_per_contract_usd=FEE,
+        fee_per_micro_contract_usd=FEE_MICRO,
+        account_usd=ACCOUNT,
     )
     assert empty.win_rate is None  # prázdný den není „0 %"
     assert empty.best_usd is None
@@ -258,7 +275,7 @@ def test_performance_denni_rada_sharpe_drawdown() -> None:
         fact(id=4, outcome_r=1.5, closed_ts=utc("2026-08-24T12:00:00")),
         active(id=5),
     ]
-    result = performance(rows, point_values=POINT_VALUES, simulation=None)
+    result = performance(rows, point_values=POINT_VALUES, simulation=None, micro_fee_usd=FEE_MICRO)
     assert [(p.session, p.trades, p.sum_r, p.cum_r) for p in result.daily] == [
         ("2026-08-20", 2, 1.0, 1.0),
         ("2026-08-21", 1, -3.0, -2.0),
@@ -281,7 +298,10 @@ def test_usd_simulace_mikro_sizing_naklady_a_preskocene() -> None:
         fact(id=2, outcome_r=1.0, entry=6400.0, stop=6360.0, closed_ts=utc("2026-08-20T13:00:00")),
     ]
     result = performance(
-        rows, point_values=POINT_VALUES, simulation=SimulationInput(account_usd=5000, risk_pct=2)
+        rows,
+        point_values=POINT_VALUES,
+        simulation=SimulationInput(account_usd=5000, risk_pct=2),
+        micro_fee_usd=FEE_MICRO,
     )
     sim = result.simulation
     assert sim is not None
@@ -289,9 +309,75 @@ def test_usd_simulace_mikro_sizing_naklady_a_preskocene() -> None:
     # 2 kontrakty × 2 R × 10 b × 5 $ − 2 × 2,49 $
     assert sim.total_usd == pytest.approx(200 - 4.98)
     off = performance(
-        rows, point_values=POINT_VALUES, simulation=SimulationInput(account_usd=0, risk_pct=1)
+        rows,
+        point_values=POINT_VALUES,
+        simulation=SimulationInput(account_usd=0, risk_pct=1),
+        micro_fee_usd=FEE_MICRO,
     )
     assert off.simulation is None
+
+
+def test_naklady_adr0030_v5_konstanty_v6_z_parametru() -> None:
+    """#1402: v5 = konstanty (komise 1,24 $ + 1 tick za obchod) beze změny, i když
+    parametry nesou jiný poplatek mikra — stojí na nich skripty `measure_*`;
+    v6 = poplatek mikra z parametrů + 1 tick na každou stranu (MES 3,72, MNQ 2,22)."""
+    for fee in (FEE_MICRO, 9.0):
+        assert round_trip_cost_usd("MES", 5.0, per_side=False, micro_fee_usd=fee) == 2.49
+        assert round_trip_cost_usd("MNQ", 2.0, per_side=False, micro_fee_usd=fee) == 1.74
+        assert round_trip_cost_usd("M2K", 5.0, per_side=False, micro_fee_usd=fee) == 2.5
+    assert ROUND_TRIP_COST_USD == {"MES": 2.49, "MNQ": 1.74}
+    mes = round_trip_cost_usd("MES", 5.0, per_side=True, micro_fee_usd=FEE_MICRO)
+    mnq = round_trip_cost_usd("MNQ", 2.0, per_side=True, micro_fee_usd=FEE_MICRO)
+    assert mes == pytest.approx(3.72) and mnq == pytest.approx(2.22)
+    # Jiný poplatek v Nastavení = jiný náklad (žádná konstanta v6)
+    assert round_trip_cost_usd("MES", 5.0, per_side=True, micro_fee_usd=2.0) == pytest.approx(4.5)
+    # Tick z tabulky i u ostatních mikro (M2K 0,1 b × 5 $), neznámý = nic se nevymýšlí
+    assert round_trip_cost_usd("M2K", 5.0, per_side=True, micro_fee_usd=FEE_MICRO) == (
+        pytest.approx(2.22)
+    )
+    assert round_trip_cost_usd("XYZ", 5.0, per_side=True, micro_fee_usd=FEE_MICRO) is None
+    with pytest.raises(ValueError, match="poplatek mikra"):
+        round_trip_cost_usd("MES", 5.0, per_side=True, micro_fee_usd=None)
+    rows = [
+        fact(id=1, outcome_r=2.0, entry=6400.0, stop=6390.0, closed_ts=utc("2026-08-20T12:00:00"))
+    ]
+    simulation = SimulationInput(account_usd=5000, risk_pct=2)
+    v5 = usd_simulation(rows, simulation, POINT_VALUES, per_side=False, micro_fee_usd=FEE_MICRO)
+    v6 = usd_simulation(rows, simulation, POINT_VALUES, per_side=True, micro_fee_usd=FEE_MICRO)
+    assert v5.total_usd == pytest.approx(200 - 2 * 2.49)
+    assert v6.total_usd == pytest.approx(200 - 2 * 3.72)
+
+
+def test_poplatky_souhrnu_podle_instrumentu() -> None:
+    """#1402 (Rozhodnuto 30. 10.): R hrubě a náklady zvlášť; ES a NQ nesou
+    poplatek plného kontraktu, mikra poplatek mikra (`contract_fee_usd`)."""
+    assert {"MES", "MNQ", "M2K", "MYM"} == MICRO_ROOTS
+    fees = {"fee_per_contract_usd": 4.48, "fee_per_micro_contract_usd": FEE_MICRO}
+    assert contract_fee_usd("ESZ6", **fees) == 4.48
+    assert contract_fee_usd("NQ", **fees) == 4.48
+    assert contract_fee_usd("MES", **fees) == FEE_MICRO
+    assert contract_fee_usd("MNQZ6", **fees) == FEE_MICRO
+    rows = [
+        fact(id=1, outcome_r=2.0),  # ES: 2 × 5 b × 50 $ = +500 $
+        fact(id=2, symbol="MES", outcome_r=-1.0, status="closed_stop"),  # −5 b × 5 $ = −25 $
+        active(id=3, symbol="MES"),
+    ]
+    summary = summarize_setups(
+        rows,
+        mechanics_version=5,
+        all_versions=False,
+        point_values=POINT_VALUES,
+        fee_per_contract_usd=4.48,
+        fee_per_micro_contract_usd=FEE_MICRO,
+        account_usd=ACCOUNT,
+        session_day=DAY,
+    )
+    assert (summary.fee_per_contract_usd, summary.fee_per_micro_contract_usd) == (4.48, 1.22)
+    assert summary.all.sum_r == pytest.approx(1.0)
+    assert summary.all.gross_usd == pytest.approx(475.0)
+    assert summary.all.fees_usd == pytest.approx(4.48 + 1.22)
+    assert summary.all.net_usd == pytest.approx(475.0 - 5.70)
+    assert summary.today.fees_usd == pytest.approx(5.70)
 
 
 def test_summarize_rozdeleni_poplatky_mechanika_a_legacy() -> None:
@@ -331,6 +417,7 @@ def test_summarize_rozdeleni_poplatky_mechanika_a_legacy() -> None:
             all_versions=all_versions,
             point_values=POINT_VALUES,
             fee_per_contract_usd=FEE,
+            fee_per_micro_contract_usd=FEE_MICRO,
             account_usd=ACCOUNT,
             session_day=DAY,
         )
@@ -410,6 +497,7 @@ def test_summarize_vyradi_vznik_po_settle_a_uvede_pocet() -> None:
             all_versions=all_versions,
             point_values=POINT_VALUES,
             fee_per_contract_usd=FEE,
+            fee_per_micro_contract_usd=FEE_MICRO,
             account_usd=ACCOUNT,
             session_day=DAY,
         )
@@ -457,6 +545,7 @@ def test_summarize_vyradi_oznacene_znackou_a_uvede_pocet() -> None:
         all_versions=False,
         point_values=POINT_VALUES,
         fee_per_contract_usd=FEE,
+        fee_per_micro_contract_usd=FEE_MICRO,
         account_usd=ACCOUNT,
         session_day=DAY,
     )
@@ -473,6 +562,7 @@ def test_summarize_neznamy_bod_se_nevymysli() -> None:
         all_versions=False,
         point_values=POINT_VALUES,
         fee_per_contract_usd=FEE,
+        fee_per_micro_contract_usd=FEE_MICRO,
         account_usd=ACCOUNT,
         session_day=DAY,
     )

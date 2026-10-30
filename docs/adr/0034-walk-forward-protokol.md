@@ -92,6 +92,19 @@ pravidlo o pořadí:
    Max Pain zamrzlý na ranní hodnotě): ta se nasazuje hned a rozběhnutá
    měření se explicitně restartují s poznámkou v jejich issue.
 
+**Doplněk 30. 10. 2026 (#1402) — bump v6 nese bránu nad čistým R.** Do dávkového bumpu v6
+(#1403) jde i konvence nákladů z dodatku ADR-0030 2026-10-30: od v6 stojí brána šablon,
+n potřebné a ØR čistě v Knihovně na čistém R po nákladech mikra (poplatek mikra z parametrů
++ skluz 1 tick na stranu). Do v5 stojí brána a n potřebné na hrubém R a ØR čistě
+s konstantami v5 (1 tick za obchod). Přepínač je `NET_R_GATE` =
+`SETUP_MECHANICS_VERSION >= 6` vedle `CUMDELTA_PRINTS`, kontext setupu nese
+`risk_rules_version` 4. Vzorek brány se čte jen z aktuální mechaniky
+(`SetupEngine._load_realized` → `realized_since(mechanics_version=…)`), takže po bumpu
+začíná každá buňka od n = 0. Dokud nenasbírá 30 uzavřených setupů v6, je verdikt
+`insufficient` a setupy buňky jsou stín, pokud ji nepustí Zkouška; zkouška zahájená na v5
+na nové mechanice končí (ADR-0038 dodatek 2026-10-01). Podle bodu 1 bump nuluje i vzorky
+confidence a walk-forwardu.
+
 **Doplněk 22. 10. 2026 (#1464, nález #1081) — seance = okno aktivního řetězu.**
 Adresář expirace E nese i minuty, kdy E psal sekundární runtime (levels jednou
 za 3 min), ale živý `SetupEngine` běží jen nad aktivním řetězem. Replay je

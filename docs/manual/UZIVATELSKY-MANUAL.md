@@ -1724,7 +1724,7 @@ vyřazené stejně jako setupy po settle; v databázi zůstávají.
 | **Úspěšnost** | podíl uzavřených s kladným výsledkem v R (i kladný timeout) |
 | **Ø R / Σ R** | průměrný / celkový výsledek v násobcích rizika (1 R = vzdálenost entry–stop) |
 | **Hrubý výsledek (1 kontrakt)** | Σ (R × stop v bodech × hodnota bodu; ES 50 $, NQ 20 $) — každý setup rovným dílem jeden kontrakt, obchodovatelný i stínový |
-| **Poplatky** | uzavřené × poplatek za kontrakt a obchod (default 10 $ v jednotkách aplikace = 1 $ reálně na mikro) |
+| **Poplatky** | Σ poplatků uzavřených podle instrumentu, reálně bez × 10 (Settings → Risk management, #1402): ES a NQ 4,48 $ za kontrakt a obchod, MES a MNQ 1,22 $ (ceník IBKR). Tooltip ukazuje obě sazby; R se náklady nesnižuje, hrubý výsledek a poplatky jsou zvlášť |
 | **Čistý výsledek** | hrubý výsledek − poplatky |
 | **EV / obchod (hrubě)** | očekávaný výsledek jednoho obchodu na 1 kontrakt před poplatky (viz níže) |
 
@@ -1746,7 +1746,11 @@ risk pravidel:
 hrubě (kontrakty × R × stop × bod), poplatky (kontrakty × poplatek), čistě,
 % účtu a max drawdown (chronologicky podle uzavření). Dlaždice 1 kontrakt
 výše měří detektor, tenhle řádek odpovídá na otázku „kolik by vydělal účet".
-Reálně na MES/MNQ jsou dolary ÷ 10.
+Reálně na MES/MNQ jsou dolary ÷ 10. Poplatky setupů od 30. 10. 2026 ne: jsou
+reálné za ES a NQ (#1402). Starší setupy nesou poplatek své doby, 10 $ za kontrakt
+(1 $ na mikro × 10), takže součet účtu přes tento přechod míchá obě konvence (po
+bumpu na mechaniku v6 souhrn výchozí počítá jen setupy s reálným poplatkem). Čistý
+výsledek v reálných mikro dolarech ukazuje Knihovna (čistě v $) a USD simulace.
 
 **Denní statistika seance** (obrazovka Setupy): nad seznamem je souhrn dnešního
 dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost
@@ -2072,7 +2076,8 @@ jinak zůstane hloubka jen posunem důvěry.
 Účet se v aplikaci vede v jednotkách **plného kontraktu** (ES 50 $/b, NQ
 20 $/b) jako **50 000 $**. Ty obchoduješ **MES/MNQ** (1/10 plného kontraktu):
 reálných 5 000 $ ≡ 50 000 $ v aplikaci, **1 kontrakt v aplikaci = 1 mikro
-reálně**, body sedí 1:1, dolary jsou ×10 (reálně ÷ 10). Rozhodnutí z 15. 9.
+reálně**, body sedí 1:1, dolary jsou ×10 (reálně ÷ 10). Poplatky se ×10
+nenásobí: jsou reálné podle instrumentu (řádky Poplatek níž, #1402). Rozhodnutí z 15. 9.
 2026 po analýze 1 128 setupů: 71 z nich ztratilo přes 1 000 $ na plný kontrakt —
 všechny kvůli stopu ≥ 32 b ES / ≥ 73 b NQ, a setupy s velkým stopem byly
 zároveň nejhorší obchody (v5: −0,34 R vs. +0,06 R se stopem v rozpočtu).
@@ -2083,10 +2088,12 @@ zároveň nejhorší obchody (v5: −0,34 R vs. +0,06 R se stopem v rozpočtu).
 |---|---|---|
 | **Riziko na setup** | **1 %** = 500 $ (50 $ reálně) | kontrakty = ⌊rozpočet / (stop b × hodnota bodu)⌋ → 1 kontrakt při stopu ≤ **10 b ES / ≤ 25 b NQ**; těsnější stop = víc kontraktů (ES 4 b → 2 ks) |
 | **Tvrdý strop** | 2 % = 1 000 $ | ztráta jednoho setupu nikdy nad 2 % účtu, i kdyby se riziko zvedlo |
+| **Poplatek za kontrakt a obchod (ES, NQ)** | 4,48 $ | reálný round-trip podle ceníku IBKR (USA, do 1 000 kontraktů měsíčně): za stranu 2,24 $ = komise 0,85 + CME 1,38 + NFA 0,01; bez × 10 (#1402, do té doby 10 $ = „1 $ na mikro × 10“). Nese souhrn setupů, účet a paper u ES a NQ |
+| **Poplatek za kontrakt a obchod (MES, MNQ)** | 1,22 $ | za stranu 0,61 $ = komise 0,25 + CME 0,35 + NFA 0,01. Nese paper u MES a MNQ a od mechaniky v6 i náklad brány šablon a Knihovny: + skluz 1 tick na stranu, celkem MES 3,72 $ a MNQ 2,22 $ za obchod |
 | **Denní brzda** | −3 R | po realizované ztrátě −3 R za seanci (obchodovatelné setupy, ES i NQ) nové setupy jen **stínově** do konce seance (17:00 CT), každý den včetně pátku — ne do settle; alert do zvonku a pushe |
 | **Týdenní brzda** | −6 R | totéž za obchodní týden: počítá se od otevření pondělní seance (neděle 17:00 CT) a stín platí do konce obchodního týdne (neděle 17:00 CT) |
 | **Strop stopů šablony** | 2 / den | třetí pokus téže šablony po dvou stopech za seanci je stín, až do konce seance (17:00 CT) |
-| **Brána šablon** | zapnuta, n ≥ 30, okno 60 seancí | obchodovatelná je jen šablona **na daném symbolu**, jejíž **dolní mez očekávání** (jednostranný 95% interval Ø R ze setupů téhož symbolu se stopem v rozpočtu) je kladná; ES a NQ se hodnotí zvlášť; ostatní se dál měří, ale neobchodují |
+| **Brána šablon** | zapnuta, n ≥ 30, okno 60 seancí | obchodovatelná je jen šablona **na daném symbolu**, jejíž **dolní mez očekávání** (jednostranný 95% interval Ø R ze setupů téhož symbolu se stopem v rozpočtu) je kladná; ES a NQ se hodnotí zvlášť; ostatní se dál měří, ale neobchodují. Do mechaniky v5 z hrubého R, od v6 z **čistého R** po nákladech 1 mikra (poplatek mikra + skluz 1 tick na stranu, #1402) — na ES se stopem 2,4 b je to −0,31 R na obchod |
 | **Zkouška — výchozí rozpočet** (v1.27) | 10 setupů / −3 R | předvyplní dialog Zkoušky v Setupy → Knihovna (meze 1–20 setupů a 0,5–6 R); běžící zkoušky si nesou rozpočet ze zahájení |
 
 **Stín vs. obchodovatelný.** Setup **vzniká vždy** (měření nesmí přestat —
@@ -2120,17 +2127,27 @@ stojí. Od v1.27 jde bránu pro vybranou buňku šablona × ticker vědomě pře
 **Zkouškou s rozpočtem** v Setupy → Knihovna (níže); sizing a brzdy platí dál.
 Zaškrtávátko **Brána šablon** v Settings zmizelo — vypnout bránu celou by byla
 druhá cesta k obchodování všeho bez rozpočtu (zůstalo jen jako nouzová cesta přes
-API). Kritérium brány se nemění; přehodnotí se kolem 28. 10. na datech od 30. 9.
-(připomínka #1334).
+API). Kritérium brány se 28. 10. přehodnotilo na datech od 30. 9. (#1334) a zůstává
+kladná dolní mez Ø R při n ≥ 30 za 60 seancí. Od mechaniky v6 se počítá z čistého
+R po nákladech mikra (#1402): na ES se stopem 2,4 b stojí náklad 0,31 R na obchod,
+na NQ se stopem 16 b jen 0,07 R. Druhé kritérium (Ø čistého R posledních 20 obchodů buňky > 0) se zatím
+jen měří ve stínu (připomínka #1715). Vzorek brány je vždy jen z aktuální
+mechaniky: po přechodu na v6 začíná každá buňka od nuly a do 30 uzavřených setupů
+v6 jsou její setupy stínové, pokud ji nepustí Zkouška.
 
 ![Setupy — sloupec Účet: stín „stop nad rozpočtem rizika“ / „šablona bez prokázaného edge“, nad tabulkou Kouč nad setupy](img/setupy-ucet-risk.jpg)
 
 **Bilance účtu.** Řádek **Účet 50k** v Setupech a karta **Účet 50k** ve
 Stats → Výkon setupů: Σ (kontrakty × R × stop × bod − poplatky), počet
 obchodů, počet stínů, poplatky a max drawdown v $ — od v1.23 z celé historie
-(#1319). Poplatek je default 10 $ za kontrakt a obchod v jednotkách aplikace
-(= 1 $ reálně). Vedle toho zůstává **USD simulace (#679)** podle kalkulačky
-(Settings → Trading) — ta počítá s tvým reálným účtem a mikro kontrakty.
+(#1319). Poplatek setupů od 30. 10. 2026 je reálný podle instrumentu setupu, bez
+× 10 (#1402): u ES a NQ 4,48 $ za kontrakt a obchod. Starší setupy nesou 10 $ za
+kontrakt (1 $ na mikro × 10), součet přes přechod proto míchá obě konvence. Při
+obchodu mikry platí ÷ 10 jen pro P/L, ne pro poplatky; reálný čistý výsledek
+v mikro dolarech ukazuje Knihovna (čistě v $).
+Vedle toho zůstává **USD simulace (#679)** podle kalkulačky (Settings → Trading) —
+ta počítá s tvým reálným účtem, mikro kontrakty a náklady mikra (do v5 konstanty
+2,49 / 1,74 $, od v6 poplatek mikra + skluz 1 tick na stranu).
 
 **Co to (ne)slibuje.** Pravidla zaručují, že účet přežije sérii ztrát (1 %:
 max drawdown ~19 % v simulaci nad v5; 2 %: ~39 %) a že ztráta přes 1 000 $
@@ -2143,7 +2160,8 @@ nezvětšuje, zpřesňuje se vstup.
 
 **Změna parametrů.** Settings → Risk management: každé uložení založí novou
 verzi parametrů setupů s povinným důvodem (audit), engine ji převezme do
-sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly. Od v1.27 bez
+sekund (detektor setupů i paper, #1402); už vzniklé setupy a uzavřené paper
+obchody si nesou hodnoty, se kterými vznikly. Od v1.27 bez
 důvodu (aspoň 3 znaky) tlačítko uložit nejde — dřív se místo chybějícího důvodu
 zapsal náhradní text. Stádium jednotlivých šablon (Stín, Zkouška) se v Settings
 nemění, patří do Setupy → Knihovna.
@@ -2173,8 +2191,8 @@ a můžeš vrátit.
 | **Setup** | číslo a název šablony (T7 Pokračování trendu) |
 | **Ticker** | ticker z watchlistu (vč. pinovaného kontraktu) |
 | **Stádium** | Auto / Stín / Zkouška; u zkoušky čerpání „3/10 · -1.0 z -3.0 R“. Skončená zkouška se hlásí jako „Auto (zkouška vyčerpána)“ nebo „Auto (zkouška skončila)“ po změně mechaniky. Klik otevře dialog změny |
-| **Brána teď** | verdikt spočítaný **teď** týmiž funkcemi jako engine: ✓ pass, ✕ block, „· 24/30“ = nedostatek vzorku (n z minima), plus dolní mez ØR (LB) |
-| **ØR hrubě**, **ØR čistě** | dva sloupce: průměrný výsledek v R ze vzorku brány; čistě = po nákladech 1 mikra (komise + skluz 1 tick na stranu, ADR-0030). Krátký stop zvedá náklad v R — na ES může kladné hrubé ØR čistě klesnout pod nulu. Tooltip ukáže i **čistě v $**: součet za vzorek v reálných mikro dolarech při skutečném sizingu (kontrakty z kontextu setupu) — kladné R může v dolarech prodělat |
+| **Brána teď** | verdikt spočítaný **teď** týmiž funkcemi jako engine: ✓ pass, ✕ block, „· 24/30“ = nedostatek vzorku (n z minima), plus dolní mez ØR (LB; do v5 z hrubého R, od v6 z čistého) |
+| **ØR hrubě**, **ØR čistě** | dva sloupce: průměrný výsledek v R ze vzorku brány; čistě = po nákladech 1 mikra (do v5 konstanty ADR-0030: komise 2 × 0,62 $ + skluz 1 tick za obchod, MES 2,49 $ a MNQ 1,74 $; od v6 poplatek mikra ze Settings + skluz 1 tick na stranu, MES 3,72 $ a MNQ 2,22 $, #1402). Krátký stop zvedá náklad v R — na ES může kladné hrubé ØR čistě klesnout pod nulu. Tooltip ukáže i **čistě v $**: součet za vzorek v reálných mikro dolarech při skutečném sizingu (kontrakty z kontextu setupu) — kladné R může v dolarech prodělat |
 | **Průkaznost** | n / n potřebné — kolik vzorků by prokázalo edge +0,2 R (jednostranně 95 %, síla 80 %); n potřebné nikdy neklesne pod minimum brány (30). Pod minimem se samými stejnými výsledky (dva stopy po −1 R) se neodhaduje — „—“ |
 | **Rozhodnutelné** | za kolik seancí buňka při dnešním tempu vzorek nasbírá; „vzorek stačí“ = už ho má; **„v okně nedosáhne · max ~337/462“** = brána bere jen posledních 60 seancí, takže při dnešním tempu se do ní vejde nejvýš ~337 vzorků z potřebných 462 — edge +0,2 R brána neprokáže nikdy (rozhodne jen větší edge); „málo dat“ = n potřebné nejde odhadnout |
 
@@ -2362,7 +2380,9 @@ simuluje engine proti živé ceně (1min bary; market na open dalšího baru
 + 1 tick, limit při protnutí úrovně, stop-first uvnitř svíčky, výstup na
 stop s tickem proti, cíl přesně). Účet začíná na **50 000 $** v jednotkách
 plného kontraktu (= 5 000 $ na MES/MNQ, viz Risk management) a vede si
-vklady, equity a P/L po poplatcích. Každý uzavřený obchod skončí
+vklady, equity a P/L po poplatcích. Poplatek je podle instrumentu orderu
+z platné verze Settings → Risk management: ES a NQ 4,48 $, MES a MNQ 1,22 $ za
+kontrakt a obchod; změnu převezme i za běhu (#1402). Každý uzavřený obchod skončí
 **v Deníku** jako záznam typu obchod s tagem `paper` — plán vs. realita,
 MFE/MAE, výsledek v R i $ — a je tak vstupem kouče.
 

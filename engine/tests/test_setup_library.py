@@ -117,7 +117,8 @@ PARAMS = SetupParams(
 )
 
 
-def _cells() -> dict[str, LibraryCell]:
+def _cells(*, net_gate: bool = False) -> dict[str, LibraryCell]:
+    """Buňky Knihovny; výchozí konvence mechaniky v5 (hrubé R, #1402 ji nemění)."""
     cells = library_cells(
         _facts(),
         PARAMS,
@@ -125,6 +126,7 @@ def _cells() -> dict[str, LibraryCell]:
         now=NOW,
         mechanics_version=SETUP_MECHANICS_VERSION,
         point_values=POINT_VALUES,
+        net_gate=net_gate,
     )
     return {cell.cell: cell for cell in cells}
 
@@ -320,9 +322,39 @@ def test_razeni_podle_prukaznosti() -> None:
 
 
 def test_net_r_konvence_souhrnu() -> None:
-    # NQ: MNQ 2 $/b, round-trip 1,74 $; stop 16 b → náklad 0,054 R
-    assert net_r(1.0, 16.0, "NQZ6", POINT_VALUES) == pytest.approx(1.0 - 1.74 / 32)
-    assert net_r(1.0, 0.0, "ES", POINT_VALUES) is None
+    # NQ: MNQ 2 $/b, round-trip 1,74 $ (v5, 1 tick na obchod); stop 16 b → náklad 0,054 R
+    assert net_r(1.0, 16.0, "NQZ6", POINT_VALUES, per_side=False) == pytest.approx(1.0 - 1.74 / 32)
+    assert net_r(1.0, 0.0, "ES", POINT_VALUES, per_side=False) is None
+
+    # v6 (#1402): poplatek mikra z parametrů + skluz 1 tick na stranu — MNQ 2,22 $, MES 3,72 $
+    def v6(stop: float, symbol: str) -> float | None:
+        fee = SetupParams().fee_per_micro_contract_usd
+        return net_r(1.0, stop, symbol, POINT_VALUES, per_side=True, micro_fee_usd=fee)
+
+    assert v6(16.0, "NQZ6") == pytest.approx(1.0 - 2.22 / 32)
+    assert v6(2.4, "ES") == pytest.approx(1.0 - 3.72 / 12)
+    assert v6(0.0, "ES") is None
+    # Bez poplatku mikra náklad v6 nejde spočítat — žádný tichý default
+    with pytest.raises(ValueError, match="poplatek mikra"):
+        net_r(1.0, 2.4, "ES", POINT_VALUES, per_side=True)
+
+
+def test_bunka_pod_v6_brana_a_dukaz_nad_cistym_r() -> None:
+    """#1402 (kritérium A z #1334): pod v6 stojí brána, n potřebné, ØR čistě
+    i čistý P/L buňky na čistém R se skluzem na stranu; ØR hrubě a vzorek beze změny."""
+    v5 = _cells()["ES:failed_break"]
+    v6 = _cells(net_gate=True)["ES:failed_break"]
+    cost_v6 = 3.72 / (5 * 5.0)  # MES 1,22 + 2 × 1,25 $, stop 5 b ES → 0,1488 R
+    assert v6.gate_n == v5.gate_n == 10 and v6.gate_verdict == "insufficient"
+    assert v6.avg_r == v5.avg_r == pytest.approx(0.2)
+    assert v6.avg_net_r == pytest.approx(0.2 - cost_v6)
+    # Konstantní náklad posune průměr i dolní mez, σ (a tím n potřebné) nezmění
+    assert v6.gate_lb == pytest.approx(0.2 - cost_v6 - 1.645 * math.sqrt(2.4 / 10))
+    assert v6.n_needed == v5.n_needed == 371
+    assert v5.net_usd is not None and v6.net_usd is not None
+    # Čistý P/L: řádky bez `contracts` dopočte sizing — 500 $ / (5 b × 50 $) = 2
+    # kontrakty; v6 stojí 3,72 $ místo konstanty v5 2,49 $ na kontrakt a obchod
+    assert v5.net_usd - v6.net_usd == pytest.approx((3.72 - 2.49) * 2 * len(OUTCOMES))
 
 
 def test_souhrn_zkousky_a_stinu_uzivatele_zvlast() -> None:
@@ -339,6 +371,7 @@ def test_souhrn_zkousky_a_stinu_uzivatele_zvlast() -> None:
         all_versions=False,
         point_values=POINT_VALUES,
         fee_per_contract_usd=10.0,
+        fee_per_micro_contract_usd=1.22,
         account_usd=50_000.0,
         session_day=NOW.date(),
     )

@@ -85,6 +85,7 @@ from gexlens_engine.compute.setup_library import (
 )
 from gexlens_engine.compute.setup_summary import SimulationInput, summarize_setups
 from gexlens_engine.compute.setups import (
+    NET_R_GATE,
     SETUP_MECHANICS_VERSION,
     SetupParams,
     UserStage,
@@ -820,6 +821,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         `defaults` = hodnoty zapsané v kódu (ADR-0004) pro srovnání s platnou
         verzí; `current` je None jen před prvním startem enginu (seed dělá on).
+        `net_r_gate` = brána a Knihovna nad čistým R po nákladech mikra (#1402,
+        mechanika v6) — popisky UI se ptají serveru, ne prahu mechaniky.
         """
         repo = setup_params_repository()
         history = repo.history(limit=max(1, min(limit, 200)))
@@ -828,6 +831,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "history": [row.as_dict() for row in history],
             "defaults": params_to_dict(SetupParams()),
             "mechanics_version": SETUP_MECHANICS_VERSION,
+            "net_r_gate": NET_R_GATE,
         }
 
     class SetupParamsIn(BaseModel):
@@ -971,6 +975,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             all_versions=all_versions,
             point_values=POINT_VALUES,
             fee_per_contract_usd=params.fee_per_contract_usd,
+            fee_per_micro_contract_usd=params.fee_per_micro_contract_usd,
             account_usd=params.account_equity_usd,
             session_day=session_day,
             simulation=simulation,

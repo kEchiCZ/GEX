@@ -113,6 +113,10 @@ export interface LibraryParams {
   createdTs: string | null
   gateDays: number
   gateMinSamples: number
+  /** Brána a Knihovna nad čistým R po nákladech mikra (#1402, mechanika v6) */
+  netGate: boolean
+  /** Poplatek MES a MNQ za kontrakt a obchod (#1402) — náklad čistého R od v6 */
+  microFeeUsd: number
   trialBudgetSetups: number
   trialBudgetR: number
   disabledTemplates: string[]
@@ -138,6 +142,8 @@ export function libraryParams(response: SetupParamsResponse | null): LibraryPara
     createdTs: response?.current?.created_ts ?? null,
     gateDays: numberParam(source, defaults, 'template_gate_days', 60),
     gateMinSamples: numberParam(source, defaults, 'template_gate_min_samples', 30),
+    netGate: response?.net_r_gate === true,
+    microFeeUsd: numberParam(source, defaults, 'fee_per_micro_contract_usd', 1.22),
     trialBudgetSetups: numberParam(source, defaults, 'trial_budget_setups', 10),
     trialBudgetR: numberParam(source, defaults, 'trial_budget_r', 3),
     disabledTemplates: Array.isArray(disabled)
@@ -218,13 +224,21 @@ const GATE_VERDICT_TEXT: Record<GateVerdict, string> = {
   off: 'vypnuta (template_gate_enabled = false, jen přes API)',
 }
 
+/** Náklad čistého R do tooltipů: od v6 poplatek mikra z Nastavení (#1402). */
+function netCostText(params: LibraryParams): string {
+  return params.netGate
+    ? `poplatek mikra ${params.microFeeUsd} $ z Nastavení + skluz 1 tick na stranu`
+    : 'konstanty ADR-0030 do v5: komise 2 × 0,62 $ + skluz 1 tick za obchod'
+}
+
 /** Tooltip „Brána teď" — odrážky (vzor ivRankTooltip). */
 export function gateTooltip(cell: LibraryCell, params: LibraryParams): string {
   return [
     `Brána šablon spočítaná teď (${cell.ticker}, ${cellTitle(cell)}):`,
     `• verdikt: ${GATE_VERDICT_TEXT[cell.gate_verdict]}`,
     `• vzorek: ${cell.gate_n} uzavřených setupů se stopem v rozpočtu (minimum ${params.gateMinSamples})`,
-    `• dolní mez ØR (jednostranně 95 %): ${cell.gate_lb === null ? '— (pod 2 vzorky)' : `${signed(cell.gate_lb, 2)} R`}`,
+    `• dolní mez ØR ${params.netGate ? 'čistě' : 'hrubě'} (jednostranně 95 %): ${cell.gate_lb === null ? '— (pod 2 vzorky)' : `${signed(cell.gate_lb, 2)} R`}`,
+    ...(params.netGate ? [`• čistě = po nákladech 1 mikra: ${netCostText(params)}`] : []),
     `• okno: posledních ${params.gateDays} seancí, aktuální mechanika, i stínové setupy`,
     '',
     'Počítají ji tytéž funkce jako engine u nového setupu — nejde o poslední uložený verdikt.',
@@ -238,11 +252,11 @@ export function evidenceText(cell: Pick<LibraryCell, 'avg_r' | 'avg_net_r'>): st
 }
 
 /** Tooltip ØR hrubě/čistě. */
-export function evidenceTooltip(cell: LibraryCell): string {
+export function evidenceTooltip(cell: LibraryCell, params: LibraryParams): string {
   return [
     `Průměrný výsledek v R nad vzorkem brány (n = ${cell.gate_n}):`,
     `• hrubě: ${cell.avg_r === null ? '—' : `${signed(cell.avg_r, 2)} R`}`,
-    `• čistě: ${cell.avg_net_r === null ? '—' : `${signed(cell.avg_net_r, 2)} R`} — po nákladech 1 mikra (ADR-0030: komise + skluz 1 tick na stranu)`,
+    `• čistě: ${cell.avg_net_r === null ? '—' : `${signed(cell.avg_net_r, 2)} R`} — po nákladech 1 mikra (${netCostText(params)})`,
     '• čistě = R − round-trip náklad mikra / (stop b × hodnota bodu mikra)',
     `• čistě v $: ${cell.net_usd === null ? '—' : formatPnlUsd(cell.net_usd)} — Σ za vzorek v reálných mikro dolarech při skutečném sizingu (kontrakty z kontextu setupu)`,
     '',

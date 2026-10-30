@@ -1,5 +1,6 @@
 /** Settings → Risk management (#1185): serverové parametry účtu — sizing,
-brzdy, kritérium brány šablon a výchozí rozpočet zkoušky (#1323). Ukládá se jako
+poplatky podle instrumentu (#1402), brzdy, kritérium brány šablon a výchozí
+rozpočet zkoušky (#1323). Ukládá se jako
 nová verze parametrů setupů (append-only, povinný důvod bez náhradního textu)
 — engine přepne do sekund; existující setupy si nesou hodnoty vzniku.
 
@@ -47,11 +48,30 @@ const RISK_FIELDS: readonly RiskField[] = [
   },
   {
     key: 'fee_per_contract_usd',
-    label: 'Poplatek za kontrakt a obchod (USD)',
-    step: 0.5,
+    label: 'Poplatek za kontrakt a obchod (ES, NQ)',
+    step: 0.01,
     min: 0,
     max: 1000,
-    help: 'Round-trip v jednotkách aplikace (1 $ reálně na mikro × 10 = 10 $).',
+    help: [
+      'Round-trip ES a NQ v USD, reálně bez × 10 (ceník IBKR, USA, do 1 000 kontraktů měsíčně):',
+      '• za stranu 2,24 $ = komise 0,85 + CME 1,38 + NFA 0,01',
+      '• za obchod 2 × 2,24 = 4,48 $',
+      '• nese souhrn setupů, účet a paper u ES a NQ',
+    ].join('\n'),
+  },
+  {
+    key: 'fee_per_micro_contract_usd',
+    label: 'Poplatek za kontrakt a obchod (MES, MNQ)',
+    step: 0.01,
+    min: 0,
+    max: 1000,
+    help: [
+      'Round-trip MES a MNQ v USD, reálně (ceník IBKR, USA, do 1 000 kontraktů měsíčně):',
+      '• za stranu 0,61 $ = komise 0,25 + CME 0,35 + NFA 0,01',
+      '• za obchod 2 × 0,61 = 1,22 $',
+      '• od mechaniky v6 s ním počítá brána šablon a Knihovna (čisté R): + skluz 1 tick na stranu, MES 3,72 $ a MNQ 2,22 $ za obchod',
+      '• paper u MES a MNQ',
+    ].join('\n'),
   },
   {
     key: 'daily_brake_r',

@@ -19,6 +19,8 @@ konec týdne je otevření pondělní seance v neděli 17:00 CT (`week_start`).
 Brána šablon: obchodovatelná je jen šablona na daném symbolu (klíč šablona ×
 symbol, #1325), jejíž dolní mez očekávání (jednostranný 95% interval Ø R) za
 posledních N seancí je kladná při n ≥ 30 — ostatní se dál měří, ale neobchodují.
+Od mechaniky v6 je to Ø čistého R po nákladech ADR-0030 se skluzem na stranu
+(#1402; vstup dává `setup_library.gate_results`), do v5 hrubé R.
 Stádium buňky (#1323): uživatel ji může dát do Stínu (blok `user`, po brzdách)
 nebo do Zkoušky, která přebije bránu, dokud nevyčerpá rozpočet (`trial_usage`).
 Sizing a brzdy nepřebíjí nic.
@@ -45,7 +47,11 @@ from gexlens_engine.compute.settle import session_bounds
 #:     i insufficient (`gate_overridden`). Kontext nese `user_stage`,
 #:     `gate_overridden`, čerpání zkoušky a důkaz buňky (ØR hrubě/čistě,
 #:     n potřebné). `tradeable` tak u v3 může být True i při bráně block.
+#: 4 = #1402 (mechanika v6, `SetupEngine.net_gate`): `template_gate`, `_lb`
+#:     a `_n_needed` jsou nad čistým R po nákladech ADR-0030 se skluzem na
+#:     stranu, `template_gate_avg_net_r` a čistý P/L buňky s týmž nákladem.
 RISK_RULES_VERSION = 3
+RISK_RULES_VERSION_NET = 4
 
 TradeBlock = Literal[
     "stop_over_budget",

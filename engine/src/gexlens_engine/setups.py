@@ -29,6 +29,7 @@ from gexlens_engine.compute.gexfield import gamma_edges
 from gexlens_engine.compute.paper import POINT_VALUES
 from gexlens_engine.compute.risk import (
     RISK_RULES_VERSION,
+    RISK_RULES_VERSION_NET,
     BrakeState,
     RealizedSetup,
     TrialUsage,
@@ -41,9 +42,11 @@ from gexlens_engine.compute.risk import (
     week_start,
 )
 from gexlens_engine.compute.settle import trading_session_date
-from gexlens_engine.compute.setup_library import cell_evidence
+from gexlens_engine.compute.setup_library import cell_evidence, gate_results
+from gexlens_engine.compute.setup_summary import contract_fee_usd
 from gexlens_engine.compute.setups import (
     CUMDELTA_PRINTS,
+    NET_R_GATE,
     PATH_GAP_WAIT,
     SETUP_MECHANICS_VERSION,
     TRADING_CLASS_KEY,
@@ -165,16 +168,20 @@ def evidence_line(context: dict[str, object]) -> str:
 
     Začíná „edge neprokázán:“, když dolní mez ØR není kladná nebo ji vzorek
     ještě nedává — vždy u setupu, který pustila Zkouška. Push je chvíle, kdy
-    se na mobilu rozhoduje o penězích; štítek je mitigace z ADR-0038."""
+    se na mobilu rozhoduje o penězích; štítek je mitigace z ADR-0038. Od
+    pravidel v4 (#1402, mechanika v6) je dolní mez nad čistým R — štítek
+    „LB čistě“, ať se nezamění s hrubým ØR na začátku řádku."""
     n = context.get("template_gate_n")
     needed = context.get("template_gate_n_needed")
     lb = context.get("template_gate_lb")
     avg = context.get("template_gate_avg_r")
     net = context.get("template_gate_avg_net_r")
+    rules = context.get("risk_rules_version")
     sample = f"n {n}/{needed}" if isinstance(needed, int) else f"n {n}"
     gate = f"brána {context.get('template_gate')}"
     if isinstance(lb, float):
-        gate += f" (LB {lb:+.2f})"
+        basis = " čistě" if isinstance(rules, int) and rules >= RISK_RULES_VERSION_NET else ""
+        gate += f" (LB{basis} {lb:+.2f})"
     head = "Důkaz" if isinstance(lb, float) and lb > 0 else "edge neprokázán"
     return (
         f"{head}: ØR {_signed(avg if isinstance(avg, float) else None)} R "
@@ -211,6 +218,9 @@ class SetupEngine:
     # přepnout; pod v5 zůstává srovnání přes reset i přírůstek proti poslední
     # hodnotě jako dosud (ADR-0057 bod 11).
     cumdelta_prints: bool = CUMDELTA_PRINTS
+    # Brána šablon a důkaz buňky nad čistým R se skluzem na stranu (#1402,
+    # mechanika v6); pole kvůli testům obou konvencí, pod v5 hrubé R jako dosud.
+    net_gate: bool = NET_R_GATE
 
     def apply_params(self, params: SetupParams, version: int | None) -> bool:
         """Přepne prahy za běhu (nová verze ve store). Vrací True při změně.
@@ -892,11 +902,22 @@ class SetupEngine:
             risk_max_pct=params.risk_max_pct,
         )
         gate = template_gate(
-            [row.outcome_r for row in rows],
+            gate_results(
+                rows,
+                POINT_VALUES,
+                net=self.net_gate,
+                micro_fee_usd=params.fee_per_micro_contract_usd,
+            ),
             min_samples=params.template_gate_min_samples,
             enabled=params.template_gate_enabled,
         )
-        evidence = cell_evidence(rows, POINT_VALUES, min_samples=params.template_gate_min_samples)
+        evidence = cell_evidence(
+            rows,
+            POINT_VALUES,
+            min_samples=params.template_gate_min_samples,
+            micro_fee_usd=params.fee_per_micro_contract_usd,
+            net=self.net_gate,
+        )
         stage: UserStage = params.stage_of(self.symbol, template)
         trial = self._trial_in_force(template, now)
         if stage == "trial" and trial is None:
@@ -916,14 +937,20 @@ class SetupEngine:
             else:
                 block = "gate"
         context: dict[str, object] = {
-            "risk_rules_version": RISK_RULES_VERSION,
+            "risk_rules_version": RISK_RULES_VERSION_NET if self.net_gate else RISK_RULES_VERSION,
             "account_equity_usd": params.account_equity_usd,
             "point_value_usd": point_value,
             "risk_budget_usd": size.risk_budget_usd,
             "stop_points": size.stop_points,
             "contracts": size.contracts,
             "max_loss_usd": size.max_loss_usd,
-            "fee_usd": size.contracts * params.fee_per_contract_usd,
+            # Poplatek podle instrumentu setupu (ES, NQ plný kontrakt; mikra pole mikra)
+            "fee_usd": size.contracts
+            * contract_fee_usd(
+                self.symbol,
+                fee_per_contract_usd=params.fee_per_contract_usd,
+                fee_per_micro_contract_usd=params.fee_per_micro_contract_usd,
+            ),
             "affordable": size.affordable,
             "tradeable": block is None,
             "trade_block": block,

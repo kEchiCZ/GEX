@@ -2,13 +2,16 @@
 
 import asyncio
 import datetime as dt
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import pytest
 from sqlalchemy import create_engine
 
 from gexlens_engine.compute.paper import PaperOrder, evaluate_open, fill_entry, validate_levels
 from gexlens_engine.compute.risk import brake_state
+from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.paper import PaperBroker
 from gexlens_engine.runtime import PublisherLike
@@ -208,13 +211,46 @@ def test_broker_fill_cil_denik_a_equity(tmp_path: Path) -> None:
     )
     closed = repo.get_order(order_id)
     assert closed is not None and closed["status"] == "closed" and closed["exit_reason"] == "target"
-    # 2 kontrakty × 15 b × 50 $ = 1 500 $ − poplatky 2 × 10 $ = 1 480 $; R = 15/5 = 3
-    assert closed["pnl_usd"] == 1480.0 and closed["r_multiple"] == 3.0 and closed["mfe"] == 17.0
-    assert repo.equity() == 51480.0
+    # 2 kontrakty × 15 b × 50 $ = 1 500 $ − poplatky 2 × 4,48 $ (ES, #1402) = 1 491,04 $;
+    # R = 15/5 = 3
+    assert closed["pnl_usd"] == pytest.approx(1491.04) and closed["fees_usd"] == pytest.approx(8.96)
+    assert closed["r_multiple"] == 3.0 and closed["mfe"] == 17.0
+    assert repo.equity() == pytest.approx(51491.04)
     assert closed["journal_entry_id"] is not None
     kinds = [e["event"] for e in publisher.events if e.get("kind") == "paper"]
     assert kinds == ["filled", "closed"]
     assert any(e["channel"] == "paper.ES" for e in publisher.events)
+
+
+def test_broker_poplatek_podle_instrumentu_a_verze_parametru_za_behu(tmp_path: Path) -> None:
+    """#1402 (Rozhodnuto 30. 10.): poplatek podle instrumentu orderu — ES a NQ pole
+    plného kontraktu, MES a MNQ pole mikra — z platné verze parametrů; novou verzi
+    z Nastavení převezme broker za běhu, dřív se poplatek četl jen při startu."""
+    repo = _repo(tmp_path)
+    broker = PaperBroker("ES", repo, _Publisher())
+    assert broker.fee_usd(order(qty=2)) == pytest.approx(2 * 4.48)
+    assert broker.fee_usd(order(symbol="NQZ6", qty=1)) == pytest.approx(4.48)
+    assert broker.fee_usd(order(symbol="MES", qty=3)) == pytest.approx(3 * 1.22)
+    assert broker.fee_usd(order(symbol="MNQ", qty=1)) == pytest.approx(1.22)
+    order_id = _place(repo)
+    # Cesta ceny bez díry (#1345): minuta 1 nad úrovní, minuta 2 limit 7600 vyplní
+    asyncio.run(
+        broker.on_minute(
+            TS + dt.timedelta(minutes=2),
+            7599.0,
+            [bar(1, 7605, 7608, 7602, 7604), bar(2, 7603, 7604, 7599, 7600)],
+        )
+    )
+    assert repo.get_order(order_id)["status"] == "open"  # type: ignore[index]
+    # Nová verze parametrů (POST /setups/params) před uzavřením obchodu
+    broker.apply_params(replace(SetupParams(), fee_per_contract_usd=6.0))
+    asyncio.run(
+        broker.on_minute(TS + dt.timedelta(minutes=3), 7616.0, [bar(3, 7601, 7617, 7600, 7616)])
+    )
+    closed = repo.get_order(order_id)
+    assert closed is not None and closed["exit_reason"] == "target"
+    assert closed["fees_usd"] == pytest.approx(12.0)
+    assert closed["pnl_usd"] == pytest.approx(1500.0 - 12.0)
 
 
 def test_broker_stop_first_manual_close_a_settle(tmp_path: Path) -> None:
@@ -233,7 +269,7 @@ def test_broker_stop_first_manual_close_a_settle(tmp_path: Path) -> None:
         and stopped["exit_reason"] == "stop"
         and stopped["exit_price"] == 7594.75
     )
-    assert stopped["pnl_usd"] == (7594.75 - 7600.0) * 2 * 50 - 20.0
+    assert stopped["pnl_usd"] == pytest.approx((7594.75 - 7600.0) * 2 * 50 - 2 * 4.48)
     # Ruční zavření: open pozice + close_requested → výstup na open dalšího baru
     manual_id = _place(
         repo, order_type="market", entry_price=7600.0, created_ts=TS + dt.timedelta(minutes=4)

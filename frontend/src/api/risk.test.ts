@@ -1,6 +1,13 @@
 /** Risk framework malého účtu (#1185): čtení kontextu, štítky, bilance účtu. */
 import { describe, expect, it } from 'vitest'
-import { ACCOUNT_START_USD, accountPnlUsd, riskInfo, riskLabel, riskTooltip } from './setups'
+import {
+  ACCOUNT_FEE_LINES,
+  ACCOUNT_START_USD,
+  accountPnlUsd,
+  riskInfo,
+  riskLabel,
+  riskTooltip,
+} from './setups'
 import type { SetupRow } from './setups'
 
 const RISK = {
@@ -50,6 +57,9 @@ function row(context: Record<string, unknown>, outcome_r: number | null, closed:
 describe('riskInfo', () => {
   it('účet v jednotkách aplikace je 50 000 $ (MES/MNQ × 10)', () => {
     expect(ACCOUNT_START_USD).toBe(50000)
+    // Poplatky od #1402 bez × 10; součet účtu přes přechod míchá obě konvence (přiznat)
+    expect(ACCOUNT_FEE_LINES.join('\n')).toContain('poplatky setupů od 30. 10. 2026 ne')
+    expect(ACCOUNT_FEE_LINES.join('\n')).toContain('součet účtu obě konvence míchá')
   })
 
   it('čte kontext obchodovatelného setupu a skládá štítek', () => {
@@ -60,8 +70,21 @@ describe('riskInfo', () => {
     expect(riskLabel(info!)).toBe('1 ks · 400 $')
     const tooltip = riskTooltip(info!)
     expect(tooltip).toContain('Obchodovatelný: 1 kontrakt(y), ztráta na stopu 400 $')
-    expect(tooltip).toContain('prošla (dolní mez očekávání > 0) · n=35 · LB +0.12 R')
+    expect(tooltip).toContain('prošla (dolní mez Ø R hrubě > 0) · n=35 · LB +0.12 R')
     expect(tooltip).toContain('dnes -1.0 R, týden +2.5 R')
+    expect(tooltip).toContain(
+      'poplatky setupů od 30. 10. 2026 ne — jsou reálné za instrument setupu',
+    )
+    expect(tooltip).toContain('starší nesou 10 $ za kontrakt = 1 $ na mikro × 10')
+  })
+
+  it('pravidla v4 (#1402, mechanika v6): brána nad čistým R po nákladech mikra', () => {
+    const net = riskInfo({ context: { ...RISK, risk_rules_version: 4, template_gate: 'block' } })
+    expect(net!.gateNet).toBe(true)
+    expect(riskTooltip(net!)).toContain(
+      'zablokována (dolní mez Ø R čistě po nákladech mikra ≤ 0) · n=35',
+    )
+    expect(riskInfo({ context: { ...RISK, risk_rules_version: 3 } })!.gateNet).toBe(false)
   })
 
   it('stín nese důvod; řádek bez pravidel je null', () => {

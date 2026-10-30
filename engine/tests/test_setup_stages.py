@@ -792,6 +792,13 @@ def test_radek_dukazu_stitek_edge() -> None:
     )
     passed = {**blocked, "template_gate": "pass", "template_gate_lb": 0.05}
     assert setups_module.evidence_line(passed).startswith("Důkaz: ØR +0.09 R")
+    # Pravidla v4 (#1402, mechanika v6): dolní mez je nad čistým R, ne vedle hrubého ØR
+    assert setups_module.evidence_line({**blocked, "risk_rules_version": 4}).endswith(
+        "brána block (LB čistě -0.14)"
+    )
+    assert setups_module.evidence_line({**blocked, "risk_rules_version": 3}).endswith(
+        "brána block (LB -0.14)"
+    )
 
 
 def test_navrh_walk_forwardu_nenese_stadia() -> None:

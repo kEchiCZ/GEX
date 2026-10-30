@@ -2,10 +2,13 @@
 
 import datetime as dt
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from sqlalchemy import create_engine, inspect
 
+from gexlens_engine.__main__ import _apply_setup_params
 from gexlens_engine.compute.setups import (
     SETUP_MECHANICS_VERSION,
     SetupParams,
@@ -13,9 +16,12 @@ from gexlens_engine.compute.setups import (
     params_to_dict,
 )
 from gexlens_engine.config import Settings
+from gexlens_engine.instruments import InstrumentPipeline
+from gexlens_engine.paper import PaperBroker
 from gexlens_engine.runtime import PublisherLike
 from gexlens_engine.setups import SetupEngine, setup_params_from_settings
 from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.paper_store import PaperRepository
 from gexlens_engine.storage.setup_params_store import SetupParamsRepository
 from gexlens_engine.storage.setups_store import SetupsRepository
 
@@ -57,6 +63,22 @@ def test_params_from_dict_validuje() -> None:
     # int do float pole je v pořádku, chybějící klíče berou defaulty
     partial = params_from_dict({"wall_zone": 4})
     assert partial.wall_zone == 4.0 and partial.min_rrr == SetupParams().min_rrr
+
+
+def test_poplatky_podle_instrumentu_bez_x10() -> None:
+    """#1402 (Rozhodnuto 30. 10.): ceník IBKR bez ×10 — ES a NQ 2 × 2,24 $,
+    MES a MNQ 2 × 0,61 $ za obchod; verze uložená před polem mikra (params v2
+    na produkci) dostane default mikra; záporný poplatek = ValueError (422)."""
+    defaults = SetupParams()
+    assert defaults.fee_per_contract_usd == pytest.approx(2 * 2.24)
+    assert defaults.fee_per_micro_contract_usd == pytest.approx(2 * 0.61)
+    stored_v2 = {**params_to_dict(defaults), "fee_per_contract_usd": 4.48}
+    del stored_v2["fee_per_micro_contract_usd"]
+    assert params_from_dict(stored_v2).fee_per_micro_contract_usd == 1.22
+    assert params_from_dict({"fee_per_micro_contract_usd": 0}).fee_per_micro_contract_usd == 0.0
+    for name in ("fee_per_contract_usd", "fee_per_micro_contract_usd"):
+        with pytest.raises(ValueError, match=f"{name} nesmí být záporný"):
+            params_from_dict({name: -0.5})
 
 
 def test_setup_params_from_settings_mapuje_env() -> None:
@@ -151,3 +173,25 @@ def test_setup_engine_apply_params(tmp_path: Path) -> None:
     assert engine.params.wall_zone == 4.0 and engine.params_version == 2
     assert not engine.apply_params(SetupParams(wall_zone=4.0), version=2)
     assert engine._last_created["failed_break"] == ts  # noqa: SLF001
+
+
+def test_nova_verze_dojde_k_detektoru_i_paperu(tmp_path: Path) -> None:
+    """#1402: smyčka nastavení předá novou verzi všem spotřebitelům pipeline —
+    detektor setupů i paper (dřív četl poplatek jen při startu enginu, takže po
+    params v2 počítal dál 10 $). Pipeline bez setupů nebo paperu se přeskočí."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")
+    repo = SetupsRepository(db)
+    repo.ensure_schema()
+    oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    oi_repo.ensure_schema()
+    engine = SetupEngine(
+        symbol="ES", repository=repo, oi_repository=oi_repo, publisher=_Publisher()
+    )
+    paper_repo = PaperRepository(db)
+    broker = PaperBroker("ES", paper_repo, _Publisher())
+    full = SimpleNamespace(setup_engine=engine, paper_broker=broker)
+    bare = SimpleNamespace(setup_engine=None, paper_broker=None)
+    params = SetupParams(fee_per_contract_usd=5.0, fee_per_micro_contract_usd=1.5)
+    _apply_setup_params([cast(InstrumentPipeline, full), cast(InstrumentPipeline, bare)], params, 3)
+    assert (engine.params, engine.params_version) == (params, 3)
+    assert broker.params == params
