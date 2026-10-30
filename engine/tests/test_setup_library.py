@@ -325,10 +325,18 @@ def test_net_r_konvence_souhrnu() -> None:
     # NQ: MNQ 2 $/b, round-trip 1,74 $ (v5, 1 tick na obchod); stop 16 b → náklad 0,054 R
     assert net_r(1.0, 16.0, "NQZ6", POINT_VALUES, per_side=False) == pytest.approx(1.0 - 1.74 / 32)
     assert net_r(1.0, 0.0, "ES", POINT_VALUES, per_side=False) is None
-    # v6 (#1402): skluz 1 tick na stranu — MNQ 2,24 $, MES 3,74 $
-    assert net_r(1.0, 16.0, "NQZ6", POINT_VALUES, per_side=True) == pytest.approx(1.0 - 2.24 / 32)
-    assert net_r(1.0, 2.4, "ES", POINT_VALUES, per_side=True) == pytest.approx(1.0 - 3.74 / 12)
-    assert net_r(1.0, 0.0, "ES", POINT_VALUES, per_side=True) is None
+
+    # v6 (#1402): poplatek mikra z parametrů + skluz 1 tick na stranu — MNQ 2,22 $, MES 3,72 $
+    def v6(stop: float, symbol: str) -> float | None:
+        fee = SetupParams().fee_per_micro_contract_usd
+        return net_r(1.0, stop, symbol, POINT_VALUES, per_side=True, micro_fee_usd=fee)
+
+    assert v6(16.0, "NQZ6") == pytest.approx(1.0 - 2.22 / 32)
+    assert v6(2.4, "ES") == pytest.approx(1.0 - 3.72 / 12)
+    assert v6(0.0, "ES") is None
+    # Bez poplatku mikra náklad v6 nejde spočítat — žádný tichý default
+    with pytest.raises(ValueError, match="poplatek mikra"):
+        net_r(1.0, 2.4, "ES", POINT_VALUES, per_side=True)
 
 
 def test_bunka_pod_v6_brana_a_dukaz_nad_cistym_r() -> None:
@@ -336,7 +344,7 @@ def test_bunka_pod_v6_brana_a_dukaz_nad_cistym_r() -> None:
     i čistý P/L buňky na čistém R se skluzem na stranu; ØR hrubě a vzorek beze změny."""
     v5 = _cells()["ES:failed_break"]
     v6 = _cells(net_gate=True)["ES:failed_break"]
-    cost_v6 = 3.74 / (5 * 5.0)  # stop 5 b ES → 0,1496 R
+    cost_v6 = 3.72 / (5 * 5.0)  # MES 1,22 + 2 × 1,25 $, stop 5 b ES → 0,1488 R
     assert v6.gate_n == v5.gate_n == 10 and v6.gate_verdict == "insufficient"
     assert v6.avg_r == v5.avg_r == pytest.approx(0.2)
     assert v6.avg_net_r == pytest.approx(0.2 - cost_v6)
@@ -345,8 +353,8 @@ def test_bunka_pod_v6_brana_a_dukaz_nad_cistym_r() -> None:
     assert v6.n_needed == v5.n_needed == 371
     assert v5.net_usd is not None and v6.net_usd is not None
     # Čistý P/L: řádky bez `contracts` dopočte sizing — 500 $ / (5 b × 50 $) = 2
-    # kontrakty; v6 je dražší o 1 tick MES (1,25 $) na kontrakt a obchod
-    assert v5.net_usd - v6.net_usd == pytest.approx(1.25 * 2 * len(OUTCOMES))
+    # kontrakty; v6 stojí 3,72 $ místo konstanty v5 2,49 $ na kontrakt a obchod
+    assert v5.net_usd - v6.net_usd == pytest.approx((3.72 - 2.49) * 2 * len(OUTCOMES))
 
 
 def test_souhrn_zkousky_a_stinu_uzivatele_zvlast() -> None:
@@ -363,6 +371,7 @@ def test_souhrn_zkousky_a_stinu_uzivatele_zvlast() -> None:
         all_versions=False,
         point_values=POINT_VALUES,
         fee_per_contract_usd=10.0,
+        fee_per_micro_contract_usd=1.22,
         account_usd=50_000.0,
         session_day=NOW.date(),
     )

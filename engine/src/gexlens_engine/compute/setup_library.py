@@ -66,19 +66,31 @@ class CellEvidence:
 
 
 def gate_results(
-    rows: Sequence[RealizedSetup], point_values: Mapping[str, float], *, net: bool
+    rows: Sequence[RealizedSetup],
+    point_values: Mapping[str, float],
+    *,
+    net: bool,
+    micro_fee_usd: float,
 ) -> list[float]:
     """Vstup brány šablon z řádků `risk.affordable_rows` — jediný pro engine i Knihovnu.
 
     `net=False` (mechanika do v5) = hrubé R; `net=True` (v6, #1402, kritérium A
-    z #1334) = čisté R po nákladech ADR-0030 se skluzem na stranu (`net_r`).
-    Řádek, který nejde ocenit (mikro bez hodnoty bodu, nulový stop), do vzorku
-    nevstoupí: brána z něj edge prokázat nesmí. U ES a NQ nenastává — stop 0 b
-    není v rozpočtu a `affordable_rows` ho vyřadí dřív."""
+    z #1334) = čisté R po nákladech ADR-0030 se skluzem na stranu (`net_r`)
+    s poplatkem mikra z parametrů (`micro_fee_usd`). Řádek, který nejde ocenit
+    (mikro bez hodnoty bodu, nulový stop), do vzorku nevstoupí: brána z něj
+    edge prokázat nesmí. U ES a NQ nenastává — stop 0 b není v rozpočtu
+    a `affordable_rows` ho vyřadí dřív."""
     if not net:
         return [row.outcome_r for row in rows]
     nets = (
-        net_r(row.outcome_r, abs(row.entry - row.stop), row.symbol, point_values, per_side=True)
+        net_r(
+            row.outcome_r,
+            abs(row.entry - row.stop),
+            row.symbol,
+            point_values,
+            per_side=True,
+            micro_fee_usd=micro_fee_usd,
+        )
         for row in rows
     )
     return [value for value in nets if value is not None]
@@ -89,26 +101,37 @@ def cell_evidence(
     point_values: Mapping[str, float],
     *,
     min_samples: int,
+    micro_fee_usd: float,
     net: bool = NET_R_GATE,
 ) -> CellEvidence:
     """ØR hrubě/čistě a potřebný vzorek z řádků `risk.affordable_rows` —
     jediný výpočet pro push nového setupu i Knihovnu. `min_samples` = minimum
     brány (`template_gate_min_samples`), pod které n potřebné neklesne.
-    `net` = konvence mechaniky: od v6 čisté R se skluzem na stranu i pro n
-    potřebné (týž vstup jako brána), do v5 n potřebné z hrubého R a čisté R
-    s 1 tickem na obchod jako dosud."""
+    `net` = konvence mechaniky: od v6 čisté R se skluzem na stranu a poplatkem
+    mikra z parametrů i pro n potřebné (týž vstup jako brána), do v5 n potřebné
+    z hrubého R a čisté R s konstantami (1 tick na obchod) jako dosud."""
     if not rows:
         return CellEvidence(avg_r=None, avg_net_r=None, n_needed=None)
     results = [row.outcome_r for row in rows]
     nets = [
-        net_r(row.outcome_r, abs(row.entry - row.stop), row.symbol, point_values, per_side=net)
+        net_r(
+            row.outcome_r,
+            abs(row.entry - row.stop),
+            row.symbol,
+            point_values,
+            per_side=net,
+            micro_fee_usd=micro_fee_usd,
+        )
         for row in rows
     ]
     priced = [value for value in nets if value is not None]
     return CellEvidence(
         avg_r=sum(results) / len(results),
         avg_net_r=sum(priced) / len(priced) if len(priced) == len(rows) else None,
-        n_needed=samples_needed(gate_results(rows, point_values, net=net), min_samples=min_samples),
+        n_needed=samples_needed(
+            gate_results(rows, point_values, net=net, micro_fee_usd=micro_fee_usd),
+            min_samples=min_samples,
+        ),
     )
 
 
@@ -124,7 +147,8 @@ def cell_net_usd(
     (#1323): kontrakty z kontextu setupu, starší řádky bez nich dopočte
     `position_size` stejně jako brána `affordable` (`point_value_usd` = bod
     plného kontraktu vlastního symbolu). Kladné ØR v R může v dolarech prodělat
-    (krátké stopy nesou vyšší náklad a víc kontraktů). None = prázdný vzorek
+    (krátké stopy nesou vyšší náklad a víc kontraktů). Náklad v konvenci
+    `per_side`, od v6 s poplatkem mikra z `params`. None = prázdný vzorek
     nebo řádek, který nejde ocenit (součet by byl z jiného vzorku)."""
     if not rows:
         return None
@@ -147,6 +171,7 @@ def cell_net_usd(
             row.symbol,
             point_values,
             per_side=per_side,
+            micro_fee_usd=params.fee_per_micro_contract_usd,
         )
         if value is None:
             return None
@@ -301,12 +326,21 @@ def library_cells(
                 risk_max_pct=params.risk_max_pct,
             )
             gate = template_gate(
-                gate_results(rows, point_values, net=net_gate),
+                gate_results(
+                    rows,
+                    point_values,
+                    net=net_gate,
+                    micro_fee_usd=params.fee_per_micro_contract_usd,
+                ),
                 min_samples=params.template_gate_min_samples,
                 enabled=params.template_gate_enabled,
             )
             evidence = cell_evidence(
-                rows, point_values, min_samples=params.template_gate_min_samples, net=net_gate
+                rows,
+                point_values,
+                min_samples=params.template_gate_min_samples,
+                micro_fee_usd=params.fee_per_micro_contract_usd,
+                net=net_gate,
             )
             stage = params.stage_of(ticker, template)
             trial_state: TrialState | None = None

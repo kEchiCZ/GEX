@@ -1,6 +1,7 @@
 """Risk framework malého účtu (#1185 A): sizing, brzdy, brána šablon, kontext setupu."""
 
 import datetime as dt
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -594,14 +595,15 @@ def test_brana_es_a_nq_maji_vlastni_vstup_a_verdikt(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("net_gate", "verdict", "rules", "lb"),
-    [(False, "pass", RISK_RULES_VERSION, 0.0553609547), (True, "block", 4, -0.256305712)],
+    [(False, "pass", RISK_RULES_VERSION, 0.0553609547), (True, "block", 4, -0.2546390453)],
 )
 def test_brana_enginu_pod_v6_nad_cistym_r(
     tmp_path: Path, net_gate: bool, verdict: str, rules: int, lb: float
 ) -> None:
     """#1402 (kritérium A z #1334): ES se stopem 2,4 b a Ø +0,28 R hrubě projde
-    bránou mechaniky v5; pod v6 (náklad 3,74 $ / 12 $ = 0,312 R) má čistou dolní
-    mez zápornou a zablokuje. Golden `template_gate_net_1402.json`, případ ES."""
+    bránou mechaniky v5; pod v6 (náklad mikra z parametrů 1,22 $ + 2 ticky MES
+    = 3,72 $ / 12 $ = 0,31 R) má čistou dolní mez zápornou a zablokuje. Golden
+    `template_gate_net_1402.json`, případ ES."""
     engine, repository = _setup_engine(tmp_path)
     engine.net_gate = net_gate
     shadow: dict[str, object] = {"affordable": True, "tradeable": False}
@@ -614,5 +616,26 @@ def test_brana_enginu_pod_v6_nad_cistym_r(
     assert risk["risk_rules_version"] == rules
     assert risk["trade_block"] == (None if verdict == "pass" else "gate")
     assert risk["template_gate_avg_r"] == pytest.approx(0.28)
-    cost = (3.74 if net_gate else 2.49) / (2.4 * 5.0)
+    cost = (3.72 if net_gate else 2.49) / (2.4 * 5.0)
     assert risk["template_gate_avg_net_r"] == pytest.approx(0.28 - cost)
+
+
+def test_brana_enginu_pod_v6_bere_poplatek_mikra_z_parametru(tmp_path: Path) -> None:
+    """#1402 (Rozhodnuto 30. 10.): náklad brány pod v6 = poplatek mikra z platné
+    verze parametrů + 1 tick MES na stranu — nová verze z Nastavení platí hned
+    (`apply_params`), žádná konstanta. `fee_usd` setupu ES nese poplatek plného
+    kontraktu bez ×10."""
+    engine, repository = _setup_engine(tmp_path)
+    engine.net_gate = True
+    shadow: dict[str, object] = {"affordable": True, "tradeable": False}
+    _history(repository, "ES", [0.8] * 20 + [-0.76] * 10, entry=7600.0, stop=7597.6, context=shadow)
+    now = OPEN + dt.timedelta(hours=16)
+    realized = engine._load_realized(now)
+    engine.apply_params(
+        replace(engine.params, fee_per_contract_usd=5.0, fee_per_micro_contract_usd=3.0), 7
+    )
+    risk, _ = engine._risk_context(realized, "failed_break", 7600.0, 7597.6, 50.0, now)
+    cost = (3.0 + 2 * 1.25) / (2.4 * 5.0)
+    assert risk["template_gate_avg_net_r"] == pytest.approx(0.28 - cost)
+    assert risk["template_gate_lb"] == pytest.approx(0.0553609547 - cost, abs=1e-9)
+    assert risk["fee_usd"] == pytest.approx(risk["contracts"] * 5.0)  # type: ignore[operator]

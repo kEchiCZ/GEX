@@ -971,6 +971,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             all_versions=all_versions,
             point_values=POINT_VALUES,
             fee_per_contract_usd=params.fee_per_contract_usd,
+            fee_per_micro_contract_usd=params.fee_per_micro_contract_usd,
             account_usd=params.account_equity_usd,
             session_day=session_day,
             simulation=simulation,

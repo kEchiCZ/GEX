@@ -137,7 +137,8 @@ def load(url: str | URL) -> tuple[list[Row], dict[str, int]]:
                 band_class=str(context["band_class"]),
                 session=trading_session_date(fact.created_ts),
                 r=r,
-                net=net_r(r, fact.stop_points, fact.symbol, POINT_VALUES),
+                # Konstanty ADR-0030 v5 i po bumpu v6 (měření #1064 stojí na nich)
+                net=net_r(r, fact.stop_points, fact.symbol, POINT_VALUES, per_side=False),
             )
         )
     return rows, funnel

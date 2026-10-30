@@ -43,6 +43,7 @@ from gexlens_engine.compute.risk import (
 )
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setup_library import cell_evidence, gate_results
+from gexlens_engine.compute.setup_summary import contract_fee_usd
 from gexlens_engine.compute.setups import (
     CUMDELTA_PRINTS,
     NET_R_GATE,
@@ -897,12 +898,21 @@ class SetupEngine:
             risk_max_pct=params.risk_max_pct,
         )
         gate = template_gate(
-            gate_results(rows, POINT_VALUES, net=self.net_gate),
+            gate_results(
+                rows,
+                POINT_VALUES,
+                net=self.net_gate,
+                micro_fee_usd=params.fee_per_micro_contract_usd,
+            ),
             min_samples=params.template_gate_min_samples,
             enabled=params.template_gate_enabled,
         )
         evidence = cell_evidence(
-            rows, POINT_VALUES, min_samples=params.template_gate_min_samples, net=self.net_gate
+            rows,
+            POINT_VALUES,
+            min_samples=params.template_gate_min_samples,
+            micro_fee_usd=params.fee_per_micro_contract_usd,
+            net=self.net_gate,
         )
         stage: UserStage = params.stage_of(self.symbol, template)
         trial = self._trial_in_force(template, now)
@@ -930,7 +940,13 @@ class SetupEngine:
             "stop_points": size.stop_points,
             "contracts": size.contracts,
             "max_loss_usd": size.max_loss_usd,
-            "fee_usd": size.contracts * params.fee_per_contract_usd,
+            # Poplatek podle instrumentu setupu (ES, NQ plný kontrakt; mikra pole mikra)
+            "fee_usd": size.contracts
+            * contract_fee_usd(
+                self.symbol,
+                fee_per_contract_usd=params.fee_per_contract_usd,
+                fee_per_micro_contract_usd=params.fee_per_micro_contract_usd,
+            ),
             "affordable": size.affordable,
             "tradeable": block is None,
             "trade_block": block,

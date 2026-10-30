@@ -10,8 +10,10 @@ Konvence (převzaté z dosavadního UI, sémantika výsledků se nemění):
 - **uzavřený** = status ≠ active s `outcome_r`; **výhra** = `outcome_r > 0`
   (i kladný timeout), prohra = zbytek;
 - **1 kontrakt**: P/L = R × |entry − stop| × hodnota bodu (`paper.POINT_VALUES`),
-  poplatky = počet uzavřených × poplatek za kontrakt a obchod (parametry setupů);
-  hrubý − poplatky = čistý. Každý setup rovným dílem 1 kontrakt, i stínový;
+  poplatky = Σ poplatek za kontrakt a obchod podle instrumentu uzavřených
+  (parametry setupů: ES a NQ pole plného kontraktu, mikra pole mikra,
+  `contract_fee_usd`, #1402); hrubý − poplatky = čistý. Každý setup rovným
+  dílem 1 kontrakt, i stínový;
 - **obchodovatelné / stínové / bez pravidel** podle `context.tradeable` (#1185):
   stín se měří, ale neobchoduje; řádky před pravidly risk kontext nemají;
   **zkouška** (#1323) = obchodovatelné s `gate_overridden`, podmnožina
@@ -37,6 +39,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from gexlens_engine.compute.paper import TICK_SIZES
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setups import (
     NET_R_GATE,
@@ -55,21 +58,46 @@ BAND_GATES = frozenset({"pass", "block", "unknown"})
 #: Mikro protějšek plného kontraktu pro USD simulaci (#679) — zrcadlo
 #: `MICRO_SYMBOLS` kalkulačky pozice ve frontendu (instrument/position.ts)
 MICRO_SYMBOLS: dict[str, str] = {"ES": "MES", "NQ": "MNQ", "RTY": "M2K", "YM": "MYM"}
-#: Náklad round-trip na 1 mikro kontrakt (ADR-0030): komise 2 × 0,62 $ + 1 tick
-#: slippage za celý obchod (tick MES 1,25 $, MNQ 0,50 $) — konvence mechaniky
-#: do v5. Text ADR-0030 uvádí 1 tick na stranu; konstanty ho neodrážely (#1326)
+#: Kořeny mikro kontraktů — poplatek z pole mikra (`contract_fee_usd`)
+MICRO_ROOTS: frozenset[str] = frozenset(MICRO_SYMBOLS.values())
+#: Náklad round-trip na 1 mikro kontrakt (ADR-0030) v konvenci mechaniky do v5:
+#: komise 2 × 0,62 $ + 1 tick slippage za celý obchod (tick MES 1,25 $, MNQ
+#: 0,50 $). Text ADR-0030 uvádí 1 tick na stranu; konstanty ho neodrážely
+#: (#1326). Od v6 náklad počítá `round_trip_cost_usd` z parametrů; konstanty
+#: zůstávají pro řádky v5 a skripty měření nad nimi (`scripts/measure_*`).
 ROUND_TRIP_COST_USD: dict[str, float] = {"MES": 2.49, "MNQ": 1.74}
-#: Táž komise + 1 tick slippage na každou stranu (ADR-0030 se skluzem, #1402) —
-#: konvence od mechaniky v6 (`NET_R_GATE`); konstanty do doby, než je nahradí
-#: měřená exekuce
-ROUND_TRIP_COST_PER_SIDE_USD: dict[str, float] = {"MES": 3.74, "MNQ": 2.24}
 DEFAULT_ROUND_TRIP_COST_USD = 2.5
 
 
-def round_trip_cost_usd(micro: str, *, per_side: bool) -> float:
-    """Round-trip náklad 1 mikra: `per_side` = skluz na každou stranu (v6), jinak na obchod (v5)."""
-    costs = ROUND_TRIP_COST_PER_SIDE_USD if per_side else ROUND_TRIP_COST_USD
-    return costs.get(micro, DEFAULT_ROUND_TRIP_COST_USD)
+def contract_fee_usd(
+    symbol: str, *, fee_per_contract_usd: float, fee_per_micro_contract_usd: float
+) -> float:
+    """Poplatek za kontrakt a obchod podle instrumentu (Rozhodnuto 30. 10., #1402):
+    mikro (MES, MNQ, M2K, MYM) z pole mikra, ostatní z pole plného kontraktu."""
+    if symbol_root(symbol) in MICRO_ROOTS:
+        return fee_per_micro_contract_usd
+    return fee_per_contract_usd
+
+
+def round_trip_cost_usd(
+    micro: str, point_value: float, *, per_side: bool, micro_fee_usd: float | None
+) -> float | None:
+    """Round-trip náklad 1 mikra (ADR-0030) v konvenci mechaniky.
+
+    Do v5 (`per_side=False`): konstanty `ROUND_TRIP_COST_USD`, poplatek
+    z parametrů se nečte. Od v6 (#1402, `NET_R_GATE`): poplatek mikra z parametrů
+    (`SetupParams.fee_per_micro_contract_usd`) + 1 tick skluzu na každou stranu
+    (`TICK_SIZES` × bod mikra): MES 1,22 + 2 × 1,25 = 3,72 $, MNQ 1,22 + 2 × 0,50
+    = 2,22 $. Bez poplatku mikra náklad v6 nejde spočítat (ValueError, žádný
+    tichý default). None = v6 a mikro bez známého ticku (nic se nevymýšlí)."""
+    if not per_side:
+        return ROUND_TRIP_COST_USD.get(micro, DEFAULT_ROUND_TRIP_COST_USD)
+    if micro_fee_usd is None:
+        raise ValueError(f"Náklad {micro} se skluzem na stranu potřebuje poplatek mikra")
+    tick = TICK_SIZES.get(micro)
+    if tick is None:
+        return None
+    return micro_fee_usd + 2 * tick * point_value
 
 
 def net_r(
@@ -79,20 +107,25 @@ def net_r(
     point_values: Mapping[str, float],
     *,
     per_side: bool = NET_R_GATE,
+    micro_fee_usd: float | None = None,
 ) -> float | None:
     """R po nákladech ADR-0030 na 1 mikro kontrakt (#1323, Knihovna a push;
     od v6 i brána, #1402): R − round-trip náklad mikra / (stop b × hodnota bodu mikra).
 
     Táž konvence jako USD simulace souhrnu (`usd_simulation`); na ES při
     mediánu stopu T7 2,4 b stojí náklad ~0,2 R (v6 ~0,31 R). `per_side` volí
-    konvenci nákladu (`round_trip_cost_usd`), výchozí podle mechaniky.
-    None = mikro bez hodnoty bodu nebo nulový stop (nic se nevymýšlí)."""
+    konvenci nákladu (`round_trip_cost_usd`), výchozí podle mechaniky;
+    `micro_fee_usd` = poplatek mikra z parametrů, povinný od v6.
+    None = mikro bez hodnoty bodu nebo ticku nebo nulový stop (nic se nevymýšlí)."""
     root = symbol_root(symbol)
     micro = MICRO_SYMBOLS.get(root, root)
     point = point_values.get(micro)
     if point is None or stop_points <= 0:
         return None
-    return outcome_r - round_trip_cost_usd(micro, per_side=per_side) / (stop_points * point)
+    cost = round_trip_cost_usd(micro, point, per_side=per_side, micro_fee_usd=micro_fee_usd)
+    if cost is None:
+        return None
+    return outcome_r - cost / (stop_points * point)
 
 
 def net_usd_micro(
@@ -103,18 +136,22 @@ def net_usd_micro(
     point_values: Mapping[str, float],
     *,
     per_side: bool = NET_R_GATE,
+    micro_fee_usd: float | None = None,
 ) -> float | None:
     """Čistý P/L v reálných mikro dolarech (#1323, Knihovna): kontrakty ×
     (R × stop b × hodnota bodu mikra − round-trip náklad mikra, ADR-0030).
 
     Konvence `usd_simulation`; kontrakty jsou sizing aplikace (ADR-0038:
-    1 kontrakt v aplikaci = 1 mikro reálně). None = mikro bez hodnoty bodu."""
+    1 kontrakt v aplikaci = 1 mikro reálně); náklad jako `net_r`. None = mikro
+    bez hodnoty bodu nebo ticku."""
     root = symbol_root(symbol)
     micro = MICRO_SYMBOLS.get(root, root)
     point = point_values.get(micro)
     if point is None:
         return None
-    cost = round_trip_cost_usd(micro, per_side=per_side)
+    cost = round_trip_cost_usd(micro, point, per_side=per_side, micro_fee_usd=micro_fee_usd)
+    if cost is None:
+        return None
     return contracts * (outcome_r * stop_points * point - cost)
 
 
@@ -412,7 +449,10 @@ class SetupSummary:
     #: Řádky zvolených verzí se značkou `context.excluded` (#1346, vznik nad
     #: zamrzlým spotem) a ne po settle — vyřazené stejně, v DB zůstávají
     excluded_count: int
+    #: Poplatky za kontrakt a obchod podle instrumentu (`contract_fee_usd`):
+    #: ES a NQ, mikra (MES, MNQ)
     fee_per_contract_usd: float
+    fee_per_micro_contract_usd: float
     account_usd: float
     #: Symboly bez známé hodnoty bodu — jejich USD se nepočítají (nic se nevymýšlí)
     unpriced_symbols: list[str]
@@ -452,15 +492,40 @@ def _closed_chronological(facts: Iterable[SetupFact]) -> list[SetupFact]:
     return sorted(closed, key=lambda fact: (fact.closed_ts, fact.id))
 
 
+def _priced(
+    closed: Sequence[SetupFact],
+    point_values: Mapping[str, float],
+    fee_per_contract_usd: float,
+    fee_per_micro_contract_usd: float,
+) -> tuple[list[float], float]:
+    """P/L na 1 kontrakt oceněných uzavřených setupů a Σ jejich poplatků podle
+    instrumentu (`contract_fee_usd`); neoceněný setup nemá P/L ani poplatek."""
+    pnls: list[float] = []
+    fees = 0.0
+    for fact in closed:
+        usd = _usd(fact, point_values)
+        if usd is None:
+            continue
+        pnls.append(usd)
+        fees += contract_fee_usd(
+            fact.symbol,
+            fee_per_contract_usd=fee_per_contract_usd,
+            fee_per_micro_contract_usd=fee_per_micro_contract_usd,
+        )
+    return pnls, fees
+
+
 def group_stats(
-    facts: Sequence[SetupFact], point_values: Mapping[str, float], fee_per_contract_usd: float
+    facts: Sequence[SetupFact],
+    point_values: Mapping[str, float],
+    fee_per_contract_usd: float,
+    fee_per_micro_contract_usd: float,
 ) -> GroupStats:
     closed = [fact for fact in facts if fact.is_closed]
     results = [fact.outcome_r for fact in closed if fact.outcome_r is not None]
-    pnls = [usd for usd in (_usd(fact, point_values) for fact in closed) if usd is not None]
+    pnls, fees = _priced(closed, point_values, fee_per_contract_usd, fee_per_micro_contract_usd)
     wins = sum(1 for value in results if value > 0)
     gross = sum(pnls)
-    fees = len(pnls) * fee_per_contract_usd
     return GroupStats(
         count=len(facts),
         active=sum(1 for fact in facts if fact.status == "active"),
@@ -509,6 +574,7 @@ def day_stats(
     *,
     point_values: Mapping[str, float],
     fee_per_contract_usd: float,
+    fee_per_micro_contract_usd: float,
     account_usd: float,
 ) -> DayStats:
     """Seance `session_day`: uzavřené podle `closed_ts`, aktivní podle vzniku (#748)."""
@@ -520,7 +586,7 @@ def day_stats(
 
     today = [fact for fact in facts if trading_session_date(stamp(fact)) == session_day]
     closed = [fact for fact in today if fact.is_closed]
-    pnls = [usd for usd in (_usd(fact, point_values) for fact in closed) if usd is not None]
+    pnls, fees = _priced(closed, point_values, fee_per_contract_usd, fee_per_micro_contract_usd)
     wins = sum(1 for fact in closed if (fact.outcome_r or 0.0) > 0)
     risks = [
         fact.stop_points * point
@@ -528,7 +594,6 @@ def day_stats(
         if (point := _point_value(fact, point_values)) is not None
     ]
     gross = sum(pnls)
-    fees = len(pnls) * fee_per_contract_usd
     base = account_usd if account_usd > 0 else math.inf
     return DayStats(
         session=session_day.isoformat(),
@@ -619,11 +684,13 @@ def usd_simulation(
     simulation: SimulationInput,
     point_values: Mapping[str, float],
     *,
+    micro_fee_usd: float,
     per_side: bool = NET_R_GATE,
 ) -> UsdSimulation:
     """Mikro sizing #679: kontrakty = ⌊účet × riziko % / (stop b × bod mikra)⌋,
     P/L = kontrakty × (R × stop × bod − round-trip náklad); 0 kontraktů = přeskočeno.
-    Náklad podle konvence mechaniky (`round_trip_cost_usd`, od v6 skluz na stranu)."""
+    Náklad podle konvence mechaniky (`round_trip_cost_usd`: do v5 konstanty, od v6
+    poplatek mikra z parametrů a skluz na stranu); mikro bez nákladu = přeskočeno."""
     risk_usd = simulation.account_usd * simulation.risk_pct / 100.0
     skipped = 0
     per_trade: list[tuple[str, float]] = []
@@ -635,10 +702,10 @@ def usd_simulation(
             skipped += 1
             continue
         contracts = math.floor(risk_usd / (fact.stop_points * point))
-        if contracts <= 0:
+        cost = round_trip_cost_usd(micro, point, per_side=per_side, micro_fee_usd=micro_fee_usd)
+        if contracts <= 0 or cost is None:
             skipped += 1
             continue
-        cost = round_trip_cost_usd(micro, per_side=per_side)
         pnl = contracts * fact.outcome_r * fact.stop_points * point - contracts * cost
         assert fact.closed_ts is not None
         per_trade.append((trading_session_date(fact.closed_ts).isoformat(), pnl))
@@ -656,6 +723,7 @@ def performance(
     *,
     point_values: Mapping[str, float],
     simulation: SimulationInput | None,
+    micro_fee_usd: float,
 ) -> Performance:
     closed = _closed_chronological(facts)
     sums = _daily_sums(
@@ -677,7 +745,7 @@ def performance(
         sharpe_30=annualized_sharpe(values[-30:]),
         max_drawdown_r=worst,
         simulation=(
-            usd_simulation(closed, simulation, point_values)
+            usd_simulation(closed, simulation, point_values, micro_fee_usd=micro_fee_usd)
             if simulation is not None and simulation.account_usd > 0 and simulation.risk_pct > 0
             else None
         ),
@@ -691,6 +759,7 @@ def summarize_setups(
     all_versions: bool,
     point_values: Mapping[str, float],
     fee_per_contract_usd: float,
+    fee_per_micro_contract_usd: float,
     account_usd: float,
     session_day: dt.date,
     simulation: SimulationInput | None = None,
@@ -702,7 +771,8 @@ def summarize_setups(
     mimo statistiky (`SetupFact.in_stats`) se ze zvolených verzí vyřadí a jen
     spočítají: vznik po settle (#1324) do `after_settle_count`, značka
     `context.excluded` (#1346) do `excluded_count` (řádek po settle se značkou
-    jen jednou, jako po settle).
+    jen jednou, jako po settle). Poplatky podle instrumentu z obou polí
+    parametrů (`contract_fee_usd`); poplatek mikra nese od v6 i USD simulace.
     """
     versions = [
         fact for fact in facts if all_versions or fact.mechanics_version == mechanics_version
@@ -714,7 +784,7 @@ def summarize_setups(
         by_group[fact.risk_group].append(fact)
 
     def stats(rows: Sequence[SetupFact]) -> GroupStats:
-        return group_stats(rows, point_values, fee_per_contract_usd)
+        return group_stats(rows, point_values, fee_per_contract_usd, fee_per_micro_contract_usd)
 
     return SetupSummary(
         mechanics_version=mechanics_version,
@@ -724,6 +794,7 @@ def summarize_setups(
         after_settle_count=after_settle_count,
         excluded_count=len(versions) - len(scope) - after_settle_count,
         fee_per_contract_usd=fee_per_contract_usd,
+        fee_per_micro_contract_usd=fee_per_micro_contract_usd,
         account_usd=account_usd,
         unpriced_symbols=sorted(
             {fact.symbol for fact in scope if _point_value(fact, point_values) is None}
@@ -742,9 +813,15 @@ def summarize_setups(
             session_day,
             point_values=point_values,
             fee_per_contract_usd=fee_per_contract_usd,
+            fee_per_micro_contract_usd=fee_per_micro_contract_usd,
             account_usd=account_usd,
         ),
         band_gates=band_gate_stats(scope),
         regimes=regime_rows(scope),
-        performance=performance(scope, point_values=point_values, simulation=simulation),
+        performance=performance(
+            scope,
+            point_values=point_values,
+            simulation=simulation,
+            micro_fee_usd=fee_per_micro_contract_usd,
+        ),
     )
