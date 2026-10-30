@@ -59,6 +59,22 @@ def test_params_from_dict_validuje() -> None:
     assert partial.wall_zone == 4.0 and partial.min_rrr == SetupParams().min_rrr
 
 
+def test_poplatky_podle_instrumentu_bez_x10() -> None:
+    """#1402 (Rozhodnuto 30. 10.): ceník IBKR bez ×10 — ES a NQ 2 × 2,24 $,
+    MES a MNQ 2 × 0,61 $ za obchod; verze uložená před polem mikra (params v2
+    na produkci) dostane default mikra; záporný poplatek = ValueError (422)."""
+    defaults = SetupParams()
+    assert defaults.fee_per_contract_usd == pytest.approx(2 * 2.24)
+    assert defaults.fee_per_micro_contract_usd == pytest.approx(2 * 0.61)
+    stored_v2 = {**params_to_dict(defaults), "fee_per_contract_usd": 4.48}
+    del stored_v2["fee_per_micro_contract_usd"]
+    assert params_from_dict(stored_v2).fee_per_micro_contract_usd == 1.22
+    assert params_from_dict({"fee_per_micro_contract_usd": 0}).fee_per_micro_contract_usd == 0.0
+    for name in ("fee_per_contract_usd", "fee_per_micro_contract_usd"):
+        with pytest.raises(ValueError, match=f"{name} nesmí být záporný"):
+            params_from_dict({name: -0.5})
+
+
 def test_setup_params_from_settings_mapuje_env() -> None:
     settings = Settings(setup_max_rr=2.5, setup_disabled_templates="gamma_momentum")
     params = setup_params_from_settings(settings)
