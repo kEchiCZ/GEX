@@ -168,16 +168,20 @@ def evidence_line(context: dict[str, object]) -> str:
 
     Začíná „edge neprokázán:“, když dolní mez ØR není kladná nebo ji vzorek
     ještě nedává — vždy u setupu, který pustila Zkouška. Push je chvíle, kdy
-    se na mobilu rozhoduje o penězích; štítek je mitigace z ADR-0038."""
+    se na mobilu rozhoduje o penězích; štítek je mitigace z ADR-0038. Od
+    pravidel v4 (#1402, mechanika v6) je dolní mez nad čistým R — štítek
+    „LB čistě“, ať se nezamění s hrubým ØR na začátku řádku."""
     n = context.get("template_gate_n")
     needed = context.get("template_gate_n_needed")
     lb = context.get("template_gate_lb")
     avg = context.get("template_gate_avg_r")
     net = context.get("template_gate_avg_net_r")
+    rules = context.get("risk_rules_version")
     sample = f"n {n}/{needed}" if isinstance(needed, int) else f"n {n}"
     gate = f"brána {context.get('template_gate')}"
     if isinstance(lb, float):
-        gate += f" (LB {lb:+.2f})"
+        basis = " čistě" if isinstance(rules, int) and rules >= RISK_RULES_VERSION_NET else ""
+        gate += f" (LB{basis} {lb:+.2f})"
     head = "Důkaz" if isinstance(lb, float) and lb > 0 else "edge neprokázán"
     return (
         f"{head}: ØR {_signed(avg if isinstance(avg, float) else None)} R "

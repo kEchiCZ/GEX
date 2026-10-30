@@ -354,6 +354,15 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-30 — poplatek paperu zafixovaný při startu enginu, nová verze parametrů ho minula (#1402).**
+  `PaperBroker` dostal `fee_per_contract_usd` z parametrů setupů jednou v konstruktoru pipeline
+  (`__main__`), smyčka nastavení předávala novou verzi jen `SetupEngine.apply_params`. Po params v2
+  (30. 10. 10:03 UTC, 10 → 4,48 $) souhrn i kontext setupů počítaly 4,48 $, paper dál 10 $ až do
+  restartu enginu. Stejný vzorec jako #438 (nastavení ze Settings se uložila, engine je nečetl).
+  → Spotřebitel verzovaných parametrů drží celou platnou verzi, ne kopii pole ze startu. Novou verzi
+  předává jedna funkce všem spotřebitelům (`__main__._apply_setup_params`) a test ověří, že ji
+  dostanou všichni.
+
 - **2026-10-25 — replay hodnotil bar N − 1 s razítkem N a okno ten posun převzalo, poslední bar dne se nehodnotil (#1641, #1642).**
   Decision-time konvence (#794) páruje rozhodovací minutu N s dokončeným barem N − 1. `replay`
   ale posílal do `walk_setup_path` celou `MinuteInputs` s razítkem N. Bar 19:59 tak nesl 20:00

@@ -211,9 +211,14 @@ v rozpočtu (n = 339, +0,06 R). Uživatel bude obchodovat účet ~5 000 $ na
 - **Účet v aplikaci** (`fee_usd` v kontextu setupu = kontrakty × poplatek instrumentu setupu,
   u ES a NQ tedy plného kontraktu) odpovídá obchodu plnými kontrakty s reálným poplatkem.
   Při obchodu mikry platí dělení ÷ 10 jen pro P/L, ne pro poplatky. Reálný čistý výsledek
-  v mikro dolarech ukazuje Knihovna (čistě v $) a USD simulace; obě počítají s poplatkem
-  mikra a od v6 i se skluzem. Tooltipy účtu a setupu to uvádějí.
+  v mikro dolarech ukazuje Knihovna (čistě v $) a USD simulace s náklady mikra: do v5
+  konstanty ADR-0030 (komise 2 × 0,62 $ + skluz 1 tick za obchod; pole mikra nečtou), od v6
+  poplatek mikra z parametrů + skluz 1 tick na stranu. Tooltipy účtu a setupu to uvádějí.
 - **Paper** (ADR-0040) bere poplatek podle instrumentu orderu z platné verze parametrů, i po
   změně za běhu. Do #1402 ho četl jen při startu enginu, takže po params v2 počítal dál 10 $.
 - Setupy a paper obchody uzavřené před změnou nesou poplatek své doby (`fee_usd`,
-  `fees_usd`) a nepřepisují se.
+  `fees_usd`) a nepřepisují se. Setupy params v1 (do 30. 10. 2026 10:03 UTC) nesou 10 $ za
+  kontrakt, od params v2 reálný poplatek, takže **Účet 50k přes tento přechod sčítá obě
+  konvence** (pod v5 a s přepínačem „Včetně starší mechaniky“). Po bumpu v6 (#1403) počítá
+  souhrn výchozí jen aktuální mechaniku, tedy jen setupy s reálným poplatkem. Souhrn
+  „1 kontrakt“ bere poplatek z platné verze pro všechny řádky, konvence v něm nemíchá.

@@ -95,7 +95,8 @@ pravidlo o pořadí:
 **Doplněk 30. 10. 2026 (#1402) — bump v6 nese bránu nad čistým R.** Do dávkového bumpu v6
 (#1403) jde i konvence nákladů z dodatku ADR-0030 2026-10-30: od v6 stojí brána šablon,
 n potřebné a ØR čistě v Knihovně na čistém R po nákladech mikra (poplatek mikra z parametrů
-+ skluz 1 tick na stranu), do v5 na hrubém R. Přepínač je `NET_R_GATE` =
++ skluz 1 tick na stranu). Do v5 stojí brána a n potřebné na hrubém R a ØR čistě
+s konstantami v5 (1 tick za obchod). Přepínač je `NET_R_GATE` =
 `SETUP_MECHANICS_VERSION >= 6` vedle `CUMDELTA_PRINTS`, kontext setupu nese
 `risk_rules_version` 4. Vzorek brány se čte jen z aktuální mechaniky
 (`SetupEngine._load_realized` → `realized_since(mechanics_version=…)`), takže po bumpu

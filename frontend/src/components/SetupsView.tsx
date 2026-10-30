@@ -6,7 +6,7 @@ Podzáložka Knihovna (#1323) nastavuje stádium buněk ticker × šablona.
 */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { STATUS_LABELS, TRADE_BLOCK_LABELS, accountPnlUsd, bandInfo, bandLabel, bandTooltip, confidenceTooltip, evTooltip, feeLines, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, riskInfo, riskLabel, riskTooltip, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { ACCOUNT_FEE_LINES, STATUS_LABELS, TRADE_BLOCK_LABELS, accountPnlUsd, bandInfo, bandLabel, bandTooltip, confidenceTooltip, evTooltip, feeLines, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, riskInfo, riskLabel, riskTooltip, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
 import type { SetupRow, SummaryGroup } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 import { useSetups } from '../hooks/useSetups'
@@ -441,7 +441,7 @@ function SetupsOverview() {
                 '• jen OBCHODOVATELNÉ uzavřené setupy',
                 '• kontrakty ze serverového sizingu × R × stop × bod − poplatky',
                 '• max DD = nejhlubší propad od vrcholu, chronologicky podle uzavření',
-                '• reálně na MES/MNQ jsou dolary ÷ 10',
+                ...ACCOUNT_FEE_LINES,
               ].join('\n')}
             >
               <Stat

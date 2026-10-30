@@ -867,6 +867,19 @@ def _chain_source_status(fallback: "ChainFallback | None") -> dict[str, object]:
     return {"chain_source": fallback.active_source}
 
 
+def _apply_setup_params(
+    running: Sequence[InstrumentPipeline], params: SetupParams, version: int | None
+) -> None:
+    """Nová verze parametrů setupů (#794 fáze 2) všem spotřebitelům pipeline: prahy
+    detektoru a poplatky paperu podle instrumentu (#1402 — paper dřív četl poplatek
+    jen při startu enginu, takže po params v2 počítal dál 10 $)."""
+    for pipeline in running:
+        if pipeline.setup_engine is not None:
+            pipeline.setup_engine.apply_params(params, version)
+        if pipeline.paper_broker is not None:
+            pipeline.paper_broker.apply_params(params)
+
+
 async def create_pipeline(
     ib: IB,
     manager: ConnectionManager,
@@ -3238,14 +3251,9 @@ async def main() -> None:
                     stored_params = await asyncio.to_thread(setup_params_repository.latest)
                     if stored_params is not None:
                         setup_params_current = (stored_params.params, stored_params.version)
-                        for pipeline in pipelines.values():
-                            if pipeline.setup_engine is not None:
-                                pipeline.setup_engine.apply_params(
-                                    stored_params.params, stored_params.version
-                                )
-                            # Poplatky paperu z téže verze (#1402) — dřív jen při startu
-                            if pipeline.paper_broker is not None:
-                                pipeline.paper_broker.apply_params(stored_params.params)
+                        _apply_setup_params(
+                            list(pipelines.values()), stored_params.params, stored_params.version
+                        )
                         logger.info(
                             "Parametry setupů přepnuty na verzi %d (%s: %s)",
                             stored_params.version,

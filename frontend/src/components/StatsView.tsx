@@ -24,7 +24,7 @@ import type {
   WaveRow,
 } from '../api/news'
 import { fetchSettings } from '../api/settings'
-import { evTooltip, feeLines, formatPnlUsd, templateLabel } from '../api/setups'
+import { ACCOUNT_FEE_LINES, evTooltip, feeLines, formatPnlUsd, templateLabel } from '../api/setups'
 import type { SetupsSummary, SharpeValue } from '../api/setups'
 import { useSetupsSummary } from '../hooks/useSetupsSummary'
 import { useWatchlistSymbols } from '../hooks/useWatchlistSymbols'
@@ -297,7 +297,7 @@ function SetupsPerformanceSection({
               title={[
                 'Co by reálně vydělal účet: serverový sizing (1 % rizika, brzdy, brána šablon).',
                 '• jen setupy označené jako obchodovatelné',
-                '• reálně na MES/MNQ jsou dolary ÷ 10, poplatky ne: jsou reálné za ES a NQ (#1402)',
+                ...ACCOUNT_FEE_LINES,
                 '• čistý výsledek v mikro dolarech ukazuje Knihovna (čistě v $) a USD simulace',
               ].join('\n')}
             >

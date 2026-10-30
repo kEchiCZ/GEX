@@ -181,7 +181,7 @@ export interface SummaryGroup {
   avg_r: number | null
   /** Na 1 kontrakt: Σ R × stop × hodnota bodu. */
   gross_usd: number
-  /** Na 1 kontrakt: uzavřené × poplatek za kontrakt a obchod. */
+  /** Na 1 kontrakt: Σ poplatků uzavřených podle instrumentu z platné verze parametrů (#1402). */
   fees_usd: number
   net_usd: number
   ev_r: EvBreakdown | null
@@ -291,6 +291,16 @@ export function feeLines(
     `• poplatky MES a MNQ = ${summary.fee_per_micro_contract_usd} $ za kontrakt a obchod`,
   ]
 }
+
+/** Od kdy nesou setupy reálný poplatek bez × 10 (#1402, params v2 na produkci). */
+const FEES_REAL_SINCE = '30. 10. 2026'
+
+/** Poplatky účtu (#1185): každý setup nese poplatek z doby vzniku (`fee_usd`),
+ *  takže součet přes přechod #1402 míchá obě konvence — tooltip to přizná. */
+export const ACCOUNT_FEE_LINES: readonly string[] = [
+  `• reálně na MES/MNQ jsou dolary ÷ 10; poplatky setupů od ${FEES_REAL_SINCE} ne — jsou reálné za ES a NQ (#1402)`,
+  '• starší setupy nesou 10 $ za kontrakt (1 $ na mikro × 10), součet účtu obě konvence míchá',
+]
 
 export interface SummaryOptions {
   /** Včetně starších verzí mechaniky (#311); výchozí jen aktuální. */
@@ -617,7 +627,7 @@ export function riskTooltip(info: RiskInfo): string {
     info.tradeable
       ? `Obchodovatelný: ${info.contracts} kontrakt(y), ztráta na stopu ${Math.round(info.maxLossUsd)} $ (+ poplatky ${Math.round(info.feeUsd)} $).`
       : `Stínový setup — neobchodovat: ${blockText(info)}.`,
-    `Rozpočet rizika ${Math.round(info.riskBudgetUsd)} $ z účtu ${Math.round(info.accountUsd)} $ (aplikace = plné kontrakty; 1 kontrakt zde = 1 MES/MNQ reálně, dolary ÷ 10; poplatky ne — jsou reálné podle instrumentu setupu, #1402).`,
+    `Rozpočet rizika ${Math.round(info.riskBudgetUsd)} $ z účtu ${Math.round(info.accountUsd)} $ (aplikace = plné kontrakty; 1 kontrakt zde = 1 MES/MNQ reálně, dolary ÷ 10; poplatky setupů od ${FEES_REAL_SINCE} ne — jsou reálné za instrument setupu, #1402, starší nesou 10 $ za kontrakt = 1 $ na mikro × 10).`,
     `Stop ${info.stopPoints.toFixed(2)} b.`,
     '',
     'Pravidla (#1185):',

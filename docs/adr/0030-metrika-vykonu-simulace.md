@@ -127,8 +127,10 @@ z dodatku 2026-09-28 dál platí jen pro mechaniku do v5.
 - **Jedna konvence pro bránu i důkaz** (#1326 varianta A): od v6 počítají s týmž nákladem
   brána šablon (ADR-0038 bod 4, kritérium A z #1334: dolní mez Ø čistého R > 0 při n ≥ 30 za
   60 seancí; vstup `setup_library.gate_results`), n potřebné, ØR čistě a čistý P/L buňky
-  v Knihovně i v pushi a USD simulace souhrnu. Na ES se stopem 2,4 b stojí náklad 0,31 R:
-  hrubě Ø +0,28 R, čistě −0,03 R (golden `engine/tests/golden/template_gate_net_1402.json`).
+  v Knihovně i v pushi a USD simulace souhrnu. Na ES se stopem 2,4 b stojí náklad 0,31 R
+  na obchod; na syntetickém vzorku golden (`engine/tests/golden/template_gate_net_1402.json`,
+  všechny stopy 2,4 b) to dělá z Ø +0,28 R hrubě −0,03 R čistě. V reálném vzorku #1326
+  zůstal ES stín v R kladný (+0,28 → +0,10 R) a znaménko měnily dolary.
 - **Souhrn** dál ukazuje R hrubě a poplatky zvlášť (hrubý − poplatky = čistý), R se náklady
   nesnižuje.
 - **Mechanika v5 beze změny:** brána nad hrubým R, ØR čistě s konstantami v5. Skripty

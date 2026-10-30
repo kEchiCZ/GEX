@@ -1746,9 +1746,11 @@ risk pravidel:
 hrubě (kontrakty × R × stop × bod), poplatky (kontrakty × poplatek), čistě,
 % účtu a max drawdown (chronologicky podle uzavření). Dlaždice 1 kontrakt
 výše měří detektor, tenhle řádek odpovídá na otázku „kolik by vydělal účet".
-Reálně na MES/MNQ jsou dolary ÷ 10, poplatky ne: v aplikaci jsou reálné za ES
-a NQ (#1402). Čistý výsledek v reálných mikro dolarech ukazuje Knihovna (čistě
-v $) a USD simulace.
+Reálně na MES/MNQ jsou dolary ÷ 10. Poplatky setupů od 30. 10. 2026 ne: jsou
+reálné za ES a NQ (#1402). Starší setupy nesou poplatek své doby, 10 $ za kontrakt
+(1 $ na mikro × 10), takže součet účtu přes tento přechod míchá obě konvence (po
+bumpu na mechaniku v6 souhrn výchozí počítá jen setupy s reálným poplatkem). Čistý
+výsledek v reálných mikro dolarech ukazuje Knihovna (čistě v $) a USD simulace.
 
 **Denní statistika seance** (obrazovka Setupy): nad seznamem je souhrn dnešního
 dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost
@@ -2127,8 +2129,8 @@ Zaškrtávátko **Brána šablon** v Settings zmizelo — vypnout bránu celou b
 druhá cesta k obchodování všeho bez rozpočtu (zůstalo jen jako nouzová cesta přes
 API). Kritérium brány se 28. 10. přehodnotilo na datech od 30. 9. (#1334) a zůstává
 kladná dolní mez Ø R při n ≥ 30 za 60 seancí. Od mechaniky v6 se počítá z čistého
-R po nákladech mikra (#1402), takže na ES s těsným stopem náklady často rozhodnou
-o znaménku. Druhé kritérium (Ø čistého R posledních 20 obchodů buňky > 0) se zatím
+R po nákladech mikra (#1402): na ES se stopem 2,4 b stojí náklad 0,31 R na obchod,
+na NQ se stopem 16 b jen 0,07 R. Druhé kritérium (Ø čistého R posledních 20 obchodů buňky > 0) se zatím
 jen měří ve stínu (připomínka #1715). Vzorek brány je vždy jen z aktuální
 mechaniky: po přechodu na v6 začíná každá buňka od nuly a do 30 uzavřených setupů
 v6 jsou její setupy stínové, pokud ji nepustí Zkouška.
@@ -2138,9 +2140,11 @@ v6 jsou její setupy stínové, pokud ji nepustí Zkouška.
 **Bilance účtu.** Řádek **Účet 50k** v Setupech a karta **Účet 50k** ve
 Stats → Výkon setupů: Σ (kontrakty × R × stop × bod − poplatky), počet
 obchodů, počet stínů, poplatky a max drawdown v $ — od v1.23 z celé historie
-(#1319). Poplatek je reálný podle instrumentu setupu, bez × 10 (#1402): u ES
-a NQ 4,48 $ za kontrakt a obchod. Při obchodu mikry platí ÷ 10 jen pro P/L, ne
-pro poplatky; reálný čistý výsledek v mikro dolarech ukazuje Knihovna (čistě v $).
+(#1319). Poplatek setupů od 30. 10. 2026 je reálný podle instrumentu setupu, bez
+× 10 (#1402): u ES a NQ 4,48 $ za kontrakt a obchod. Starší setupy nesou 10 $ za
+kontrakt (1 $ na mikro × 10), součet přes přechod proto míchá obě konvence. Při
+obchodu mikry platí ÷ 10 jen pro P/L, ne pro poplatky; reálný čistý výsledek
+v mikro dolarech ukazuje Knihovna (čistě v $).
 Vedle toho zůstává **USD simulace (#679)** podle kalkulačky (Settings → Trading) —
 ta počítá s tvým reálným účtem, mikro kontrakty a náklady mikra (do v5 konstanty
 2,49 / 1,74 $, od v6 poplatek mikra + skluz 1 tick na stranu).
