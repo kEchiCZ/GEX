@@ -1,8 +1,9 @@
 """Golden brány šablon nad čistým R (#1402, kritérium A z #1334).
 
 Očekávané hodnoty spočítal ručně skript mimo engine (vzorec v `_comment`
-datasetu): hrubé R = brána do mechaniky v5, čisté R se skluzem na stranu
-(ADR-0030) = brána od v6. ES se stopem 2,4 b ukazuje změnu znaménka z #1326.
+datasetu): hrubé R = brána do mechaniky v5, čisté R s poplatkem mikra
+z parametrů (`micro_fee_usd` datasetu) a skluzem na stranu (ADR-0030) = brána
+od v6. ES se stopem 2,4 b ukazuje změnu znaménka z #1326.
 """
 
 import datetime as dt
@@ -15,7 +16,7 @@ import pytest
 from gexlens_engine.compute.paper import POINT_VALUES
 from gexlens_engine.compute.risk import RealizedSetup, template_gate
 from gexlens_engine.compute.setup_library import cell_evidence, gate_results
-from gexlens_engine.compute.setups import NET_R_GATE, SETUP_MECHANICS_VERSION
+from gexlens_engine.compute.setups import NET_R_GATE, SETUP_MECHANICS_VERSION, SetupParams
 
 DATA: dict[str, Any] = json.loads(
     (Path(__file__).parent / "golden" / "template_gate_net_1402.json").read_text(encoding="utf-8")
@@ -45,6 +46,8 @@ def _rows(case: dict[str, Any]) -> list[RealizedSetup]:
 def test_prepinac_cisteho_r_je_mechanika_v6() -> None:
     assert (SETUP_MECHANICS_VERSION >= 6) == NET_R_GATE
     assert len(DATA["cases"]) >= 6
+    # Dataset počítá s výchozím poplatkem mikra z Nastavení (IBKR 2 × 0,61 $)
+    assert DATA["micro_fee_usd"] == SetupParams().fee_per_micro_contract_usd
 
 
 @pytest.mark.parametrize("case", DATA["cases"], ids=[case["name"] for case in DATA["cases"]])
@@ -52,7 +55,9 @@ def test_prepinac_cisteho_r_je_mechanika_v6() -> None:
 def test_golden_brany(case: dict[str, Any], convention: str) -> None:
     rows = _rows(case)
     gate = template_gate(
-        gate_results(rows, POINT_VALUES, net=convention == "net"),
+        gate_results(
+            rows, POINT_VALUES, net=convention == "net", micro_fee_usd=DATA["micro_fee_usd"]
+        ),
         min_samples=DATA["min_samples"],
         enabled=True,
     )
@@ -65,7 +70,13 @@ def test_golden_brany(case: dict[str, Any], convention: str) -> None:
 @pytest.mark.parametrize("case", DATA["cases"], ids=[case["name"] for case in DATA["cases"]])
 def test_golden_dukaz_bunky_pod_v6(case: dict[str, Any]) -> None:
     """ØR čistě v Knihovně a pushi = týž náklad jako brána (jedna konvence, #1326)."""
-    evidence = cell_evidence(_rows(case), POINT_VALUES, min_samples=DATA["min_samples"], net=True)
+    evidence = cell_evidence(
+        _rows(case),
+        POINT_VALUES,
+        min_samples=DATA["min_samples"],
+        micro_fee_usd=DATA["micro_fee_usd"],
+        net=True,
+    )
     assert evidence.avg_net_r == pytest.approx(case["expected"]["net"]["avg"], abs=1e-9)
 
 
