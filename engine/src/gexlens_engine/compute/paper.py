@@ -12,7 +12,8 @@ Ordery zadává uživatel v aplikaci, fily simuluje engine proti živé ceně
   ordery zruší.
 
 Účet se vede v jednotkách plného kontraktu (ADR-0038: 1 kontrakt zde =
-1 mikro reálně, dolary ×10).
+1 mikro reálně, dolary ×10). Poplatky jsou od #1402 reálné podle instrumentu
+orderu, bez ×10 (`SetupParams.fee_per_contract_usd` a `fee_per_micro_contract_usd`).
 """
 
 import datetime as dt

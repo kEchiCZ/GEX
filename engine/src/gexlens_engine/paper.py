@@ -32,7 +32,13 @@ from gexlens_engine.compute.paper import (
     r_multiple,
 )
 from gexlens_engine.compute.settle import settle_ts, trading_session_date
-from gexlens_engine.compute.setups import PATH_GAP_WAIT, last_expected_minute, missing_minutes
+from gexlens_engine.compute.setup_summary import contract_fee_usd
+from gexlens_engine.compute.setups import (
+    PATH_GAP_WAIT,
+    SetupParams,
+    last_expected_minute,
+    missing_minutes,
+)
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import PublisherLike
 from gexlens_engine.storage.paper_store import PaperRepository
@@ -61,12 +67,28 @@ class PaperBroker:
     symbol: str
     repository: PaperRepository
     publisher: PublisherLike
-    #: Poplatek za kontrakt a obchod (round-trip) v jednotkách účtu (ADR-0038: 10 $)
-    fee_per_contract_usd: float = 10.0
+    #: Platná verze parametrů setupů — poplatek za kontrakt a obchod (round-trip)
+    #: podle instrumentu orderu (#1402, `contract_fee_usd`); novou verzi
+    #: z Nastavení předá engine za běhu (`apply_params`)
+    params: SetupParams = field(default_factory=SetupParams)
     slippage_ticks: int = 1
     #: Bary z partic pro díry v živé dávce (#1345, týž zdroj jako SetupEngine)
     bar_reader: Callable[[dt.datetime, dt.datetime], Sequence[Bar]] | None = None
     _paths: dict[int, _OrderPath] = field(default_factory=dict, init=False)
+
+    def apply_params(self, params: SetupParams) -> None:
+        """Nová verze parametrů setupů za běhu (#1402): poplatek bere obchod
+        uzavřený od teď; dřív uzavřené obchody nesou poplatek svého uzavření."""
+        self.params = params
+
+    def fee_usd(self, order: PaperOrder) -> float:
+        """Poplatek obchodu: kontrakty × poplatek podle instrumentu orderu (ES a NQ
+        pole plného kontraktu, MES a MNQ pole mikra; Rozhodnuto 30. 10., #1402)."""
+        return order.qty * contract_fee_usd(
+            order.symbol,
+            fee_per_contract_usd=self.params.fee_per_contract_usd,
+            fee_per_micro_contract_usd=self.params.fee_per_micro_contract_usd,
+        )
 
     async def on_minute(
         self, now: dt.datetime, spot: float, bars: Sequence[Bar], runtime: object | None = None
@@ -238,7 +260,7 @@ class PaperBroker:
     async def _close(self, order: PaperOrder, exit_: Exit, now: dt.datetime) -> None:
         point_value = POINT_VALUES.get(symbol_root(order.symbol), 0.0)
         points = pnl_points(order, exit_.price)
-        fees = self.fee_per_contract_usd * order.qty
+        fees = self.fee_usd(order)
         pnl = points * order.qty * point_value - fees
         result_r = r_multiple(order, exit_.price)
         await asyncio.to_thread(

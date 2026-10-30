@@ -1577,10 +1577,12 @@ async def create_pipeline(
                     )
                     for stored in read_bars(settings.derived_dir, symbol, since, until)
                 ],
-                fee_per_contract_usd=(
-                    setup_params[0].fee_per_contract_usd
+                # Poplatky podle instrumentu z platné verze (#1402); novou verzi
+                # předá smyčka nastavení za běhu (`apply_params`)
+                params=(
+                    setup_params[0]
                     if setup_params is not None
-                    else setup_params_from_settings(settings).fee_per_contract_usd
+                    else setup_params_from_settings(settings)
                 ),
             )
             if paper_repository is not None
@@ -3241,6 +3243,9 @@ async def main() -> None:
                                 pipeline.setup_engine.apply_params(
                                     stored_params.params, stored_params.version
                                 )
+                            # Poplatky paperu z téže verze (#1402) — dřív jen při startu
+                            if pipeline.paper_broker is not None:
+                                pipeline.paper_broker.apply_params(stored_params.params)
                         logger.info(
                             "Parametry setupů přepnuty na verzi %d (%s: %s)",
                             stored_params.version,
