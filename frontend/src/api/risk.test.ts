@@ -60,8 +60,18 @@ describe('riskInfo', () => {
     expect(riskLabel(info!)).toBe('1 ks · 400 $')
     const tooltip = riskTooltip(info!)
     expect(tooltip).toContain('Obchodovatelný: 1 kontrakt(y), ztráta na stopu 400 $')
-    expect(tooltip).toContain('prošla (dolní mez očekávání > 0) · n=35 · LB +0.12 R')
+    expect(tooltip).toContain('prošla (dolní mez Ø R hrubě > 0) · n=35 · LB +0.12 R')
     expect(tooltip).toContain('dnes -1.0 R, týden +2.5 R')
+    expect(tooltip).toContain('poplatky ne — jsou reálné podle instrumentu setupu')
+  })
+
+  it('pravidla v4 (#1402, mechanika v6): brána nad čistým R po nákladech mikra', () => {
+    const net = riskInfo({ context: { ...RISK, risk_rules_version: 4, template_gate: 'block' } })
+    expect(net!.gateNet).toBe(true)
+    expect(riskTooltip(net!)).toContain(
+      'zablokována (dolní mez Ø R čistě po nákladech mikra ≤ 0) · n=35',
+    )
+    expect(riskInfo({ context: { ...RISK, risk_rules_version: 3 } })!.gateNet).toBe(false)
   })
 
   it('stín nese důvod; řádek bez pravidel je null', () => {

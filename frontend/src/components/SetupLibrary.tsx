@@ -185,12 +185,12 @@ function LibraryRow({
           <span className={tone(cell.gate_lb)}>{lbText(cell.gate_lb)}</span>
         </span>
       </td>
-      <td data-label={LIBRARY_SORT_LABELS.avgR} title={evidenceTooltip(cell)}>
+      <td data-label={LIBRARY_SORT_LABELS.avgR} title={evidenceTooltip(cell, params)}>
         <span className={tone(cell.avg_r)}>
           {cell.avg_r === null ? '—' : signed(cell.avg_r, 2)}
         </span>
       </td>
-      <td data-label={LIBRARY_SORT_LABELS.avgNetR} title={evidenceTooltip(cell)}>
+      <td data-label={LIBRARY_SORT_LABELS.avgNetR} title={evidenceTooltip(cell, params)}>
         <span className={tone(cell.avg_net_r)}>
           {cell.avg_net_r === null ? '—' : signed(cell.avg_net_r, 2)}
         </span>

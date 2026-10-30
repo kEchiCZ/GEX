@@ -6,7 +6,7 @@ Podzáložka Knihovna (#1323) nastavuje stádium buněk ticker × šablona.
 */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { STATUS_LABELS, TRADE_BLOCK_LABELS, accountPnlUsd, bandInfo, bandLabel, bandTooltip, confidenceTooltip, evTooltip, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, riskInfo, riskLabel, riskTooltip, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { STATUS_LABELS, TRADE_BLOCK_LABELS, accountPnlUsd, bandInfo, bandLabel, bandTooltip, confidenceTooltip, evTooltip, feeLines, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, riskInfo, riskLabel, riskTooltip, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
 import type { SetupRow, SummaryGroup } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 import { useSetups } from '../hooks/useSetups'
@@ -309,7 +309,7 @@ function SetupsOverview() {
               `Celá historie ${symbol}, mechanika ${summary.all_versions ? 'všechny verze' : `v${summary.mechanics_version}`} (spočítal server):`,
               '• každý setup = 1 kontrakt, obchodovatelný i stínový',
               '• hrubý výsledek = R × stop × hodnota bodu',
-              `• poplatky = ${summary.fee_per_contract_usd} $ za kontrakt a obchod`,
+              ...feeLines(summary),
               '• čistý = hrubý − poplatky',
               '• co by reálně vydělal účet, ukazuje řádek Účet níž',
             ].join('\n')}
@@ -333,7 +333,10 @@ function SetupsOverview() {
               label="Poplatky"
               value={all.closed > 0 ? formatFees(all.fees_usd) : '—'}
               testId="setups-fees"
-              title={`${all.closed} uzavřených × ${summary.fee_per_contract_usd} $ (1 kontrakt, obchod tam i zpět)`}
+              title={[
+                `Σ poplatků za ${all.closed} uzavřených (1 kontrakt, obchod tam i zpět) podle instrumentu:`,
+                ...feeLines(summary),
+              ].join('\n')}
             />
             <Stat
               label="Čistý výsledek"

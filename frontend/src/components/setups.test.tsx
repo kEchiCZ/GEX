@@ -70,6 +70,7 @@ function summary(overrides: Record<string, unknown> = {}) {
     after_settle_count: 0,
     excluded_count: 0,
     fee_per_contract_usd: 10,
+    fee_per_micro_contract_usd: 1.22,
     account_usd: 50000,
     unpriced_symbols: [],
     all: GROUP,

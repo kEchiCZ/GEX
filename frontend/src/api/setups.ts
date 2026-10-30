@@ -257,7 +257,10 @@ export interface SetupsSummary {
   after_settle_count: number
   /** Setupy se značkou vyřazení (#1346, vznik nad zamrzlým spotem) — vyřazené stejně. */
   excluded_count: number
+  /** Poplatky za kontrakt a obchod reálně podle instrumentu, bez × 10 (#1402):
+   *  ES a NQ, mikra (MES, MNQ). */
   fee_per_contract_usd: number
+  fee_per_micro_contract_usd: number
   account_usd: number
   unpriced_symbols: string[]
   all: SummaryGroup
@@ -277,6 +280,16 @@ export interface SetupsSummary {
   cells?: LibraryCell[]
   /** Stav brzd účtu teď (#1323, hlavička Knihovny); chybí u API před #1323. */
   brakes?: LibraryBrakes
+}
+
+/** Poplatky souhrnu podle instrumentu (#1402) — odrážky tooltipů souhrnu a Stats. */
+export function feeLines(
+  summary: Pick<SetupsSummary, 'fee_per_contract_usd' | 'fee_per_micro_contract_usd'>,
+): string[] {
+  return [
+    `• poplatky ES a NQ = ${summary.fee_per_contract_usd} $ za kontrakt a obchod (reálně, bez × 10)`,
+    `• poplatky MES a MNQ = ${summary.fee_per_micro_contract_usd} $ za kontrakt a obchod`,
+  ]
 }
 
 export interface SummaryOptions {
@@ -449,8 +462,14 @@ export function formatGateBucket(bucket: GateBucket): string {
 // per šablona × symbol, `risk_rules_version` 2). Od #1323 (`risk_rules_version`
 // 3) i stádium buňky ticker × šablona: Stín (`trade_block` `user`, po brzdách)
 // a Zkouška, která přebije bránu (`gate_overridden`), sizing ani brzdy ne.
+// Od #1402 (`risk_rules_version` 4, mechanika v6) stojí brána na čistém R po
+// nákladech mikra (poplatek mikra z parametrů + skluz 1 tick na stranu).
 // Setup vzniká vždy; `tradeable` říká, zda se dá zobchodovat, `trade_block`
 // proč ne. UI jen zobrazuje — nic nepřepočítává.
+
+/** Pravidla risk kontextu s bránou nad čistým R (#1402, mechanika v6) — zrcadlo
+ *  `RISK_RULES_VERSION_NET` v engine/src/gexlens_engine/compute/risk.py. */
+const RISK_RULES_VERSION_NET = 4
 
 export type TradeBlock =
   'stop_over_budget' | 'stop_over_cap' | 'daily_brake' | 'weekly_brake' | 'template_stops' | 'user' | 'gate' // prettier-ignore
@@ -480,6 +499,8 @@ export interface RiskInfo {
   stopPoints: number
   accountUsd: number
   gate: GateVerdict | null
+  /** Brána nad čistým R po nákladech mikra (#1402); false = hrubé R (pravidla do v3). */
+  gateNet: boolean
   gateN: number | null
   gateLb: number | null
   dayR: number | null
@@ -519,6 +540,7 @@ export function riskInfo(row: Pick<SetupRow, 'context'>): RiskInfo | null {
       gate === 'pass' || gate === 'block' || gate === 'insufficient' || gate === 'off'
         ? gate
         : null,
+    gateNet: (num('risk_rules_version') ?? 0) >= RISK_RULES_VERSION_NET,
     gateN: num('template_gate_n'),
     gateLb: num('template_gate_lb'),
     dayR: num('realized_day_r'),
@@ -563,11 +585,19 @@ export function accountPnlUsd(row: Pick<SetupRow, 'outcome_r' | 'context'>): num
   return row.outcome_r * info.maxLossUsd - info.feeUsd
 }
 
-const GATE_TEXT: Record<GateVerdict, string> = {
-  pass: 'prošla (dolní mez očekávání > 0)',
-  block: 'zablokována (dolní mez očekávání ≤ 0)',
-  insufficient: 'nedostatek vzorku (n < minimum)',
-  off: 'vypnuta',
+/** Verdikt brány do tooltipu i se vstupem: hrubé R, od #1402 (mechanika v6) čisté R. */
+function gateText(verdict: GateVerdict, net: boolean): string {
+  const bound = `dolní mez Ø R ${net ? 'čistě po nákladech mikra' : 'hrubě'}`
+  switch (verdict) {
+    case 'pass':
+      return `prošla (${bound} > 0)`
+    case 'block':
+      return `zablokována (${bound} ≤ 0)`
+    case 'insufficient':
+      return 'nedostatek vzorku (n < minimum)'
+    case 'off':
+      return 'vypnuta'
+  }
 }
 
 function signed(value: number, digits: number): string {
@@ -579,7 +609,7 @@ export function riskTooltip(info: RiskInfo): string {
   const gate =
     info.gate === null
       ? '—'
-      : `${GATE_TEXT[info.gate]}${info.gateN === null ? '' : ` · n=${info.gateN}`}${info.gateLb === null ? '' : ` · LB ${signed(info.gateLb, 2)} R`}`
+      : `${gateText(info.gate, info.gateNet)}${info.gateN === null ? '' : ` · n=${info.gateN}`}${info.gateLb === null ? '' : ` · LB ${signed(info.gateLb, 2)} R`}`
   const day = info.dayR === null ? '—' : `${signed(info.dayR, 1)} R`
   const week = info.weekR === null ? '—' : `${signed(info.weekR, 1)} R`
   const stage = stageText(info)
@@ -587,7 +617,7 @@ export function riskTooltip(info: RiskInfo): string {
     info.tradeable
       ? `Obchodovatelný: ${info.contracts} kontrakt(y), ztráta na stopu ${Math.round(info.maxLossUsd)} $ (+ poplatky ${Math.round(info.feeUsd)} $).`
       : `Stínový setup — neobchodovat: ${blockText(info)}.`,
-    `Rozpočet rizika ${Math.round(info.riskBudgetUsd)} $ z účtu ${Math.round(info.accountUsd)} $ (aplikace = plné kontrakty; 1 kontrakt zde = 1 MES/MNQ reálně, dolary ÷ 10).`,
+    `Rozpočet rizika ${Math.round(info.riskBudgetUsd)} $ z účtu ${Math.round(info.accountUsd)} $ (aplikace = plné kontrakty; 1 kontrakt zde = 1 MES/MNQ reálně, dolary ÷ 10; poplatky ne — jsou reálné podle instrumentu setupu, #1402).`,
     `Stop ${info.stopPoints.toFixed(2)} b.`,
     '',
     'Pravidla (#1185):',
@@ -625,6 +655,9 @@ export interface SetupParamsVersion {
 export interface SetupParamsResponse {
   current: SetupParamsVersion | null
   defaults: Record<string, unknown>
+  /** Brána a Knihovna nad čistým R po nákladech mikra (#1402, mechanika v6);
+   *  API před #1402 klíč nemá = hrubé R. */
+  net_r_gate: boolean
 }
 
 export async function fetchSetupParams(): Promise<SetupParamsResponse | null> {
@@ -633,7 +666,11 @@ export async function fetchSetupParams(): Promise<SetupParamsResponse | null> {
     if (!response.ok) return null
     const payload = (await response.json()) as Partial<SetupParamsResponse> | null
     if (!payload || typeof payload !== 'object' || typeof payload.defaults !== 'object') return null
-    return { current: payload.current ?? null, defaults: payload.defaults ?? {} }
+    return {
+      current: payload.current ?? null,
+      defaults: payload.defaults ?? {},
+      net_r_gate: payload.net_r_gate === true,
+    }
   } catch {
     return null
   }

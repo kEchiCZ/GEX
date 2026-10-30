@@ -10,6 +10,7 @@ import {
   evidenceTooltip,
   filterLibraryCells,
   gateLabel,
+  gateTooltip,
   lbText,
   libraryFiltersActive,
   libraryParams,
@@ -99,8 +100,36 @@ describe('popisky buňky', () => {
   })
 
   it('ØR tooltip ukazuje i čistý P/L v mikro dolarech', () => {
-    expect(evidenceTooltip(CELL)).toContain('• čistě v $: -120.5 $ — Σ za vzorek v reálných mikro')
-    expect(evidenceTooltip({ ...CELL, net_usd: null })).toContain('• čistě v $: —')
+    const params = libraryParams(null)
+    expect(evidenceTooltip(CELL, params)).toContain(
+      '• čistě v $: -120.5 $ — Σ za vzorek v reálných mikro',
+    )
+    expect(evidenceTooltip({ ...CELL, net_usd: null }, params)).toContain('• čistě v $: —')
+  })
+
+  it('náklad čistého R a vstup brány podle mechaniky (#1402)', () => {
+    // v5 (API bez net_r_gate): brána nad hrubým R, čisté R s konstantami ADR-0030
+    const v5 = libraryParams(null)
+    expect(v5.netGate).toBe(false)
+    expect(gateTooltip(CELL, v5)).toContain('• dolní mez ØR hrubě (jednostranně 95 %)')
+    expect(evidenceTooltip(CELL, v5)).toContain('komise 2 × 0,62 $ + skluz 1 tick za obchod')
+    // v6: brána i ØR čistě s poplatkem mikra z platné verze parametrů
+    const v6 = libraryParams({
+      current: {
+        version: 3,
+        created_ts: '2026-10-30T12:00:00+00:00',
+        created_by: 'ui',
+        note: 'x',
+        params: { fee_per_micro_contract_usd: 1.5 },
+      },
+      defaults: { fee_per_micro_contract_usd: 1.22 },
+      net_r_gate: true,
+    })
+    expect([v6.netGate, v6.microFeeUsd]).toEqual([true, 1.5])
+    const gate = gateTooltip(CELL, v6)
+    expect(gate).toContain('• dolní mez ØR čistě (jednostranně 95 %)')
+    expect(gate).toContain('• čistě = po nákladech 1 mikra: poplatek mikra 1.5 $ z Nastavení')
+    expect(evidenceTooltip(CELL, v6)).toContain('skluz 1 tick na stranu')
   })
 
   it('edge neprokázán při LB ≤ 0 i bez dolní meze', () => {
@@ -139,6 +168,7 @@ describe('parametry Knihovny', () => {
         params: { template_gate_days: 40, disabled_templates: ['divergence_spring'] },
       },
       defaults: { template_gate_days: 60, template_gate_min_samples: 30, trial_budget_setups: 10 },
+      net_r_gate: false,
     })
     expect(params.version).toBe(4)
     expect(params.gateDays).toBe(40)
