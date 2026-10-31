@@ -40,7 +40,7 @@ def _load(prints: bool = False) -> Any:
     drží regresi cesty, kterou dál čte návrat pinem image (ADR-0061 bod 6)."""
     spec = importlib.util.spec_from_file_location("recompute_fa", SCRIPT)
     assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
+    module: Any = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     module.CUMDELTA_PRINTS = prints
