@@ -114,8 +114,11 @@ od verze: `CUMDELTA_PRINTS` a `NET_R_GATE`, z nich `cumdelta.LIVE_SOURCE`, `spot
 1. **CumΔ a čistý objem jen z tisků** se stranou od burzy (ADR-0057, #1459, #1460, #1588–#1590):
    zdroj `aggressor` v živých trackerech (`runtime.py`, `__main__.py`), mezera trade větve = NULL,
    předání trackeru řetězu D+1 v rollu, pásmo řetězu přes roll jen roste, `/status`
-   `cumdelta_source`. Texty upozornění na výpadek tasty a mlčící feed nesou dopad na CumΔ
-   (`tasty/watchdog.py`, `tasty/chain_fallback.py`, `tasty/crosscheck.py`, API `push_telegram.py`).
+   `cumdelta_source`. Stín `cumdelta_dx` se uzavírá na hranici minuty podle hodin (#1586,
+   `__main__.py`, `plan_dx_flush`). Frontend podle `/status.cumdelta_source` = `aggressor`
+   přestane kreslit minuty s midpoint znaménkem (#1588, ADR-0057 bod 8). Texty upozornění na
+   výpadek tasty a mlčící feed nesou dopad na CumΔ (`tasty/watchdog.py`,
+   `tasty/chain_fallback.py`, `tasty/crosscheck.py`, API `push_telegram.py`).
 2. **Setupy** (`SetupEngine.cumdelta_prints`): CumΔ se nesrovnává přes hranici seance 17:00 CT
    (`cum_gap_before`, #1581), Δ Flow C/P (T4) a `opt_vol` (T3) jsou přírůstek proti maximu
    seance (#1602). Detektory a prahy šablon se nemění: golden `setups_regression_577` dává tytéž
@@ -127,14 +130,20 @@ od verze: `CUMDELTA_PRINTS` a `NET_R_GATE`, z nich `cumdelta.LIVE_SOURCE`, `spot
    Max Pain 0–90 min do settle, hystereze od otevření seance, poloha mezi zdmi váha 0 (#1113 C),
    `delta_flow` proti maximu seance; při zavřeném trhu se nepočítá (#1622).
 5. **Verdikt dne v4:** pravidla beze změny, verze značí zlom vstupu (ADR-0057 bod 8). Čte ji
-   i API (`briefing_routes`, track record jen aktuální verze).
+   i API: track record verdiktu (`briefing_routes`) a automatických scénářů (`scenario_routes`,
+   `scenario_auto`) je jen z aktuální verze, takže oba začínají od nuly.
 6. **Spot se stářím** (`SPOT_AGE_GATE`, #1600, #1623, #1657): verdikt, tendence, stav mapy a T6
    hlasují jen z živé ceny, stará cena je chybějící vstup.
 7. **FA = OI + ρ·objem seance** (ADR-0061, #1665): kalibrace ρ z řetězu D+1, FA se píše jen
    v minutě s objemem IBKR; retro ρ `scripts/recompute_fa_rho.py --apply` až po nasazení v6.
 8. **Čtenáři podle verze:** souhrn, Knihovna, Zkouška, kalibrace confidence, brzdy a drift
-   v news-engine (`news-engine/drift.py`) čtou jen setupy `mechanics_version` 6. Vzorky v5 zůstávají
-   v DB s verzí 5 a nemažou se (souhrn je ukáže s `all_versions`).
+   v news-engine (`news-engine/src/gexlens_news/drift.py`) čtou jen setupy `mechanics_version` 6.
+   Vzorky v5 zůstávají v DB s verzí 5 a nemažou se (souhrn je ukáže s `all_versions`).
+
+**Poznámka #1605** (vlastník 19. 10. 2026, #1608 = b): řádky v5 od nasazení #1605
+(19. 10. 2026 09:58 UTC) do bumpu mají Max Pain z OI obnoveného i na tasty křídlech (u 0DTE
+~55 % Σ OI). Max Pain jde do cíle všech šablon a do hlasu tendence, takže statistiky v5 míchají
+dva výpočty cíle; řez přichází jen jednou, s v6.
 
 Ve stejném PR, ale mimo mechaniku (bod 1 doplňku 11. 9. se ho netýká): **posun confidence podle
 polohy v pásmu je 0** ve všech třídách (`BAND_CONFIDENCE_ADJUST`, verdikt #1064 z 8. 10. 2026),

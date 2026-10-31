@@ -2159,7 +2159,7 @@ max drawdown ~19 % v simulaci nad v5; 2 %: ~39 %) a že ztráta přes 1 000 $
 v aplikaci (100 $ reálně) je z definice nemožná. **Nezaručují zisk** — edge
 mechaniky v5 byl ≈ 0 R a vzorek brány v6 začíná od nuly, takže brána šablon
 zpočátku všechny setupy označí za stín (nedostatek vzorku), dokud buňka nemá
-30 uzavřených setupů v6. Živé obchodování má smysl až po ~60 seancích, kdy bilance
+30 uzavřených setupů v6 nebo ji nepustí Zkouška. Živé obchodování má smysl až po ~60 seancích, kdy bilance
 obchodovatelných setupů drží nad nulou. Přepnutí na 2 % až po ≥ 50 živých
 obchodech s edge ≥ +0,2 R. Zvětšovat stop kvůli sizingu je špatně — stop se
 nezvětšuje, zpřesňuje se vstup.

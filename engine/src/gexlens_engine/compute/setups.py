@@ -67,7 +67,11 @@ from gexlens_engine.ticker import parse_ticker
 #       maximu seance (#1602), FA = OI + ρ·objem (ADR-0061), spot se stářím pro
 #       verdikt, tendenci, stav mapy a T6 (#1600, #1622, #1623, #1657), tendence v5, verdikt
 #       dne v4 a brána šablon nad čistým R mikra (#1402). Vzorky v5 se
-#       nepřenášejí: brána, confidence i walk-forward začínají od n = 0.
+#       nepřenášejí: brána a confidence začínají od n = 0, walk-forward v6 učí
+#       ze stínu od 21. 9. jen po paritě stín ↔ 1A (ADR-0057 bod 7). Poznámka
+#       #1605 (vlastník 19. 10., #1608 = b): řádky v5 od nasazení #1605
+#       (19. 10. 2026 09:58 UTC) do bumpu mají Max Pain z obnoveného OI tasty
+#       křídel, statistiky v5 tak míchají dva výpočty cíle; řez přichází s v6.
 #
 # #1320 verzi ZÁMĚRNĚ nezvedá: mění vyhodnocení (celá cesta ceny z barů, timeout
 # za close baru končícího v settle), ne vznik setupu ani jeho úrovně. Opravené
