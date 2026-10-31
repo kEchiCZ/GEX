@@ -25,8 +25,8 @@ ostřejší přechod". Tady se totéž pravidlo počítá nad VÁŽENÝM profile
   Hodnoty v1 a v2 se NESMÍ míchat — proto `band_metrics_version` v contextu.
 
 Fáze 1 hodnoty jen zapisovala do `context` setupů; od #1060 (fáze 2) na
-`band_depth` stojí úprava confidence a dvě STÍNOVÁ pravidla brány (nic
-se neblokuje) — viz sekce „Brána podle polohy v zóně" níže.
+`band_depth` stojí dvě STÍNOVÁ pravidla brány (nic se neblokuje) a do #1403
+i úprava confidence — viz sekce „Brána podle polohy v zóně" níže.
 """
 
 import math
@@ -54,9 +54,9 @@ BAND_METRICS_VERSION = 3
 # Rozhodnutí uživatele 7. 9. 2026: varianta B (confidence) + varianta C ve
 # stínu, tvrdá brána A zamítnuta. Nic se neblokuje a žádná šablona se
 # nevyřazuje — poloha jen posune confidence a k setupu se zapíše, co by
-# udělalo každé ze dvou kandidátních pravidel. Vyhodnocení ~5. 10. 2026 na
-# mechanice v5 (min. 100 setupů v nejmenší skupině, Wilsonova mez, permutační
-# test interakce poloha × režim) rozhodne, zda se některé pravidlo zapne.
+# udělalo každé ze dvou kandidátních pravidel. Verdikt #1064 (8. 10. 2026,
+# 502 setupů v5, `docs/research/1064-stinova-brana.md`): žádné pravidlo se
+# nezapíná a posun confidence se ruší (`BAND_CONFIDENCE_ADJUST` = 0, #1403).
 
 #: Třídy polohy podle `band_depth` (hranice z kalibrace #575 fáze 1)
 BAND_CLASS_INSIDE = "inside"  # (1, 2] — nad hranou Major až k vrcholu
@@ -64,12 +64,15 @@ BAND_CLASS_TRANSITION = "transition"  # (0, 1] — mezi hranami All a Major
 BAND_CLASS_OUTSIDE = "outside"  # (−1, 0] — pod hranou All, profil na ceně > 0
 BAND_CLASS_NO_ZONE = "no_zone"  # −1 — profil na ceně nulový / bez tlumící zóny
 
-#: Úprava confidence per třída (varianta B, body procent)
+#: Úprava confidence per třída (varianta B, body procent). Verdikt #1064
+#: (vlastník 8. 10. 2026): na v5 se efekt polohy nepotvrdil (block bodově lepší),
+#: posun se proto ruší — confidence = jen měřený základ. Do #1403 platilo +10
+#: uvnitř, 0 přechod, −15 mimo a bez zóny; stínová pravidla se zapisují dál.
 BAND_CONFIDENCE_ADJUST: dict[str, int] = {
-    BAND_CLASS_INSIDE: 10,
+    BAND_CLASS_INSIDE: 0,
     BAND_CLASS_TRANSITION: 0,
-    BAND_CLASS_OUTSIDE: -15,
-    BAND_CLASS_NO_ZONE: -15,
+    BAND_CLASS_OUTSIDE: 0,
+    BAND_CLASS_NO_ZONE: 0,
 }
 
 GATE_PASS = "pass"

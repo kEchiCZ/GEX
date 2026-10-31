@@ -238,7 +238,8 @@ def test_band_gate_bez_hloubky_nic_nemeni() -> None:
 
 def test_band_gate_nad_skutecnym_profilem() -> None:
     """Hloubka z `band_metrics` prochází bránou stejně jako ručně dosazená:
-    plato zóny = inside (+10), sráz pod All = outside (−15)."""
+    plato zóny = inside, sráz pod All = outside; posun confidence je od #1403
+    v každé třídě 0 (verdikt #1064)."""
     profile = profile_from_weighted(ZONE, 7000.0, 10.0)
     inside = band_gate_context(band_metrics(profile, 7040.0).depth, "positive")  # type: ignore[union-attr]
     assert inside["band_class"] == "inside"
@@ -246,4 +247,4 @@ def test_band_gate_nad_skutecnym_profilem() -> None:
     outside = band_gate_context(band_metrics(profile, 7004.0).depth, "negative")  # type: ignore[union-attr]
     assert outside["band_class"] == "outside"
     assert outside["band_gate_simple"] == "block"
-    assert outside["confidence_band_adjust"] == -15
+    assert outside["confidence_band_adjust"] == 0

@@ -682,7 +682,7 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
         )
     fake = FakeRuntime()
     # Dyn profil s plochou tlumící zónou 7490–7520 (#1060): entry 7501 leží
-    # hluboko uvnitř → brána B zvedne confidence šablony o 10 bodů
+    # hluboko uvnitř → třída inside; posun confidence je od #1403 0 (verdikt #1064)
     fake.last_profile = GexProfile(
         ts_min=TS,
         grid_start=7470.0,
@@ -724,22 +724,23 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     assert active[0].direction == "long"
     assert active[0].stop == 7493  # dno 7494 − 1
     # Confidence (#794 fáze 2B + #1060): základ z track recordu 41 (Wilson LB
-    # 20/35 v negativní gammě), uvnitř zóny +10 → 51; konstanta šablony 55 zůstává
-    # v contextu; stínová pravidla se zapisují, setup vzniká bez ohledu na verdikt
-    assert active[0].confidence == 51
+    # 20/35 v negativní gammě), poloha uvnitř zóny ho od #1403 neposouvá (do v5
+    # +10 → 51); konstanta šablony 55 zůstává v contextu; stínová pravidla se
+    # zapisují, setup vzniká bez ohledu na verdikt
+    assert active[0].confidence == 41
     created_ctx = repository.list_for("ES")[0]["context"]
     assert repository.list_for("ES")[0]["params_version"] == 4
     assert created_ctx["confidence_base"] == 41
     assert created_ctx["confidence_template"] == 55
     assert created_ctx["confidence_source"] == "wilson ES·failed_break·negative n=35"
-    assert created_ctx["confidence_band_adjust"] == 10
+    assert created_ctx["confidence_band_adjust"] == 0
     assert created_ctx["band_class"] == "inside"
     assert created_ctx["band_gate_simple"] == "pass"
     assert created_ctx["band_gate_regime"] == "pass"
 
     created_alerts = [d for ch, d in publisher.messages if ch == "alerts"]
     assert any("Nový setup LONG" in str(a["message"]) for a in created_alerts)
-    assert any("conf. 51 %" in str(a["message"]) for a in created_alerts)
+    assert any("conf. 41 %" in str(a["message"]) for a in created_alerts)
     # Proklik ve zvonečku (#186): nový setup nese event=created
     assert any(a.get("event") == "created" for a in created_alerts)
     assert any(ch == "setups.ES" for ch, _ in publisher.messages)
