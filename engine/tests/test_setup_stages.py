@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import create_engine
 
 import gexlens_engine.setups as setups_module
-from gexlens_engine.compute.risk import RealizedSetup, trial_usage
+from gexlens_engine.compute.risk import RISK_RULES_VERSION_NET, RealizedSetup, trial_usage
 from gexlens_engine.compute.settle import expiry_settle, session_bounds
 from gexlens_engine.compute.setups import (
     SETUP_MECHANICS_VERSION,
@@ -433,7 +433,9 @@ def test_auto_se_chova_jako_pred_1323(tmp_path: Path, params: SetupParams) -> No
     assert risk["user_stage"] == "auto" and risk["gate_overridden"] is False
     assert not TRIAL_KEYS & set(risk)
     assert _risk(engine, stop=7586.0)["trade_block"] == "stop_over_budget"
-    assert _risk(engine)["risk_rules_version"] == 3
+    # #1323 stádia = pravidla 3; výchozí engine je od bumpu #1403 v6 (brána nad
+    # čistým R, #1402) = 4 — buňka bez stádia rozhoduje dál stejným pořadím
+    assert _risk(engine)["risk_rules_version"] == RISK_RULES_VERSION_NET
     # Brána block (stejné řádky + 40 stopů) → stín „gate“, jako dřív
     _history(repository, [-1.0] * 40, closed=LAST_WEEK)
     blocked = _risk(engine)
@@ -717,7 +719,9 @@ def test_realizovane_nesou_vznik_a_prebiti_brany(tmp_path: Path) -> None:
         mfe=0,
         mae=1,
     )
-    (row,) = repository.realized_since(NOW - dt.timedelta(days=1), mechanics_version=5)
+    (row,) = repository.realized_since(
+        NOW - dt.timedelta(days=1), mechanics_version=SETUP_MECHANICS_VERSION
+    )
     assert row.gate_overridden is True
     assert row.created_ts == NOW - dt.timedelta(hours=1)
 

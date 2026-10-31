@@ -104,11 +104,17 @@ def test_missing_components_are_skipped_not_zeroed() -> None:
 
 
 def test_walls_distance_is_continuous() -> None:
-    near_put = evaluate_tendency(inputs(call_wall=7500.0, put_wall=7400.0, spot=7410.0))
-    near_call = evaluate_tendency(inputs(call_wall=7500.0, put_wall=7400.0, spot=7490.0))
-    assert near_put is not None and near_call is not None
-    assert vote_of(near_put, "walls_distance") == pytest.approx(0.8)
-    assert vote_of(near_call, "walls_distance") == pytest.approx(-0.8)
+    """Hlas polohy mezi zdmi je spojitý. Pod pravidly v5 (od bumpu #1403) má váhu 0
+    a minuta jen s ním skóre nemá (`test_v5_minuta_jen_s_nulovou_vahou_nema_skore`),
+    proto se čte hlas živé verze, ne výsledek."""
+
+    def walls_vote(spot: float) -> float:
+        case = inputs(call_wall=7500.0, put_wall=7400.0, spot=spot)
+        votes = _collect_votes(case, TENDENCY_WEIGHTS_VERSION)
+        return next(vote.vote for vote in votes if vote.name == "walls_distance")
+
+    assert walls_vote(7410.0) == pytest.approx(0.8)
+    assert walls_vote(7490.0) == pytest.approx(-0.8)
 
 
 def test_gamma_at_price_interpolates_grid() -> None:

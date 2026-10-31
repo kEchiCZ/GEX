@@ -306,8 +306,9 @@ def test_usd_simulace_mikro_sizing_naklady_a_preskocene() -> None:
     sim = result.simulation
     assert sim is not None
     assert (sim.traded, sim.skipped) == (1, 1)
-    # 2 kontrakty × 2 R × 10 b × 5 $ − 2 × 2,49 $
-    assert sim.total_usd == pytest.approx(200 - 4.98)
+    # 2 kontrakty × 2 R × 10 b × 5 $ − 2 × 3,72 $ (výchozí od bumpu #1403 = v6:
+    # MES 1,22 $ + 2 × 1,25 $, #1402; do v5 konstanta 2,49 $)
+    assert sim.total_usd == pytest.approx(200 - 7.44)
     off = performance(
         rows,
         point_values=POINT_VALUES,

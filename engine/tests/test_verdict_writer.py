@@ -65,7 +65,9 @@ def test_kazdou_minutu_okna_prepise_radek_plati_posledni_pred_openem(tmp_path: P
     first = _minute(writer, clock, OPEN - dt.timedelta(minutes=VERDICT_WINDOW_MINUTES), 7590.0)
     assert first is not None and first.complete and first.verdict.verdict == "short"
     (row,) = _rows(writer)
-    assert row["verdict"] == "short" and row["rules_version"] == 3
+    # Verze 4 od bumpu #1403 jen značí zlom vstupu (CumΔ z tisků, spot se stářím),
+    # pravidla jsou táž jako ve verzi 3 (ADR-0057 bod 8)
+    assert row["verdict"] == "short" and row["rules_version"] == 4
     overnight = next(vote for vote in row["votes"] if vote["name"] == "overnight")
     assert overnight == {
         "name": "overnight",

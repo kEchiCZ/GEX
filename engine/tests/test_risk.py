@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 
 from gexlens_engine.compute.risk import (
     RISK_RULES_VERSION,
+    RISK_RULES_VERSION_NET,
     RealizedSetup,
     affordable_results,
     brake_state,
@@ -589,8 +590,9 @@ def test_brana_es_a_nq_maji_vlastni_vstup_a_verdikt(tmp_path: Path) -> None:
     assert isinstance(nq_lb, float) and nq_lb > 0
     assert nq["tradeable"] is True and nq["trade_block"] is None and nq["contracts"] == 1
     # Význam template_gate* se změnil → nová verze pravidel v kontextu
-    # (#1325 = 2; #1323 stádia buněk zvedla na 3)
-    assert es["risk_rules_version"] == nq["risk_rules_version"] == RISK_RULES_VERSION == 3
+    # (#1325 = 2; #1323 stádia buněk zvedla na 3; brána nad čistým R #1402 na 4 —
+    # výchozí engine je od bumpu #1403 mechanika v6)
+    assert es["risk_rules_version"] == nq["risk_rules_version"] == RISK_RULES_VERSION_NET == 4
 
 
 @pytest.mark.parametrize(
