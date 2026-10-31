@@ -105,6 +105,49 @@ začíná každá buňka od n = 0. Dokud nenasbírá 30 uzavřených setupů v6,
 na nové mechanice končí (ADR-0038 dodatek 2026-10-01). Podle bodu 1 bump nuluje i vzorky
 confidence a walk-forwardu.
 
+**Doplněk 31. 10. 2026 (#1403) — bump v6: obsah a začátek vzorků.** `SETUP_MECHANICS_VERSION`
+5 → 6 (`compute/setups.py`) zapíná dávku podle bodu 2 doplňku 11. 9. Přepínače se odvozují
+od verze: `CUMDELTA_PRINTS` a `NET_R_GATE`, z nich `cumdelta.LIVE_SOURCE`, `spot.SPOT_AGE_GATE`,
+`tendency.TENDENCY_WEIGHTS_VERSION` a `dayverdict.VERDICT_RULES_VERSION`. Inventura v kódu
+(31. 10. 2026, grep přepínačů v enginu, API, news-engine a frontendu):
+
+1. **CumΔ a čistý objem jen z tisků** se stranou od burzy (ADR-0057, #1459, #1460, #1588–#1590):
+   zdroj `aggressor` v živých trackerech (`runtime.py`, `__main__.py`), mezera trade větve = NULL,
+   předání trackeru řetězu D+1 v rollu, pásmo řetězu přes roll jen roste, `/status`
+   `cumdelta_source`. Texty upozornění na výpadek tasty a mlčící feed nesou dopad na CumΔ
+   (`tasty/watchdog.py`, `tasty/chain_fallback.py`, `tasty/crosscheck.py`, API `push_telegram.py`).
+2. **Setupy** (`SetupEngine.cumdelta_prints`): CumΔ se nesrovnává přes hranici seance 17:00 CT
+   (`cum_gap_before`, #1581), Δ Flow C/P (T4) a `opt_vol` (T3) jsou přírůstek proti maximu
+   seance (#1602). Detektory a prahy šablon se nemění: golden `setups_regression_577` dává tytéž
+   kandidáty, mění se jen značka verze.
+3. **Brána šablon nad čistým R mikra** (`NET_R_GATE`, `SetupEngine.net_gate`, #1402, kritérium A
+   z #1334): brána, n potřebné, ØR čistě a čistý P/L buňky s nákladem poplatek mikra + 1 tick na
+   stranu, `risk_rules_version` 4, `net_r_gate` v `GET /setups/params`, „LB čistě“ v pushi.
+4. **Tendence v5** (`TendencyEngine.cumdelta_prints`): sklon a rozchod z tisků jen v seanci,
+   Max Pain 0–90 min do settle, hystereze od otevření seance, poloha mezi zdmi váha 0 (#1113 C),
+   `delta_flow` proti maximu seance; při zavřeném trhu se nepočítá (#1622).
+5. **Verdikt dne v4:** pravidla beze změny, verze značí zlom vstupu (ADR-0057 bod 8). Čte ji
+   i API (`briefing_routes`, track record jen aktuální verze).
+6. **Spot se stářím** (`SPOT_AGE_GATE`, #1600, #1623, #1657): verdikt, tendence, stav mapy a T6
+   hlasují jen z živé ceny, stará cena je chybějící vstup.
+7. **FA = OI + ρ·objem seance** (ADR-0061, #1665): kalibrace ρ z řetězu D+1, FA se píše jen
+   v minutě s objemem IBKR; retro ρ `scripts/recompute_fa_rho.py --apply` až po nasazení v6.
+8. **Čtenáři podle verze:** souhrn, Knihovna, Zkouška, kalibrace confidence, brzdy a drift
+   v news-engine (`news-engine/drift.py`) čtou jen setupy `mechanics_version` 6. Vzorky v5 zůstávají
+   v DB s verzí 5 a nemažou se (souhrn je ukáže s `all_versions`).
+
+Ve stejném PR, ale mimo mechaniku (bod 1 doplňku 11. 9. se ho netýká): **posun confidence podle
+polohy v pásmu je 0** ve všech třídách (`BAND_CONFIDENCE_ADJUST`, verdikt #1064 z 8. 10. 2026),
+confidence = jen měřený základ (ADR-0033 dodatek 2026-10-31). Stínová pravidla brány polohy se
+zapisují dál.
+
+**Začátek vzorků v6** = první minuta enginu v6 na produkci. Nasazuje se v zavřeném trhu
+31. 10.–1. 11. 2026, takže první seance v6 je seance 2. 11. 2026 (otevření Globexu ne 1. 11.
+23:00 UTC); skutečný čas nasazení zapíše #1403 a epika #1385 (start vzorků Fáze 9). Od něj
+začíná každá buňka brány od n = 0. Walk-forward v6 učí od 21. 9. 2026 ze stínu `cumdelta_dx`,
+jen když projde parita stín ↔ 1A nad ≥ 5 seancemi po bumpu (ADR-0057 bod 7, doplněk 21. 10.),
+jinak od dne nasazení.
+
 **Doplněk 22. 10. 2026 (#1464, nález #1081) — seance = okno aktivního řetězu.**
 Adresář expirace E nese i minuty, kdy E psal sekundární runtime (levels jednou
 za 3 min), ale živý `SetupEngine` běží jen nad aktivním řetězem. Replay je

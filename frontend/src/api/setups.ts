@@ -349,9 +349,9 @@ export async function reviewSetup(
 // ── Poloha v tlumící zóně a stínová brána (#1060, fáze 2 z #575) ──────────
 //
 // Engine zapíše do `context` třídu polohy podle `band_depth`, posun confidence
-// (varianta B: +10 uvnitř, 0 přechod, −15 mimo / bez pásma) a verdikty dvou
-// STÍNOVÝCH pravidel — nic se neblokuje, setup vzniká vždy. UI je jen ukazuje;
-// vyhodnocení ~5. 10. 2026 rozhodne, zda se některé pravidlo zapne naostro.
+// (do #1403 varianta B: +10 uvnitř, 0 přechod, −15 mimo / bez pásma; od verdiktu
+// #1064 všude 0) a verdikty dvou STÍNOVÝCH pravidel — nic se neblokuje, setup
+// vzniká vždy. UI je jen ukazuje; verdikt #1064 žádné pravidlo nezapnul.
 
 export type BandClass = 'inside' | 'transition' | 'outside' | 'no_zone'
 export type BandGate = 'pass' | 'block' | 'unknown'
@@ -454,7 +454,7 @@ export function bandTooltip(info: BandInfo): string {
     `• poloha × gamma režim: ${GATE_LABELS[info.gateRegime]}`,
     '',
     'Škála hloubky: −1 bez zóny · 0 hrana All · 1 hrana Major · 2 vrchol profilu.',
-    'Vyhodnocení pass vs. block ~5. 10. 2026 na mechanice v5 rozhodne, zda se pravidlo zapne.',
+    'Verdikt #1064 (8. 10. 2026): blok nebyl horší než prošel → pravidlo se nezapíná a od #1403 poloha důvěru neposouvá.',
   ].join('\n')
 }
 

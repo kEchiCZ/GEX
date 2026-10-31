@@ -581,7 +581,7 @@ function SetupsOverview() {
             'Poloha entry v tlumící zóně Dyn GEX (#1060). Nic se neblokuje — u každého setupu se jen zapisuje, co by pravidlo udělalo. Hodnota: počet uzavřených · Ø R.',
             '• jen poloha: mimo pásmo / bez pásma = blok',
             '• poloha × režim: uvnitř vždy, přechod jen v negativní gammě, mimo nikdy',
-            'Vyhodnocení ~5. 10. 2026: blok horší o ≥ 0,2 R než prošel → pravidlo se zapne.',
+            'Verdikt #1064 (8. 10. 2026): blok nebyl horší než prošel → pravidlo se nezapíná, data se sbírají dál.',
           ].join('\n')}
         >
           <Stat

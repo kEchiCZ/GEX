@@ -112,3 +112,14 @@ polohy — aplikuje se navrch základu, který fáze 2B nahradí kalibrovaným).
   Návrhy walk-forwardu (`scripts/walkforward_setups.py`) stádia nenesou. `POST /setups/params` je převezme z platné verze, jinou hodnotu odmítne.
   Engine novou verzi převezme po NOTIFY jako dosud (`apply_params`), otevřené setupy si nesou
   stádium platné při vzniku.
+
+## Dodatek 2026-10-31: posun podle polohy v pásmu je 0 (#1403, verdikt #1064)
+
+- Verdikt stínové brány na mechanice v5 (#1064, 8. 10. 2026, 502 setupů) efekt polohy
+  nepotvrdil, skupina „block“ byla bodově lepší. Vlastník zvolil variantu A: posun se ruší.
+- `BAND_CONFIDENCE_ADJUST` je 0 ve všech třídách (`compute/bandregime.py`), takže confidence
+  = měřený základ z bodu 6 (Wilsonova mez koše, jinak konstanta šablony). Kontext setupu dál nese
+  `band_class`, `confidence_band_adjust` (0) a stínové verdikty obou pravidel.
+- Setupy do nasazení #1403 nesou svůj posun (+10 / 0 / −15) v kontextu i ve štítku dál.
+  Mechaniku to nemění (ADR-0034 §6), nasazuje se ale spolu s bumpem v6.
+
