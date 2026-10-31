@@ -263,9 +263,15 @@ def test_bunka_ukazuje_cisty_pl_v_mikro_dolarech() -> None:
         contracts=3,
     )
     assert cell_net_usd(
-        [row], SetupParams(), point_value_usd=20.0, point_values=POINT_VALUES
+        [row], SetupParams(), point_value_usd=20.0, point_values=POINT_VALUES, per_side=False
     ) == pytest.approx(3 * (16 * 2.0 - 1.74))
-    assert net_usd_micro(1.0, 16.0, 3, "NQZ6", POINT_VALUES) == pytest.approx(3 * (32 - 1.74))
+    assert net_usd_micro(1.0, 16.0, 3, "NQZ6", POINT_VALUES, per_side=False) == pytest.approx(
+        3 * (32 - 1.74)
+    )
+    # Výchozí konvence je od bumpu #1403 v6: MNQ 1,22 $ + 2 × 0,50 $ = 2,22 $ (#1402)
+    assert net_usd_micro(1.0, 16.0, 3, "NQZ6", POINT_VALUES, micro_fee_usd=1.22) == pytest.approx(
+        3 * (32 - 2.22)
+    )
     assert cell_net_usd([], SetupParams(), point_value_usd=50.0, point_values=POINT_VALUES) is None
 
 

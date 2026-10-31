@@ -62,6 +62,12 @@ from gexlens_engine.ticker import parse_ticker
 #       který neodpovídal skutečnosti (NQ 24. 8.: tendence celý den 29525,
 #       skutečnost 29200 → 29400 → 29390), a do hodnocení track recordu
 #       nepatří (#859).
+#    v6: dávkový bump #1403 (ADR-0034 §6, doplněk 31. 10. 2026) — CumΔ a čistý
+#       objem jen z tisků se stranou od burzy (ADR-0057), přírůstek objemu proti
+#       maximu seance (#1602), FA = OI + ρ·objem (ADR-0061), spot se stářím pro
+#       verdikt, tendenci, stav mapy a T6 (#1600, #1622, #1623, #1657), tendence v5, verdikt
+#       dne v4 a brána šablon nad čistým R mikra (#1402). Vzorky v5 se
+#       nepřenášejí: brána, confidence i walk-forward začínají od n = 0.
 #
 # #1320 verzi ZÁMĚRNĚ nezvedá: mění vyhodnocení (celá cesta ceny z barů, timeout
 # za close baru končícího v settle), ne vznik setupu ani jeho úrovně. Opravené
@@ -92,13 +98,13 @@ from gexlens_engine.ticker import parse_ticker
 # Detektory ani úrovně se nemění, jen hranice vyhodnocení; trading class nese
 # `context.trading_class` a historické výsledky srovná
 # `scripts/recompute_setup_outcomes.py` (jen se souhlasem).
-SETUP_MECHANICS_VERSION = 5
-# CumΔ a čistý objem jen z tisků se stranou od burzy (ADR-0057, #1460); zapne
+SETUP_MECHANICS_VERSION = 6
+# CumΔ a čistý objem jen z tisků se stranou od burzy (ADR-0057, #1460); zapnul
 # ho bump v6 (#1403). Živé trackery z něj berou zdroj (`cumdelta.LIVE_SOURCE`),
 # runtime se pak ptá instance (`tracker.prints`), ne globálu.
 CUMDELTA_PRINTS = SETUP_MECHANICS_VERSION >= 6
 # Brána šablon a důkaz buňky nad čistým R po nákladech ADR-0030 se skluzem
-# 1 tick na stranu (#1402, kritérium A z #1334); zapne ho bump v6 (#1403).
+# 1 tick na stranu (#1402, kritérium A z #1334); zapnul ho bump v6 (#1403).
 # Runtime se ptá pole instance (`SetupEngine.net_gate`) nebo parametru, ne
 # globálu, ať jdou v testech obě konvence; pod v5 brána beze změny nad hrubým R.
 NET_R_GATE = SETUP_MECHANICS_VERSION >= 6

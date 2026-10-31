@@ -153,6 +153,7 @@ def replay_symbol(
             day,
             publication_utc=settings.oi_publication_utc,
             snapshots_dir=settings.snapshots_dir,
+            cumdelta_prints=CUMDELTA_PRINTS,  # týž zdroj jako `own_sources`
         )
         result.replayed.append(day)
 

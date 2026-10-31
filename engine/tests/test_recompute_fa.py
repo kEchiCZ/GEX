@@ -33,12 +33,17 @@ EXPIRY = "20260724"  # expiruje po dni netflow → kalibrace ji bere
 STRIKES = [7500.0 + 10 * i for i in range(12)]
 
 
-def _load() -> Any:
+def _load(prints: bool = False) -> Any:
+    """Skript s mechanikou `prints` — výchozí v5 (α z netflow), na které stojí seed.
+
+    Od bumpu v6 (#1403) kód přehrává ρ z objemu ze snímků celé seance; testy v5
+    drží regresi cesty, kterou dál čte návrat pinem image (ADR-0061 bod 6)."""
     spec = importlib.util.spec_from_file_location("recompute_fa", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    module.CUMDELTA_PRINTS = prints
     return module
 
 
@@ -218,3 +223,17 @@ def test_srovnava_jen_body_a_stav_zdroje_prehrani(tmp_path: Path) -> None:
     assert all(day != other_day for day, _, _ in result.stale_alpha)
     assert result.old_alpha is None  # stav jiného zdroje se nesrovnává
     assert result.alpha_points[PREV][0] == 0.0  # midpoint bod ze _seed je starý bod
+
+
+def test_v6_bod_midpointu_neni_stary_bod_rho(tmp_path: Path) -> None:
+    """Pod v6 (#1403) přehrání počítá ρ z objemu (ADR-0061): bod a stav midpointu
+    ze _seed nejsou jeho „staré hodnoty“, takže `--apply` je nechá být (#1590)."""
+    module = _load(prints=True)
+    url, settings = _seed(tmp_path)
+    db = create_engine(url)
+    result = module.replay_symbol("ES", settings, OIEodRepository(db), db)
+    assert module.own_sources() == frozenset({"volume"})
+    assert all(day != PREV for day, _, _ in result.stale_alpha)
+    assert result.old_alpha is None
+    # Snímek _seed pokrývá jedinou minutu seance — platný den ρ to není (ADR-0061 bod 3)
+    assert result.alpha_points == {}

@@ -185,10 +185,12 @@ def test_summary_vraci_bunky_knihovny(client: TestClient, settings: Settings) ->
     t7 = cells[CELL]
     assert (t7["stage"], t7["effective_stage"], t7["trial"]) == ("shadow", "shadow", None)
     assert (t7["gate_verdict"], t7["gate_n"]) == ("insufficient", 3)
-    assert t7["avg_r"] == 2.5 and t7["avg_net_r"] == pytest.approx(2.5 - 1.74 / 32)
+    # Náklad mikra od bumpu #1403 (v6, #1402): MNQ poplatek 1,22 $ + 2 × 0,50 $ = 2,22 $
+    # za obchod (do v5 konstanta 1,74 $)
+    assert t7["avg_r"] == 2.5 and t7["avg_net_r"] == pytest.approx(2.5 - 2.22 / 32)
     assert t7["template_number"] == 7 and t7["ticker"] == "NQ"
-    # Σ čistě v mikro dolarech, kontrakty z kontextu: 3 × 1 × (2,5 R × 16 b × 2 $ − 1,74 $)
-    assert t7["net_usd"] == pytest.approx(3 * (2.5 * 16 * 2.0 - 1.74))
+    # Σ čistě v mikro dolarech, kontrakty z kontextu: 3 × 1 × (2,5 R × 16 b × 2 $ − 2,22 $)
+    assert t7["net_usd"] == pytest.approx(3 * (2.5 * 16 * 2.0 - 2.22))
     assert isinstance(t7["window_capacity"], int)
     # Brzdy účtu (hlavička Knihovny): stín se nepočítá, limity z platné verze
     brakes = summary["brakes"]

@@ -235,7 +235,10 @@ def _collect(
     alpha_repo: FaAlphaRepository,
     day: dt.date = TODAY,
 ) -> AlphaCalibrationResult | None:
-    """Kolektor s publikací CME z konfigurace — jako pipeline (#1605)."""
+    """Kolektor s publikací CME z konfigurace — jako pipeline (#1605).
+
+    Cesta v5 (α z netflow) výslovně: od bumpu v6 (#1403) je výchozí ρ z objemu
+    (`_collect_v6`), testy níž drží regresi v5 (ADR-0061 bod 6)."""
     return collect_alpha_calibration(
         "ES",
         settings.derived_dir,
@@ -244,6 +247,7 @@ def _collect(
         day,
         publication_utc=settings.oi_publication_utc,
         snapshots_dir=settings.snapshots_dir,
+        cumdelta_prints=False,
     )
 
 
