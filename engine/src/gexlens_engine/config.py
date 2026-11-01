@@ -230,9 +230,10 @@ class Settings(BaseSettings):
     # Extended expirace z tasty (#616 fáze 4a, schváleno 22. 8.): expirace mimo
     # množinu IBKR do horizontu, snapshoty s BS greeks z kotací (#810/#547).
     # Kadence odstupňovaná: ≤ near_days každou minutu, dál každých far_interval.
+    # Hranice 5 kalendářních dnů od 1. 11. 2026 (ADR-0058, #1338 D-b; dřív 7).
     tasty_extended_enabled: bool = True
     tasty_extended_horizon_days: int = Field(default=30, ge=0)
-    tasty_extended_near_days: int = Field(default=7, ge=0)
+    tasty_extended_near_days: int = Field(default=5, ge=0)
     tasty_extended_far_interval_min: int = Field(default=5, ge=1)
     # Pásmo striků extended subskripcí kolem spotu (± % ceny podkladu). Bez
     # pásma ES chain (49 expirací × plná šířka ≈ 7 400 symbolů) přeteče

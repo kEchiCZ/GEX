@@ -4,6 +4,7 @@ import datetime as dt
 
 import pytest
 
+from gexlens_engine.config import Settings
 from gexlens_engine.tasty.extended import (
     ExpiryOverlapError,
     build_snapshot_rows,
@@ -58,6 +59,29 @@ def test_cadence_odstupnovana() -> None:
     assert due("20260825", 871) is True
     assert due("20260930", 871) is False
     assert due("20260930", 870) is True
+
+
+def test_cadence_hranice_z_vychozi_konfigurace() -> None:
+    """ADR-0058 (#1338 D-b): do 5 kalendářních dnů každou minutu, od 6. dne po 5 min."""
+    # Výchozí hodnoty polí, ne Settings(): `.env` ani proměnné prostředí je nesmí přebít
+    fields = Settings.model_fields
+    near_days = fields["tasty_extended_near_days"].default
+    far_interval_min = fields["tasty_extended_far_interval_min"].default
+    assert near_days == 5
+
+    def due(expiry: str, minute_of_day: int) -> bool:
+        return cadence_due(
+            expiry,
+            today=TODAY,
+            minute_of_day=minute_of_day,
+            near_days=near_days,
+            far_interval_min=far_interval_min,
+        )
+
+    # TODAY je so 22. 8.: 5 dnů = čt 27. 8., 6 dnů = pá 28. 8.
+    assert due("20260827", 871) is True
+    assert due("20260828", 871) is False
+    assert due("20260828", 870) is True
 
 
 def test_build_rows_bs_greeks_a_oimissing() -> None:
