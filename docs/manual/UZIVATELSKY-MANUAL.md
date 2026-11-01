@@ -170,6 +170,8 @@ ticker bez dat zůstává u vybrané expirace s hláškou demo dat.
 
 Heatmapa zobrazuje matici **čas (osa X) × strike (osa Y)**. Každá buňka je jedna minuta jednoho striku; intenzita barvy odpovídá hodnotě zvolené metriky. **Teal/zelená = call strana, červená = put strana.**
 
+**Rozlišení vzdálených expirací (ADR-0058).** Expirace do 5 kalendářních dnů, včetně 0DTE, se ukládají každou minutu. Vzdálenější expirace 6–30 dnů z tastytrade se ukládají jen každých 5 minut: heatmapa má u nich hodnotu po 5 minutách a profil k okamžiku bere poslední pětiminutový snímek, nejvýš 4 minuty starý. Do 1. 11. 2026 platila hranice 7 dnů, starší dny mají proto expirace 6–7 dnů po minutách.
+
 ### Ovládání myší (styl TradingView)
 
 | Akce | Efekt |

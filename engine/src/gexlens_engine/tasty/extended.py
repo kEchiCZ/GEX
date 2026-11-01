@@ -12,10 +12,11 @@ doložila, že dxFeed Greeks eventy na řídkých sériích nechodí (event-driv
 a CumΔ zůstávají výhradně IBKR (trade printy celého řetězu sbírá #795 pro
 budoucí klasifikaci #615).
 
-Kadence je odstupňovaná (rozhodnutí 22. 8.): expirace ≤ `near_days` dnů se
-zapisují každou minutu, vzdálenější každých `far_interval_min` minut —
-vzdálené expirace se intraday skoro nehýbou a plná kadence by jen 3×
-nafoukla keep-forever archiv (ADR-0029).
+Kadence je odstupňovaná (ADR-0058, dřív rozhodnutí 22. 8.): expirace ≤ `near_days`
+kalendářních dnů od dnešního data UTC se zapisují každou minutu, vzdálenější
+každých `far_interval_min` minut — vzdálené expirace se intraday skoro nehýbou
+a plná kadence by jen nafoukla keep-forever archiv (ADR-0029). Hranice platí
+jen pro zápis, subskripce se neřídí kadencí.
 """
 
 import datetime as dt

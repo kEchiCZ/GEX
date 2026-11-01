@@ -284,7 +284,7 @@ nový řádek v této tabulce ve stejném PR (viz `AGENTS.md`, Definition of don
 | tastytrade / dxFeed jako sekundární zdroj; klasifikace agresora celého řetězu (R2) | 0025, 0027, 0032, 0057 | #610, #615, #1459 | ADMIN kap. 5, 11 |
 | Equity ad-hoc pohled (SPY, QQQ, akcie) přes tastytrade | 0025 | #206 | ADMIN kap. 5 |
 | Konvence obchodního dne a settle; kvartální roll a SOQ; pozdní start | 0023, 0024, 0039 | — | USER kap. 6, 8b |
-| Retence 90 dní; věčný archiv učicích dat | 0022, 0029 | #437 | ADMIN kap. 6 |
+| Retence 90 dní; věčný archiv učicích dat; rozlišení sběru extended expirací | 0022, 0029, 0058 | #437, #1338 | ADMIN kap. 5, 6 |
 | Zmrzlé kotace (stáří dat v každé buňce) | 0015 | #306 | USER kap. 15 |
 | Dyn GEX pole, projekce do settle, sekundární zeď, dominance zdí, flow-adjusted GEX | 0006, 0008, 0009, 0010, 0011, 0061 | #629 | USER kap. 5, 18 |
 | Volatilitní režim (bez VIX), IV rank, tendence, gamma útes, EM respect, stav „tenká mapa" | 0028 | #394, #576, #1245 | USER kap. 4, 11f, 18 |
