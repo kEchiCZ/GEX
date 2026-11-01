@@ -13,7 +13,8 @@
 ## Kontext
 
 Extended expirace (#616 fáze 4a) jsou expirace ES a NQ mimo množinu IBKR do horizontu 30 dnů.
-Engine je skládá z kotací tastytrade, greeks dopočítá BS modelem a `volume` nechává prázdné,
+Engine je skládá z kotací tastytrade, greeks bere z dxFeed, jen když jsou čerstvé, jinak je
+dopočítá BS modelem z mid kotace, a `volume` nechává prázdné,
 protože toky a CumΔ jsou výhradně z IBKR. Zapisují se do stejných partic
 `snapshots/{sym}/{expiry}/{den}.parquet` jako IBKR expirace.
 
@@ -28,9 +29,9 @@ za ne 25. až pá 30. 10. 2026 (5 seancí, jen čtení):
 |---|---|---|
 | snapshots celkem | 231 | 100 % |
 | IBKR expirace ES a NQ (jediné s `volume`) | 19 | 8 % |
-| extended DTE 0–5 | 124 | 54 % |
+| extended DTE 0–5 | 123 | 53 % |
 | extended DTE 6–7 (dosud každou minutu) | 56 | 24 % |
-| extended DTE 8–30 (už po 5 min) | 34 | 15 % |
+| extended DTE 8–30 (už po 5 min) | 33 | 14 % |
 
 Odhad pro jinou hranici: řádky extended expirací nad hranicí a do 7 dnů se omezí na minuty
 dělitelné 5, bajty úměrně řádkům.

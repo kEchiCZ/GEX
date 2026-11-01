@@ -59,6 +59,11 @@ def _minute_counts(table_ts: pa.ChunkedArray) -> Counter[int]:
 
 
 def main() -> int:
+    # Přesměrovaný výstup má na Windows cp1250: diakritika by se rozsypala (roura v Git Bash)
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(
         description="Objem snapshotů podle DTE a odhad hranice extended expirací (#1338)"
     )
