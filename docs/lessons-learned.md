@@ -183,6 +183,10 @@ chyb**, hlavně diagnostických a provozních.
 - **`scripts/merge-when-green.sh` se kotví na SHA při spuštění.** Po čerstvém pushi hlásí fail starého
   commitu, nebo hned po pushi vidí 0 checků → počkat ~60 s / `gh pr checks`, pak spustit.
 - **Frontend: `npm run build`, ne `tsc --noEmit`.** CI staví `tsc -b`, který kontroluje i testy.
+- **2026-11-01 — test padal jen v den svého okna (#1728).** Test markerů zpráv měl pevné okno
+  31. 10.–1. 11. 2026 a čekal prázdný výsledek, fixtura ale vkládá zprávy podle hodin běhu
+  (`NOW − 1 h`, `NOW + 30 min`). Ten den spadlo CI každého PR, rerun nepomohl. → Test s pevným datem nesmí sdílet
+  fixturu s řádky podle `now()`, nebo jeho okno musí ležet v minulosti, do které `now()` nepadne.
 - **Ladil jsem test, ale kód na disku chyběl (#1108).** Skript s více úpravami spadl v půlce; hodina
   hledání, proč se změna „neprojevuje". → Před laděním padajícího testu `git status --short` + grep
   klíčového identifikátoru; vícekrokové úpravy psát idempotentně.

@@ -865,9 +865,11 @@ def test_news_markers_reject_invalid_query(
 
 def test_news_markers_accept_dst_session(markers_client: TestClient) -> None:
     """Seance přes konec letního času má 24 h — pod stropem 26 h projde."""
+    # Konec letního času 2025, ne 2026: fixtura `client` vkládá zprávy podle hodin
+    # běhu (NOW − 1 h, NOW + 30 min) a okno v budoucnosti by je v den okna vrátilo (#1728)
     params = {
-        "from": dt.datetime(2026, 10, 31, 22, 0, tzinfo=dt.UTC).isoformat(),
-        "to": dt.datetime(2026, 11, 1, 23, 0, tzinfo=dt.UTC).isoformat(),
+        "from": dt.datetime(2025, 11, 1, 22, 0, tzinfo=dt.UTC).isoformat(),
+        "to": dt.datetime(2025, 11, 2, 23, 0, tzinfo=dt.UTC).isoformat(),
     }
     response = markers_client.get("/news/markers", params=params)
     assert response.status_code == 200
