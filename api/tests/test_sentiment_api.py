@@ -864,7 +864,7 @@ def test_news_markers_reject_invalid_query(
 
 
 def test_news_markers_accept_dst_session(markers_client: TestClient) -> None:
-    """Seance přes konec letního času má 24 h — pod stropem 26 h projde."""
+    """Seance přes konec letního času má 25 h — pod stropem 26 h projde."""
     # Konec letního času 2025, ne 2026: fixtura `client` vkládá zprávy podle hodin
     # běhu (NOW − 1 h, NOW + 30 min) a okno v budoucnosti by je v den okna vrátilo (#1728)
     params = {
