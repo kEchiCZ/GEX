@@ -469,6 +469,52 @@ def test_pokryti_se_meri_v_rezimu_midpoint_a_jde_do_flow_row_po_minutach() -> No
     assert (empty["printed_share"], empty["printed_share_total"]) == (0.0, 0.0)
 
 
+@pytest.mark.parametrize("source", [SOURCE_AGGRESSOR, SOURCE_MIDPOINT])
+@pytest.mark.parametrize(
+    ("bar_increment", "structured"),
+    [(5.0, 0.0), (8.0, 3.0)],  # bar jen z tisku bez strany; zbytek baru bez tisku
+)
+def test_tisk_bez_strany_neni_fallback(
+    source: str, bar_increment: float, structured: float
+) -> None:
+    """#1618: kontrakt jen s tiskem bez strany jde do `unknown`, ne podruhé do fallbacku.
+
+    Dřív větev pokrytí stála na `printed > 0` a bar +5 skončil celý ve fallbacku,
+    i když tisk 5 už nesl `unknown` — součet pokrytí 10 místo 5.
+    """
+    tracker = CumDeltaTracker(multiplier=50.0, source=source)
+    tracker.dx_active = True  # midpoint: trade větev běží (pod tisky rozhoduje verdikt)
+    c = spec("C", strike=7800.0)
+
+    def bar(volume: float) -> None:
+        """Bar větev jako `run_cycle`: pod tisky `add_volume`, pod midpointem `add_bar`."""
+        if tracker.prints:
+            tracker.add_volume(c, volume)
+        else:
+            tracker.add_bar(c, volume, last=10.3, bid=10.0, ask=10.4, delta=0.2)
+
+    start_measured(tracker)
+    bar(100.0)
+    tracker.close_minute(GAP_TS)
+    tracker.add_dx_trade(c, size=5.0, aggressor="UNDEFINED", delta=0.2)
+    next_cycle(tracker, True)
+    bar(100.0 + bar_increment)
+    row = tracker.close_minute(GAP_TS + dt.timedelta(minutes=1))
+
+    assert (row.printed_volume, row.unknown_volume) == (0.0, 5.0)
+    assert (row.structured_volume, row.fallback_volume) == (structured, 0.0)
+    stats = tracker.day_stats()
+    # Součet pokrytí = přírůstek baru (5 + struktura), tisk se nepočítá dvakrát
+    assert (
+        stats["printed_volume"],
+        stats["unknown_volume"],
+        stats["structured_volume"],
+        stats["fallback_volume"],
+    ) == (0.0, 5.0, structured, 0.0)
+    assert 5.0 + structured == bar_increment
+    assert tracker.take_breakdowns() == {c: BarBreakdown(bar_increment, 5.0, structured)}
+
+
 def test_pokryti_bez_trade_vetve_je_null() -> None:
     """Tasty odpojené v režimu midpoint → sloupce NULL, ne nuly (nula = „nic nepokryto")."""
     tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT)

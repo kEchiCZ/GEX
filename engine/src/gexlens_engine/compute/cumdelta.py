@@ -708,7 +708,9 @@ class CumDeltaTracker:
         # říká, co trade větev pokrývá — verdikt #1018 i srovnání před a po
         # přepnutí stojí na týchž číslech. Fallback se počítá jen s běžící trade
         # větví: bez tasty je „bez tisku" každý kontrakt a číslo by nic neměřilo.
-        if printed > 0.0:
+        # Tisk bez strany je tisk: jeho objem už nese `unknown` z okamžiku tisku,
+        # fallback by ho započetl podruhé a zbytek baru je struktura (#1618).
+        if printed + unknown > 0.0:
             self._coverage.structured_volume += max(delta_volume - printed - unknown, 0.0)
         elif branch_ran:
             self._coverage.fallback_volume += delta_volume
