@@ -165,6 +165,59 @@ def test_seed_navaze_kumulativ_po_restartu(tmp_path: Path) -> None:
     assert writer.dx_flow_seed("NQ", TS.date()) is None
 
 
+@pytest.mark.parametrize("with_seed", [False, True])
+def test_tisk_pred_prvni_uzaverkou_je_v_dennich_citacich(tmp_path: Path, with_seed: bool) -> None:
+    """#1616: tisky od startu enginu do první uzávěrky nese první řádek seance,
+    takže je musí nést i denní čítače /status — s navázáním z partice i bez něj.
+    Dřív je `roll_session` vynuloval a `seed` přepsal."""
+    from gexlens_engine.config import Settings
+    from gexlens_engine.storage.parquet_store import SnapshotWriter
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    if with_seed:
+        first = make_shadow()
+        first.on_trade(".ES7610C", size=2, aggressor="BUY", delta=0.5)
+        first.on_trade(".ES7610C", size=1, aggressor=None, delta=0.5)
+        writer.write_dx_flow("ES", TS.date(), [first.close_minute(TS)])
+
+    # Start enginu: akumulátor bez seance, tisky chodí před první hranicí
+    shadow = DxCumDeltaShadow(multiplier=50.0)
+    shadow.set_universe({f".ES{int(k)}C": spec(k) for k in range(7500, 7705, 5)})
+    shadow.set_spot(7600.0)
+    shadow.on_trade(".ES7610C", size=4, aggressor="SELL", delta=0.5)
+    shadow.on_trade(".ES7615C", size=3, aggressor=None, delta=0.5)
+    shadow.on_trade(".ES7620C", size=5, aggressor="BUY", delta=None)  # bez delty
+    # První uzávěrka jako `dx_cum_flush_loop`: roll, seed, close
+    assert shadow.roll_session(TS.date())
+    seed = writer.dx_flow_seed("ES", TS.date())
+    assert (seed is not None) == with_seed
+    if seed is not None:
+        shadow.seed(seed)
+    writer.write_dx_flow("ES", TS.date(), [shadow.close_minute(TS + MIN)])
+
+    stats = shadow.day_stats()
+    expected = writer.dx_flow_seed("ES", TS.date())  # součet řádků partice
+    assert expected is not None
+    assert (stats["trades"], stats["volume"]) == (float(expected.trades), expected.volume)
+    assert stats["dropped_no_context"] == float(expected.dropped_no_context) == 1.0
+    assert stats["trades"] == (4.0 if with_seed else 2.0)
+    assert stats["unknown_side_share"] == pytest.approx(expected.unknown_side / expected.trades)
+
+
+def test_roll_seance_zapocte_tisky_otevrene_minuty() -> None:
+    """#1616: tisk nové seance přijatý před uzávěrkou, která roluje, nese první
+    řádek nové seance — denní čítače ho po rollu drží, kumulativ začíná od nuly."""
+    shadow = make_shadow()
+    shadow.on_trade(".ES7610C", size=2, aggressor="BUY", delta=0.5)
+    shadow.close_minute(TS)
+    shadow.on_trade(".ES7610C", size=3, aggressor="SELL", delta=0.5)  # po openu
+    assert shadow.roll_session(TS.date() + dt.timedelta(days=1))
+    assert shadow.day_stats()["trades"] == 1.0
+    row = shadow.close_minute(TS + dt.timedelta(days=1))
+    assert (row.trades, row.cum_ring) == (1, -75.0)
+    assert shadow.day_stats()["volume"] == row.volume == 3.0
+
+
 def test_write_dx_flow_upsertuje_tutez_minutu(tmp_path: Path) -> None:
     """#1070: restart uprostřed minuty nesmí minutu zdvojit."""
     import pyarrow.parquet as pq
@@ -282,8 +335,8 @@ def test_restart_v_minute_stopu_minuta_pokracuje_do_dalsi_hranice(tmp_path: Path
     naváže a uzavře až N+1. Kumulativ zůstane přesný.
 
     Pořadí jako `dx_cum_flush_loop`: tisky chodí od startu, roll a seed až na
-    první hranici. Denní čítače pro /status (`day_stats`) seed přepíše, takže
-    tisky před ním v nich chybí — vada od #1070, mimo rozsah #1460."""
+    první hranici. Denní čítače pro /status (`day_stats`) nesou i tisky před
+    seedem (#1616) a sedí se součtem řádků partice."""
     import pyarrow.parquet as pq
 
     from gexlens_engine.config import Settings
@@ -324,3 +377,5 @@ def test_restart_v_minute_stopu_minuta_pokracuje_do_dalsi_hranice(tmp_path: Path
     assert rows[2]["cum_ring"] - rows[1]["cum_ring"] == rows[2]["flow_ring"]
     assert [r["trades"] for r in rows] == [1, 1, 2]
     assert second.day_stats()["cum_ring"] == 75.0
+    stats = second.day_stats()
+    assert (stats["trades"], stats["volume"]) == (4.0, sum(r["volume"] for r in rows))

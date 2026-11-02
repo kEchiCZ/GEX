@@ -110,16 +110,21 @@ class DxCumDeltaShadow:
         self._spot = spot
 
     def roll_session(self, session_date: dt.date) -> bool:
-        """Nový obchodní den → reset kumulativ (stejně jako živé CumΔ)."""
+        """Nový obchodní den → reset kumulativ (stejně jako živé CumΔ).
+
+        Denní čítače začínají otevřenou minutou, ne nulou: tisky přijaté před
+        první uzávěrkou seance (start enginu, open) nese její první řádek, takže
+        patří i do denních součtů pro /status (#1616).
+        """
         if self._session_date == session_date:
             return False
         self._session_date = session_date
         self._cum_ring = 0.0
         self._cum_hot = 0.0
-        self._day_trades = 0
-        self._day_unknown = 0
-        self._day_volume = 0.0
-        self._day_dropped = 0
+        self._day_trades = self._trades
+        self._day_unknown = self._unknown_side
+        self._day_volume = self._volume
+        self._day_dropped = self._dropped
         self._seeded_from = None
         return True
 
@@ -128,14 +133,16 @@ class DxCumDeltaShadow:
 
         Volat hned po `roll_session`, které vrátilo True, s posledním stavem
         z partice téže seance. Bez toho by stín začal od nuly a den by měl
-        tolik nesouvislých řetězů, kolikrát engine startoval.
+        tolik nesouvislých řetězů, kolikrát engine startoval. Denní čítače
+        se přičítají (#1616): od `roll_session` už nesou tisky otevřené minuty,
+        které v partici ještě nejsou, a přepsání by je ztratilo.
         """
         self._cum_ring = state.cum_ring
         self._cum_hot = state.cum_hot
-        self._day_trades = state.trades
-        self._day_unknown = state.unknown_side
-        self._day_volume = state.volume
-        self._day_dropped = state.dropped_no_context
+        self._day_trades += state.trades
+        self._day_unknown += state.unknown_side
+        self._day_volume += state.volume
+        self._day_dropped += state.dropped_no_context
         self._seeded_from = state.ts_min
 
     def day_stats(self) -> dict[str, object]:
