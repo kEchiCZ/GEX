@@ -10,6 +10,7 @@ from gexlens_engine.tasty.extended import (
     build_snapshot_rows,
     cadence_due,
     plan_extended_expiries,
+    snapshot_minute,
     validate_disjoint,
 )
 from gexlens_engine.tasty.provider import TastyChainCache
@@ -82,6 +83,21 @@ def test_cadence_hranice_z_vychozi_konfigurace() -> None:
     assert due("20260827", 871) is True
     assert due("20260828", 871) is False
     assert due("20260828", 870) is True
+
+
+def test_snapshot_minute_stitek_bez_lookaheadu() -> None:
+    """#1734: štítek = plánovaná hranice, ale nikdy před minutou probuzení (point-in-time)."""
+    planned = NOW
+    # Včas a o pár ms dřív (nástěnné vs. monotonní hodiny): plánovaná hranice
+    assert snapshot_minute(planned, planned + dt.timedelta(milliseconds=3)) == (planned, 0)
+    assert snapshot_minute(planned, planned - dt.timedelta(milliseconds=2)) == (planned, 0)
+    assert snapshot_minute(planned, planned + dt.timedelta(seconds=59)) == (planned, 0)
+    # Pozdě o 2 min 10 s (uspaný hostitel): kotace z 14:32 nesmí nést štítek 14:30,
+    # hranice 14:30 a 14:31 zůstanou bez snímku
+    late = planned + dt.timedelta(minutes=2, seconds=10)
+    assert snapshot_minute(planned, late) == (planned + dt.timedelta(minutes=2), 2)
+    with pytest.raises(ValueError, match="časovou zónu"):
+        snapshot_minute(planned, dt.datetime(2026, 8, 22, 14, 30))
 
 
 def test_build_rows_bs_greeks_a_oimissing() -> None:
