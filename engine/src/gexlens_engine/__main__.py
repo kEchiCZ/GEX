@@ -167,6 +167,7 @@ from gexlens_engine.tasty.extended import (
     cadence_due,
     extended_streamers,
     plan_extended_expiries,
+    snapshot_minute,
     validate_disjoint,
 )
 from gexlens_engine.tasty.greeks_validator import GreeksAlert, GreeksValidator
@@ -2938,16 +2939,44 @@ async def main() -> None:
             Řádky vznikají jen z čerstvých tasty kotací — zavřený trh přirozeně
             nezapisuje nic. Spot bere z tasty front future (nezávislé na IBKR,
             takže extended šířka žije i při výpadku — duch ADR-0025 dodatku).
+
+            Snímek vzniká na hranici minuty podle nástěnných hodin a štítkem je
+            ta hranice (`plan_dx_flush`, #1734). Perioda 60 s po práci driftovala:
+            co 5–54 min štítek minutu přeskočil a snímek té minuty už nevznikl.
+            Probuzení o minutu a víc pozdě dá štítek minuty probuzení
+            (`snapshot_minute`): kotace z N+X nesmí nést štítek N.
             """
             last_idle_log = 0.0
+            last_minute: dt.datetime | None = None
+
+            def log_skipped(first: dt.datetime, count: int) -> None:
+                """Minuty bez snímku; v zavřeném trhu nic nechybí, jen INFO."""
+                last = first + dt.timedelta(minutes=count - 1)
+                closed = all(
+                    is_market_closed(first + dt.timedelta(minutes=i)) for i in range(count)
+                )
+                logger.log(
+                    logging.INFO if closed else logging.WARNING,
+                    "Extended: %d min bez snímku (%s až %s) — smyčka nestihla hranici minuty",
+                    count,
+                    first.isoformat(),
+                    last.isoformat(),
+                )
+
             while not shadow_stop.is_set():
+                plan = plan_dx_flush(dt.datetime.now(dt.UTC), last_minute)
+                if plan.skipped:
+                    log_skipped(plan.minute - dt.timedelta(minutes=plan.skipped), plan.skipped)
                 with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
+                    await asyncio.wait_for(shadow_stop.wait(), timeout=plan.wait_s)
                 if shadow_stop.is_set():
                     return
                 try:
                     now_utc = dt.datetime.now(dt.UTC)
-                    ts_min = now_utc.replace(second=0, microsecond=0)
+                    ts_min, late = snapshot_minute(plan.minute, now_utc)
+                    if late:
+                        log_skipped(plan.minute, late)
+                    last_minute = ts_min
                     minute_of_day = ts_min.hour * 60 + ts_min.minute
                     written = 0
                     gates: dict[str, str] = {}
@@ -2975,7 +3004,7 @@ async def main() -> None:
                         for expiry in planned:
                             if not cadence_due(
                                 expiry,
-                                today=now_utc.date(),
+                                today=ts_min.date(),
                                 minute_of_day=minute_of_day,
                                 near_days=settings.tasty_extended_near_days,
                                 far_interval_min=settings.tasty_extended_far_interval_min,

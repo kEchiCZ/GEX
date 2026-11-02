@@ -86,6 +86,23 @@ def cadence_due(
     return minute_of_day % far_interval_min == 0
 
 
+def snapshot_minute(planned: dt.datetime, now: dt.datetime) -> tuple[dt.datetime, int]:
+    """Štítek snímku po probuzení na plánované hranici (#1734) a počet minut bez snímku.
+
+    Snímek nese kotace z okamžiku probuzení, takže štítek nesmí ležet před
+    jeho minutou (point-in-time): probuzení o minutu a víc po hranici (uspaný
+    hostitel, skok hodin, stojící smyčka) dostane minutu probuzení a hranice
+    mezi tím zůstanou bez snímku. Probuzení o pár ms dřív (nástěnné vs.
+    monotonní hodiny) i včas dá plánovanou hranici.
+    """
+    if now.tzinfo is None:
+        raise ValueError(f"now musí nést časovou zónu: {now!r}")
+    floor = now.replace(second=0, microsecond=0)
+    if floor <= planned:
+        return planned, 0
+    return floor, (floor - planned) // dt.timedelta(minutes=1)
+
+
 def build_snapshot_rows(
     chain: ChainSymbols,
     expiry: str,
