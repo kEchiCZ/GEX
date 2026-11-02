@@ -94,7 +94,8 @@ class CumDeltaCoverage:
     Objemy v kontraktech: `printed` = tisky se stranou od burzy, `unknown` =
     tisky bez strany, `structured` = přírůstek objemu bez tisku (nohy spreadů,
     bloky — CME je jako trade nevysílá, ADR-0027), `fallback` = kontrakt-minuty
-    bez jediného tisku. Měří se v obou zdrojích stejně (#1071); pod `midpoint`
+    bez jediného tisku s deltou (tisk bez delty nese jen `dropped_no_delta`,
+    počet bez objemu). Měří se v obou zdrojích stejně (#1071); pod `midpoint`
     dává unknown i fallback znaménko midpoint test, pod `aggressor` jdou mimo
     tok (ADR-0057 bod 2).
     """

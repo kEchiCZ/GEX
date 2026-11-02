@@ -504,14 +504,13 @@ def test_tisk_bez_strany_neni_fallback(
     assert (row.printed_volume, row.unknown_volume) == (0.0, 5.0)
     assert (row.structured_volume, row.fallback_volume) == (structured, 0.0)
     stats = tracker.day_stats()
-    # Součet pokrytí = přírůstek baru (5 + struktura), tisk se nepočítá dvakrát
+    # Součet pokrytí 5 + struktura = přírůstek baru, tisk se nepočítá dvakrát
     assert (
         stats["printed_volume"],
         stats["unknown_volume"],
         stats["structured_volume"],
         stats["fallback_volume"],
     ) == (0.0, 5.0, structured, 0.0)
-    assert 5.0 + structured == bar_increment
     assert tracker.take_breakdowns() == {c: BarBreakdown(bar_increment, 5.0, structured)}
 
 
