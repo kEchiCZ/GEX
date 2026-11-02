@@ -292,6 +292,7 @@ nový řádek v této tabulce ve stejném PR (viz `AGENTS.md`, Definition of don
 | SentimentLens: news-engine, zdroje (IBKR news, ForexFactory, Reddit, CNN F&G), dedup, vlny, SentIndex, per-symbol, reakce trhu, klasifikace v2 a jedna definice významnosti | 0012–0014, 0016–0019, 0026, 0031, 0036, 0037, 0043, 0045, 0059 | #561, #566, #740, #1293 | USER kap. 11c, 14; ADMIN kap. 12 |
 | Ohlášené releasy: očekávaný pohyb ES/NQ před releasem, registr předem stanovených hypotéz a jejich živý track record | 0044 | #1296 | USER kap. 14, 11d; ADMIN kap. 6, 7, 12 |
 | Briefing: trend napříč TF, verdikt dne, ranní checklist | 0035 | #1089–#1091, #1241, #1585, #1595 | USER kap. 11f, 11g; ADMIN kap. 5 „Verdikty dne“ |
+| Plán opce QQQ 1DTE ze scénáře dne (vstup, SL a TP podle podkladu, graf, Telegram, track record) — **ve vývoji** | 0062 | #1738 | — (doplní sub-issues #1740–#1750) |
 | Deník tradera, Traders mode, paper účet v aplikaci | 0040 | #1187 | USER kap. 11e |
 | Trading kouč (vyhodnocení chyb, smyčka zlepšování setupů) | 0030, 0033, 0034 | #1187, #1244 | USER kap. 11d–11e |
 | Persistence UI voleb, provizorní bar, deep-linky | 0005, 0007 | — | USER kap. 13, 16 |
