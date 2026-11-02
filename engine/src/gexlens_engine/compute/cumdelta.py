@@ -94,7 +94,8 @@ class CumDeltaCoverage:
     Objemy v kontraktech: `printed` = tisky se stranou od burzy, `unknown` =
     tisky bez strany, `structured` = přírůstek objemu bez tisku (nohy spreadů,
     bloky — CME je jako trade nevysílá, ADR-0027), `fallback` = kontrakt-minuty
-    bez jediného tisku. Měří se v obou zdrojích stejně (#1071); pod `midpoint`
+    bez jediného tisku s deltou (tisk bez delty nese jen `dropped_no_delta`,
+    počet bez objemu). Měří se v obou zdrojích stejně (#1071); pod `midpoint`
     dává unknown i fallback znaménko midpoint test, pod `aggressor` jdou mimo
     tok (ADR-0057 bod 2).
     """
@@ -708,7 +709,9 @@ class CumDeltaTracker:
         # říká, co trade větev pokrývá — verdikt #1018 i srovnání před a po
         # přepnutí stojí na týchž číslech. Fallback se počítá jen s běžící trade
         # větví: bez tasty je „bez tisku" každý kontrakt a číslo by nic neměřilo.
-        if printed > 0.0:
+        # Tisk bez strany je tisk: jeho objem už nese `unknown` z okamžiku tisku,
+        # fallback by ho započetl podruhé a zbytek baru je struktura (#1618).
+        if printed + unknown > 0.0:
             self._coverage.structured_volume += max(delta_volume - printed - unknown, 0.0)
         elif branch_ran:
             self._coverage.fallback_volume += delta_volume
