@@ -66,22 +66,57 @@ def test_prazdne_okno_je_chyba() -> None:
         module.window(WINTER, dt.time(15, 0), dt.time(14, 30))
 
 
-def _row(minute: int, volume: float | None, strike: float = 6800.0) -> dict[str, Any]:
-    return {"ts_min": _at(WINTER, 15, minute), "strike": strike, "right": "C", "volume": volume}
+@pytest.mark.parametrize("day", [dt.date(2026, 10, 31), dt.date(2026, 11, 1)])
+def test_sobota_a_nedele_nejsou_seance(day: dt.date) -> None:
+    module = _load()
+    # Nedělní Globex od 23:00 UTC patří pondělní seanci (WINTER výše), ne neděli
+    with pytest.raises(ValueError, match="není obchodní den"):
+        module.window(day, None, None)
+
+
+def test_pauza_nema_ocekavane_minuty() -> None:
+    module = _load()
+    lo, hi = module.window(WINTER, dt.time(22, 0), dt.time(23, 0))
+    assert module.open_minutes(lo, hi) == []
+    assert len(module.open_minutes(*module.window(WINTER, None, None))) == 390
+
+
+def _row(
+    minute: int, volume: float | None, strike: float = 6800.0, age: float | None = 0.0
+) -> dict[str, Any]:
+    return {
+        "ts_min": _at(WINTER, 15, minute),
+        "strike": strike,
+        "right": "C",
+        "volume": volume,
+        "stale_age": age,
+    }
 
 
 def test_prirustky_proti_maximu_seance_a_minuta_po_mezere() -> None:
     module = _load()
     # Řada z #1602: pokles a návrat k maximu dají 0, započte se jen objem nad maximem
     rows = [_row(m, v) for m, v in enumerate([1000.0, 800.0, 760.0, 1000.0, 1010.0])]
-    increments, declines = module.increments_by_minute(rows)
+    increments, declines = module.increments_by_minute(rows, 900.0)
     assert increments == {_at(WINTER, 15, 4): 10.0}
     assert declines == 2
     # NULL v minutě 1 = mezera: minuta 2 jen založí stav, minuta 3 měří
     other = [_row(m, 5.0, strike=6900.0) for m in range(4)]
     gap = [_row(0, 100.0), _row(1, None), _row(2, 130.0), _row(3, 150.0)]
-    increments, _ = module.increments_by_minute(gap + other)
+    increments, _ = module.increments_by_minute(gap + other, 900.0)
     assert increments == {_at(WINTER, 15, 3): 20.0}
+
+
+def test_zmrzla_kotace_je_mezera_jako_v_enginu() -> None:
+    module = _load()
+    # Engine kotaci starší než quote_max_age_s do trackeru nepustí (runtime, #306):
+    # minuta 1 je mezera, minuta 2 jen založí stav, měří až minuta 3
+    other = [_row(m, 5.0, strike=6900.0) for m in range(4)]
+    rows = [_row(0, 100.0), _row(1, 120.0, age=901.0), _row(2, 130.0), _row(3, 150.0)]
+    increments, _ = module.increments_by_minute(rows + other, 900.0)
+    assert increments == {_at(WINTER, 15, 3): 20.0}
+    # Stáří NULL (partice před #306) kotaci nevyřadí
+    assert module.fresh_volume(_row(0, 7.0, age=None), 900.0) == 7.0
 
 
 def _write(path: Path, columns: dict[str, pa.Array]) -> None:
@@ -89,50 +124,58 @@ def _write(path: Path, columns: dict[str, pa.Array]) -> None:
     pq.write_table(pa.table(columns), path)
 
 
+def _snapshot(path: Path, ts: list[dt.datetime], volume: list[float], age: list[float]) -> None:
+    _write(
+        path,
+        {
+            "ts_min": pa.array(ts, TS),
+            "strike": pa.array([6800.0] * len(ts)),
+            "right": pa.array(["C"] * len(ts)),
+            "volume": pa.array(volume, pa.float64()),
+            "stale_age": pa.array(age, pa.float64()),
+        },
+    )
+
+
 def test_kontrola_symbolu_nad_particemi(tmp_path: Path) -> None:
     module = _load()
     expiry = "20261102"
     day = WINTER.isoformat()
-    minutes = [_at(WINTER, 15, m) for m in range(3)]
+    minutes = [_at(WINTER, 15, m) for m in range(4)]
     derived = tmp_path / "derived" / "ES"
-    _write(derived / expiry / "levels" / f"{day}.parquet", {"ts_min": pa.array(minutes[:2], TS)})
+    _write(derived / expiry / "levels" / f"{day}.parquet", {"ts_min": pa.array(minutes[:3], TS)})
+    # Partice flow ve starém tvaru bez sloupce `source` (před #615): zdroj None, ne pád
     _write(
         derived / "flow" / f"{day}.parquet",
         {
             "ts_min": pa.array(minutes, TS),
-            "cum_delta": pa.array([1.0, None, 3.0], pa.float64()),
-            "source": pa.array(["aggressor"] * 3),
+            "flow_delta": pa.array([10.0, None, -250.0, 4.0], pa.float64()),
+            "cum_delta": pa.array([10.0, None, -240.0, -236.0], pa.float64()),
         },
     )
-    # Před oknem (otevření seance) založí stav; v okně přírůstky 5 a 0 (pokles)
-    snap_ts = [_at(WINTER - dt.timedelta(days=1), 23, 0), *minutes[:2]]
-    _write(
+    # Před oknem (otevření seance) založí stav; v okně přírůstek 5, pokles, zmrzlá kotace
+    _snapshot(
+        tmp_path / "snapshots" / "ES" / expiry / f"{(WINTER - dt.timedelta(days=1))}.parquet",
+        [_at(WINTER - dt.timedelta(days=1), 23, 0)],
+        [100.0],
+        [0.0],
+    )
+    _snapshot(
         tmp_path / "snapshots" / "ES" / expiry / f"{day}.parquet",
-        {
-            "ts_min": pa.array(snap_ts[1:], TS),
-            "strike": pa.array([6800.0, 6800.0]),
-            "right": pa.array(["C", "C"]),
-            "volume": pa.array([105.0, 104.0], pa.float64()),
-        },
-    )
-    _write(
-        tmp_path / "snapshots" / "ES" / expiry / f"{snap_ts[0].date().isoformat()}.parquet",
-        {
-            "ts_min": pa.array(snap_ts[:1], TS),
-            "strike": pa.array([6800.0]),
-            "right": pa.array(["C"]),
-            "volume": pa.array([100.0], pa.float64()),
-        },
+        minutes[:3],
+        [105.0, 104.0, 120.0],
+        [0.0, 0.0, 901.0],
     )
     _write(
         derived / expiry / "printvol" / f"{day}.parquet",
         {"ts_min": pa.array(minutes[:1], TS), "volume_delta": pa.array([5.0], pa.float64())},
     )
     lines = module.check_symbol(
-        tmp_path, "ES", expiry, WINTER, minutes[0], minutes[-1] + dt.timedelta(minutes=1)
+        tmp_path, "ES", expiry, WINTER, minutes[0], minutes[-1] + dt.timedelta(minutes=1), 900.0
     )
-    assert lines[0] == "ES levels: 2/3 minut, chybí 1 ['15:02']"
-    assert "NULL cum_delta 1 ['15:01']" in lines[1] and "{'aggressor': 3}" in lines[1]
-    assert lines[2] == "ES snapshots 20261102: minut s volume 2/3, chybí 1 ['15:02']"
+    assert lines[0] == "ES levels: 3/4 minut, chybí 1 ['15:03']"
+    assert "NULL cum_delta 1 ['15:01']" in lines[1] and "{None: 4}" in lines[1]
+    assert "max |flow_delta| -250 v 15:02" in lines[1]
+    assert lines[2] == "ES snapshots 20261102: minut s volume 2/4, chybí 2 ['15:02', '15:03']"
     assert "Σ printvol 5 × Σ přírůstků od maxima 5 (poklesů feedu v seanci 1)" in lines[3]
     assert lines[3].endswith("minut s rozdílem 0 []")
