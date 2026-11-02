@@ -1,15 +1,17 @@
 # ADR-0062: Plán opce QQQ ze scénáře dne — ceny z řetězu 1DTE, pravidla P1–P5, track record, snímky do Telegramu
 
-- **Stav:** navrženo 2. 11. 2026. Body 1–7 oddílu Rozhodnutí přijal vlastník 2. 11. v epice #1738
-  (Rozhodnuto, issuecomment-6586014388) a epiku schválil 2. 11. 21:03 SEČ
-  (issuecomment-6587181454). Body **K1–K5 čekají na rozhodnutí vlastníka**, PR nese
-  `needs-decision`. Body označené „odvozeno“ rozvádějí přijaté volby a vlastník je potvrdí spolu
-  s K1–K5.
+- **Stav:** rozhodnuto vlastníkem 2.–3. 11. 2026. Body 1–7 oddílu Rozhodnutí přijal vlastník
+  2. 11. v epice #1738 (Rozhodnuto, issuecomment-6586014388) a epiku schválil 2. 11. 21:03 SEČ
+  (issuecomment-6587181454). K1–K5 rozhodl v chatu 2.–3. 11.: **K1 A, K2 A** s doporučenými
+  dílčími volbami, **K3 A** s oknem spouště až do exitu (bod 5), **K4 A + (a), K5 B** (#1757).
+  Body „odvozeno“ platí s nimi. Pravidla verze 1 se před přijetím ADR přehrají zpětně na všech
+  uložených scénářích NQ (#1756); ukáže-li přehrání slabé místo, úprava jde vlastníkovi jako
+  varianty.
 - **Datum:** 2026-11-02
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1741 (F2a), #1742 (F2b), #1743 (F4a),
-  #1744 (F4b), #1745 (F4c), #1746 (F5a), #1747 (F1b), #1748 (F3), #1749 (F5b), #1750 (F6);
-  tento ADR #1739.
+  #1744 (F4b), #1745 (F4c), #1746 (F5a), #1747 (F1b), #1748 (F3), #1757 (F3b), #1749 (F5b),
+  #1750 (F6); tento ADR #1739, zpětné přehrání #1756 (F0b).
 - **Podklad:** rozbor 2. 11. (issuecomment-6585788810); skripty
   `scripts/measure_option_plan_entries_1738.py` (jen čtení partic 2. 11.) a
   `scripts/measure_matplotlib_png_1738.py`; měření v oddílu Kontext.
@@ -116,7 +118,7 @@ a epiky liší, říká to poznámka u pravidla.
 - **Snímek NQ do Telegramu:** heatmapa z frontendu, dorazí-li do 3 min od vzniku scénáře
   (2. 11. dorazila za 59 s), jinak serverový graf NQ. Text odchází hned.
 
-## K rozhodnutí (vlastník)
+## K1–K5 (rozhodl vlastník 2.–3. 11.)
 
 Kritéria podle AGENTS.md: rychlost, výkon (notebook 16 GB, Docker 5,8 GB), relevance dat pro
 obchodní rozhodnutí.
@@ -129,7 +131,7 @@ obchodní rozhodnutí.
 | B — engine při vzniku plánu | data v paměti, nic se nečte | matplotlib v procesu s živými IBKR daty (1,2 GB), +54 MB trvale; PNG musí do API přes disk nebo `/internal`; riziko pro kritický proces |
 | C — API ve vlákně vlastního procesu | nejméně kódu | +54 MB trvale v API (0,84 GB) od prvního obrázku; pyplot není thread-safe, jen objektové API `Figure` |
 
-Doporučení **A**: rozhoduje výkon a izolace kritického procesu. Pravidlo „API nepočítá“ platí dál.
+**Rozhodnuto 2. 11.: A** (vlastník). Rozhoduje výkon a izolace kritického procesu. Pravidlo „API nepočítá“ platí dál.
 Renderer jen kreslí uložené hodnoty plánu a uložené bary a nemá žádný vlastní vzorec.
 
 ### K2 — uložení plánu, kotací a parametrů účtu
@@ -150,7 +152,7 @@ K variantě A dál patří:
   v $ na kontrakt, „−100 $“). Když nejsou vyplněné, plán vznikne a obě varianty dostanou
   `neobchodovat — rozpočet nenastaven`. Tichý default není.
 
-Doporučení **A**.
+**Rozhodnuto 2. 11.: A** včetně dílčích voleb výše (vlastník).
 
 ### K3 — vstupy, SL, časová okna, oceňování a výstupy
 
@@ -189,12 +191,15 @@ spustil v 15:35 za 695,08. SL B za úrovní A (flip + rezerva = 697,95) i za ONH
 4. **Vstup B:** první 5min close za vstupem scénáře ∓ 0,05 EM. SL B = 5min close za nejbližší
    úrovní proti směru z téže množiny (bez omezení 1 EM) + 0,05 EM. Když je úroveň A, je to ona.
    Vstup B jen tehdy, když P1 nenajde blokující GEX.
-5. **Okna a časový stop:** spoušť v US RTH od prvního 5min close (9:35 ET). Časový stop epiky
-   („bez spuštění vstupu do časového stopu = bez vstupu“) = konec okna spouště ve 12:00 ET
-   (ruční vzor „do 18:00 SEČ“), nejpozději však v čase exitu. Exit = `settle_ts(den)` − 15 min
-   (15:45 ET, ve zkrácené seanci 12:45 ET), přes noc se nedrží. Po vstupu se další časový stop
-   nezavádí: ruční vzor ho 2. 11. vázal na průraz max pain a z jednoho dne se obecné pravidlo
-   odvodit nedá. Po TP1 se SL posune na vstup (zpřísnění).
+5. **Okna a časový stop:** spoušť v US RTH od prvního 5min close (9:35 ET) až do exitu
+   (vlastník 2. 11.: „až do exitu (settle − 15 min)“; navržené okno do 12:00 ET podle ručního
+   vzoru „do 18:00 SEČ“ nepřijato, 2. 11. beze změny výsledku). Časový stop epiky („bez spuštění
+   vstupu do časového stopu = bez vstupu“) = čas exitu. Exit = `settle_ts(den)` − 15 min
+   (15:45 ET, ve zkrácené seanci 12:45 ET), přes noc se nedrží. Pozdní spoušť má do exitu málo
+   času; plán ji nezakáže a track record ukáže, jestli dává smysl (jinak nová `rules_version`
+   s uzávěrkou). Po vstupu se další časový stop nezavádí: ruční vzor ho 2. 11. vázal na průraz
+   max pain a z jednoho dne se obecné pravidlo odvodit nedá. Po TP1 se SL posune na vstup
+   (zpřísnění).
 6. **Oceňování pro P3:** SL i TP1 v témže čase = čas cíle 1 podle cesty scénáře, nejdřív v čase
    vstupu. Přísné ocenění (SL v čase exitu) plán uvede vedle něj, rozhoduje ale tohle.
 7. **Čerpání (P4):** ztráta opce na úrovni SL + 0,2 EM v čase exitu. Je to nejhorší rozumný
@@ -221,11 +226,17 @@ spustil v 15:35 za 695,08. SL B za úrovní A (flip + rezerva = 697,95) i za ONH
   vyšel 1,59 → neobchodovat, flip 2,27. Nebo SL v čase vstupu, jak počítal rozbor. To je nejmírnější
   varianta: put s časem ztrácí, takže SL hned po vstupu podhodnotí ztrátu.
 
-**Důsledek pro AC epiky:** kritérium „vstup A 16:50 SEČ“ odpovídá úrovni 697,0 z ručního plánu.
-Při A nebo B bude spoušť v 16:40, při C v 16:35. TP1 a TP2 z poměru minuty vzniku vyjdou 692,13
+**Důsledek pro AC epiky:** kritérium „vstup A 16:50 SEČ“ odpovídalo úrovni 697,0 z ručního plánu.
+Při zvolené A je spoušť v 16:40 (při B také, při C v 16:35); AC epiky a #1741 upraveny 3. 11. TP1 a TP2 z poměru minuty vzniku vyjdou 692,13
 a 690,72 (v rozboru 691,9 a 690,4 při poměru 41,32).
 
-Doporučení **A**: jedno pravidlo nad úrovněmi, které už scénář má (DRY), přísnější test,
+**Rozhodnuto 3. 11.: A** (vlastník; body 1–4 a 6–9 podle návrhu, výklad P1 v bodě 8 = vstup B
+podmíněně podle GEX, bod 5 s oknem do exitu). Pravidla nejsou pevný scénář: postup je stálý,
+vstupy (směr verdiktu, úrovně, EM, GEX a řetěz QQQ) jsou každý den nové, takže plán se dni
+přizpůsobí. Ruční plán 2. 11. byl úsudek nad týmiž vstupy a tato pravidla ho zapisují; zpětné
+přehrání #1756 to ověří na všech uložených scénářích.
+
+Důvod volby A: jedno pravidlo nad úrovněmi, které už scénář má (DRY), přísnější test,
 rezerva škálovaná EM a oceňování SL, které theta nepodhodnotí. 2. 11. by dala R:R opce 3,40
 (přísně 2,27), ztrátu při SL −39 $ a nejhorší čerpání −72 $. **Jeden den ale není vzorek.**
 Pravidla se ověří track recordem (n ≥ 30) a mění se jen novou `rules_version`, nikdy větším
@@ -246,7 +257,7 @@ stopem.
 - (b) odhad z IV NQ 1DTE přes poměr se štítkem „odhad“. 2. 11. vyšel o 8–10 % výš a znamená další
   cestu v kódu.
 
-Doporučení **A + (a)**.
+**Rozhodnuto 3. 11.: A + (a)** (vlastník).
 
 ### K5 — živá upozornění na spoušť
 
@@ -255,8 +266,8 @@ Doporučení **A + (a)**.
 | A — jen večerní vyhodnocení (rozsah schválené epiky) | nic navíc | R:R při spoušti (P3) a čerpání (P4) se vlastník dozví až večer; v okamžiku obchodu počítá sám |
 | **B — živý stav v minutovém cyklu** (doporučeno) | stavový automat z F3 (táž čistá funkce) běží nad bary do „teď“; při přechodu jde alert do zvonku a Telegramu („vstup A spuštěn 16:40, put 687 ask …, R:R … → obchodovat/neobchodovat“, dál SL, TP1, TP2, exit); večerní výsledek = konečný stav téže funkce | rozšiřuje schválený rozsah o jeden sub-issue (engine, ~1 session); nejvýš ~5 zpráv denně |
 
-Doporučení **B**: rychlost („kliknu a je hotovo“). P3 je bez živého upozornění v okamžiku
-obchodu nepoužitelné. Varianta rozšiřuje rozsah, proto ji musí odsouhlasit vlastník.
+**Rozhodnuto 3. 11.: B** (vlastník; rozšíření rozsahu o sub-issue #1757). Důvod: rychlost
+(„kliknu a je hotovo“). P3 je bez živého upozornění v okamžiku obchodu nepoužitelné.
 
 ## Zvažované a odmítnuté (rozhodnuto 2. 11.)
 
@@ -264,13 +275,19 @@ obchodu nepoužitelné. Varianta rozšiřuje rozsah, proto ji musí odsouhlasit 
 - Automatické zadávání příkazů — #924, #1187.
 - Bezhlavý prohlížeč pro snímek heatmapy (Q2b).
 - Velikost účtu z IBKR (Q3 A/B původního návrhu) — až s #1187.
+- Celý plán každé ráno od Clauda místo pravidel (3. 11.): postup by se den ode dne lišil a track
+  record by neměřil jednu metodu; ruční plán 2. 11. udělal právě chyby, které P1–P5 opravují
+  (vstup B na SL, R:R vstupu A odhadem ~6 proti ~2,5). Vlastník chce plán přizpůsobený dni
+  a aktuálním informacím: pravidla počítají z dat dne a kontext mimo data (události, zprávy)
+  připíše později Claude komentářem k plánu přes MCP a plánované běhy epiky #1385 (F3 #1407,
+  F5 #1405). Komentář čísla plánu nemění.
 
 ## Důsledky
 
 - **Nové prvky:** tabulka `option_plans` (před nasazením F2b záloha PG), partice
   `derived/QQQ/option_quotes`, dva klíče v `settings`, druhy alertů `option_plan_created`
-  a `option_plan_result` (při K5 B navíc přechody stavu), endpointy `/option-plans*`, závislost
-  matplotlib (podle K1).
+  a `option_plan_result`, alerty přechodů stavu (K5 B, #1757), endpointy `/option-plans*`,
+  závislost matplotlib v API (K1 A).
 - **Výkon:** IBKR lines 0. Tasty: krátký snímek ~520 položek v rezervě ad-hoc a přes den 3 symboly.
   Minutový cyklus beze změny (při K5 B jedna čistá funkce nad dnešními bary, jen ve dnech
   s plánem). RAM podle K1.
