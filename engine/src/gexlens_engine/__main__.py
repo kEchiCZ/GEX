@@ -2938,16 +2938,30 @@ async def main() -> None:
             Řádky vznikají jen z čerstvých tasty kotací — zavřený trh přirozeně
             nezapisuje nic. Spot bere z tasty front future (nezávislé na IBKR,
             takže extended šířka žije i při výpadku — duch ADR-0025 dodatku).
+
+            Snímek vzniká na hranici minuty podle nástěnných hodin a štítkem je
+            ta hranice (`plan_dx_flush`, #1734). Perioda 60 s po práci driftovala:
+            co 5–54 min štítek minutu přeskočil a snímek té minuty už nevznikl.
             """
             last_idle_log = 0.0
+            last_minute: dt.datetime | None = None
             while not shadow_stop.is_set():
+                plan = plan_dx_flush(dt.datetime.now(dt.UTC), last_minute)
+                if plan.skipped:
+                    logger.warning(
+                        "Extended: %d min bez snímku (%s až %s) — práce nestihla hranici minuty",
+                        plan.skipped,
+                        (plan.minute - dt.timedelta(minutes=plan.skipped)).isoformat(),
+                        (plan.minute - dt.timedelta(minutes=1)).isoformat(),
+                    )
                 with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
+                    await asyncio.wait_for(shadow_stop.wait(), timeout=plan.wait_s)
                 if shadow_stop.is_set():
                     return
                 try:
                     now_utc = dt.datetime.now(dt.UTC)
-                    ts_min = now_utc.replace(second=0, microsecond=0)
+                    ts_min = plan.minute
+                    last_minute = ts_min
                     minute_of_day = ts_min.hour * 60 + ts_min.minute
                     written = 0
                     gates: dict[str, str] = {}

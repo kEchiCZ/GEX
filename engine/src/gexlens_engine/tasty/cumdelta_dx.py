@@ -244,7 +244,8 @@ def plan_dx_flush(now: dt.datetime, last: dt.datetime | None) -> DxFlushPlan:
     vždy po `last` (štítek minulé uzávěrky). Probuzení pozdě (zmrazený
     kontejner, přetížená smyčka) štítek neposune: řádek nese, co engine
     do té chvíle přijal, a hranice, na které nedošlo, vrátí příští rozvrh
-    jako `skipped`. Přetečení práce přes hranici dá tutéž stopu.
+    jako `skipped`. Přetečení práce přes hranici dá tutéž stopu. Týž rozvrh
+    používají extended snapshoty (#1734), kde přeskočená minuta = ztracený snímek.
     """
     if now.tzinfo is None:
         raise ValueError(f"now musí nést časovou zónu: {now!r}")
