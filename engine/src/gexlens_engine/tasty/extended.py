@@ -23,7 +23,7 @@ import datetime as dt
 import logging
 
 from gexlens_engine.compute.gexfield import fallback_greeks
-from gexlens_engine.compute.settle import settle_ts
+from gexlens_engine.compute.settle import history_expiry_settle, settle_ts
 from gexlens_engine.storage.parquet_store import OiMissingRow, SnapshotRow
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.symbols import ChainSymbols
@@ -39,6 +39,7 @@ def plan_extended_expiries(
     chain: ChainSymbols,
     ibkr_expiries: set[str],
     *,
+    symbol: str,
     now: dt.datetime,
     horizon_days: int,
 ) -> list[str]:
@@ -53,10 +54,10 @@ def plan_extended_expiries(
     pipeline roluje v settle (#1331), vypršelá expirace tím z IBKR množiny
     vypadne a s denním filtrem ji plán do půlnoci UTC převzal — psaly se
     zmrzlé kotace vypršelé série a minuta 00:00 skončila v partici dalšího
-    dne, kde přebila `/days`. Bez trading class platí settle 16:00 ET
-    (`settle_ts`): SOQ 9:30 ET patří jen standardní kvartální třídě, kvartální
-    datum drží IBKR jako týdenní sérii do odpoledne (ADR-0039 bod 1, #1366)
-    a start bez TWS ho tu tak neztratí od rána.
+    dne, kde přebila `/days`. Chain mapa trading class nenese, kvartální datum
+    proto rozhodne ticker (`history_expiry_settle`) jako roll IBKR: kořenový
+    drží týdenní sérii do 16:00 ET (ADR-0039 bod 1, #1366), pinovaný
+    expirující kontrakt standardní třídu do SOQ 9:30 ET.
     """
     today = now.date()
     horizon = today + dt.timedelta(days=horizon_days)
@@ -68,7 +69,8 @@ def plan_extended_expiries(
         except ValueError:
             logger.warning("Nečitelná expirace %r v chain mapě — přeskakuji", expiry)
             continue
-        if now < settle_ts(expiry_date) and expiry_date <= horizon:
+        settle, _inferred = history_expiry_settle(expiry, symbol)
+        if settle is not None and now < settle and expiry_date <= horizon:
             planned.append(expiry)
     return planned
 
@@ -130,8 +132,14 @@ def build_snapshot_rows(
     co dxFeed reálně dodává. OI bez hodnoty jde do oimissing (#465 — graf
     nesmí tvrdit změřenou nulu tam, kde nikdo neměřil) a do řádku se zapíše
     0.0 jako v IBKR cestě.
+
+    Po nejpozdějším settle data (16:00 ET) nevznikne řádek nikdy (#1759):
+    pojistka v místě vzniku pro případ, že plán z `plan_extended_expiries`
+    zůstal starý (obnova subskripce visí přes settle, #1646).
     """
     settle = settle_ts(dt.datetime.strptime(expiry, "%Y%m%d").date())
+    if now_utc >= settle:
+        return [], []
     rows: list[SnapshotRow] = []
     oi_missing: list[OiMissingRow] = []
     for (contract_expiry, strike, right), streamer in chain.by_contract.items():

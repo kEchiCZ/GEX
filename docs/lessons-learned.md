@@ -367,8 +367,10 @@ chyb**, hlavně diagnostických a provozních.
   Frontend (`expiryWithData`) pak výchozí expiraci v seznamu dnů nenašel a při každém načtení
   doskočil na včerejšek. Stalo se to třikrát (22. 10., 29. 10., 3. 11.), než to vlastník nahlásil.
   Odhalil to až dotaz `/instruments/NQ/days`, engine byl celou dobu zdravý. Je to druhý výskyt
-  poučení #1331 níže. → Každý výběr „živých“ expirací filtrovat hranicí settle, ne datem. Když UI
-  ukazuje starý den a engine je zdravý, nejdřív se podívat na seznam dnů a expirací API.
+  poučení #1331 níže. → Každý výběr „živých“ expirací filtrovat týmž helperem settle jako roll
+  (bez trading class `history_expiry_settle`), ne kalendářním dnem. Invariant hlídat i v místě
+  vzniku řádku (pojistka v `build_snapshot_rows`), protože plán může zůstat starý. Když UI ukazuje
+  starý den a engine je zdravý, nejdřív se podívat na seznam dnů a expirací API.
 
 - **2026-10-30 — poplatek paperu zafixovaný při startu enginu, nová verze parametrů ho minula (#1402).**
   `PaperBroker` dostal `fee_per_contract_usd` z parametrů setupů jednou v konstruktoru pipeline
