@@ -177,6 +177,7 @@ from gexlens_engine.tasty.plan_chain import PURPOSE as PLAN_CHAIN_PURPOSE
 from gexlens_engine.tasty.plan_chain import REFERENCE as PLAN_CHAIN_REFERENCE
 from gexlens_engine.tasty.plan_chain import (
     PlanChainSnapshotter,
+    missed_session,
     missing_data_level,
     next_snapshot,
     snapshot_boundary,
@@ -3194,7 +3195,17 @@ async def main() -> None:
 
             Jednou za obchodní seanci, víkend a svátek NYSE snímek nemají. Neúplný snímek
             hlásí WARNING jen při otevřeném trhu (AGENTS.md). Plán z výsledku sestaví F2b #1742.
+            Start enginu po 9:31 ET snímek nedohání; mezeru dne nahlásí hned při startu.
             """
+            started = dt.datetime.now(dt.UTC)
+            missed = missed_session(started)
+            if missed is not None:
+                logger.log(
+                    missing_data_level(started),
+                    "Snímek řetězu QQQ pro plán (#1740): seance %s v tomto běhu bez snímku — "
+                    "engine startoval po 9:31 ET, snímek se nedohání",
+                    missed,
+                )
             while not shadow_stop.is_set():
                 now = dt.datetime.now(dt.UTC)
                 session, start = next_snapshot(now)

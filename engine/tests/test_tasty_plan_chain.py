@@ -21,6 +21,7 @@ from gexlens_engine.tasty.plan_chain import (
     QUOTE_TIMEOUT_S,
     PlanChainSnapshotter,
     band_streamers,
+    missed_session,
     missing_data_level,
     next_snapshot,
     pick_expiries,
@@ -83,6 +84,7 @@ class _Harness:
         start: dt.datetime,
         deliver_options: bool = True,
         deliver_underlying: bool = True,
+        deliver_summary: bool = True,
         nq: SpotReading | None = None,
         fail_chain: bool = False,
         chain: ChainSymbols | None = None,
@@ -92,6 +94,7 @@ class _Harness:
         self.tmp_path = tmp_path
         self.deliver_options = deliver_options
         self.deliver_underlying = deliver_underlying
+        self.deliver_summary = deliver_summary
         self.history: list[set[str]] = []
         self.chain = chain or _chain(["20261103", "20261104", "20261105"])
         reading = nq if nq is not None else SpotReading(NQ, start, "ibkr", True)
@@ -115,7 +118,7 @@ class _Harness:
             elif self.deliver_options:
                 feed_quote(self.cache, streamer, 1.00, 1.10)
                 feed_greeks(self.cache, streamer, iv=0.30, delta=0.5, gamma=0.05)
-                if not streamer.endswith("C700"):
+                if self.deliver_summary and not streamer.endswith("C700"):
                     feed_summary(self.cache, streamer, 120.0)
 
     async def _sleep(self, seconds: float) -> None:
@@ -210,6 +213,16 @@ def test_start_v_nabehu_bezi_hned_po_hranici_zitra() -> None:
     assert next_snapshot(dt.datetime(2026, 11, 3, 14, 31, tzinfo=UTC))[0] == dt.date(2026, 11, 4)
 
 
+def test_start_po_hranici_hlasi_seanci_bez_snimku() -> None:
+    assert missed_session(dt.datetime(2026, 11, 3, 14, 32, tzinfo=UTC)) == SESSION
+    assert missed_session(dt.datetime(2026, 11, 3, 23, 30, tzinfo=UTC)) == SESSION
+    assert missed_session(dt.datetime(2026, 11, 3, 14, 30, 45, tzinfo=UTC)) is None  # v náběhu
+    assert missed_session(dt.datetime(2026, 11, 7, 15, 0, tzinfo=UTC)) is None  # sobota
+    assert missed_session(dt.datetime(2026, 11, 26, 15, 0, tzinfo=UTC)) is None  # Thanksgiving
+    # Úterní noc po půlnoci ET je už středa, jejíž hranice ještě nepřišla
+    assert missed_session(dt.datetime(2026, 11, 4, 6, 0, tzinfo=UTC)) is None
+
+
 @pytest.mark.parametrize(
     ("now", "level"),
     [
@@ -241,6 +254,7 @@ async def test_snimek_zapise_obe_expirace_a_uvolni_subskripci(tmp_path: Path) ->
     assert snapshot.ratio == pytest.approx(NQ / SPOT)
     for snap in (snapshot.zero_dte, snapshot.one_dte):
         assert (snap.contracts, snap.quoted, len(snap.rows)) == (86, 86, 86)
+        assert snap.with_oi == 85
         assert snap.oi_missing == 1  # C700 bez Summary → oimissing, ne změřená nula
         assert {row.ts_min for row in snap.rows} == {snapshot_boundary(SESSION)}
         table = pq.read_table(harness.partition(snap.expiry))
@@ -281,6 +295,23 @@ async def test_kotace_pred_openem_se_nepocitaji(tmp_path: Path) -> None:
     assert snapshot is not None and not snapshot.complete
     assert snapshot.zero_dte is not None
     assert (snapshot.zero_dte.quoted, len(snapshot.zero_dte.rows)) == (0, 0)
+
+
+async def test_oi_z_drivejsi_seance_je_chybejici(tmp_path: Path) -> None:
+    """Cache stavy nemaže: OI ze Summary před openem (dnešní 0DTE = včerejší 1DTE) je mezera."""
+    harness = _Harness(tmp_path, start=_start(), deliver_summary=False)
+    harness.clock.now = dt.datetime(2026, 11, 2, 14, 31, 10, tzinfo=UTC)  # včerejší snímek
+    for streamer in harness.chain.by_contract.values():
+        feed_summary(harness.cache, streamer, 999.0)
+    harness.clock.now = _start()
+    snapshot = await harness.snapshotter.run(SESSION)
+    assert snapshot is not None and not snapshot.complete
+    assert snapshot.zero_dte is not None
+    assert (snapshot.zero_dte.quoted, snapshot.zero_dte.with_oi) == (86, 0)
+    assert snapshot.zero_dte.oi_missing == 86
+    assert {row.oi for row in snapshot.zero_dte.rows} == {0.0}
+    assert any("OI po openu 0/86" in reason for reason in snapshot.reasons)
+    assert pq.read_table(harness.partition("20261103")).num_rows == 86
 
 
 async def test_bez_kotace_qqq_pasmo_neodebira(tmp_path: Path) -> None:

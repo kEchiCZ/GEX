@@ -601,19 +601,27 @@ v tasty větvi. Nové IBKR market data lines nebere žádné.
   po seanci, která je obchodní seancí (pátek → pondělí, svátek se přeskočí).
 - Pásmo **±3 %** kolem ceny QQQ v obou expiracích (~170 kontraktů) se odebere jako účel
   `plan_chain` z rezervy ad-hoc (kap. 2, `GEXLENS_TASTY_ADHOC_RESERVE_ENTRIES`).
-- Snímek čeká, až kotaci má aspoň 90 % kontraktů pásma v každé expiraci, nejdéle 40 s od
-  9:31 ET. Kotace přijaté před US openem se nepočítají.
+- Snímek čeká, až kotaci i OI má aspoň 90 % kontraktů pásma v každé expiraci, nejdéle 40 s od
+  9:31 ET. Kotace a OI (Summary) přijaté před US openem se nepočítají. Cache tasty stavy nemaže
+  a dnešní 0DTE byla včera 1DTE, takže OI přijaté před openem by neslo starší publikaci. Řádek ho
+  proto dostane jako chybějící.
 - Řádky (štítek minuty 9:31) zapíše `build_snapshot_rows` do standardních partic
   `snapshots/QQQ/{expirace}/{den}.parquet`, OI bez hodnoty do `oimissing`. Partice se nemažou
-  (ADR-0029). Pak se subskripce uvolní.
+  (ADR-0029). Pak se subskripce uvolní. Otevřený ad-hoc pohled QQQ píše tutéž partici 0DTE,
+  zápis jedné partice je proto pod zámkem (`_PartitionBuffer`).
+- Ad-hoc pohled QQQ tak má každou obchodní seanci v seznamu dní a 1DTE se minutou 9:31.
+  Σ profil (`/profile/QQQ/aggregate`) sčítá poslední minutu každé expirace, takže 1DTE v něm
+  celý den drží OI vážené deltou z 9:31 (stáří Σ profil neukazuje, #1760).
 
-Log enginu: „Snímek řetězu QQQ pro plán (#1740) seance …“ s kotacemi a řádky obou expirací,
+Log enginu: „Snímek řetězu QQQ pro plán (#1740) seance …“ s kotacemi, OI a řádky obou expirací,
 cenami, poměrem a stavem `úplný`. `NEÚPLNÝ: důvod` jde jako warning jen při otevřeném trhu:
-řetěz nebo podklad chybí, kotace pod 90 % do limitu, spot NQ chybí, hranice zmeškaná (start po
-9:31 ET, nedohání se). Naměřené řádky se zapíšou i z neúplného snímku. Výsledek
-`PlanChainSnapshot` nese řádky, ceny, poměr, čas a podíl kotací. Plán z něj napojí F2b #1742,
-zatím se jen loguje. Ověření: partice 1DTE dne existuje a `/status.tasty_symbol_breakdown.plan_chain`
-je po snímku 0.
+řetěz nebo podklad chybí, kotace nebo OI pod 90 % do limitu, spot NQ chybí, probuzení po
+hranici 9:31 ET (uspaný hostitel). Start enginu po 9:31 ET snímek nedohání a hned při startu
+zaloguje „seance … v tomto běhu bez snímku“, warning jen při otevřeném trhu. Nasazení v pauze
+Globexu tak dá INFO. Naměřené řádky se zapíšou i z neúplného snímku. Výsledek
+`PlanChainSnapshot` nese řádky, ceny, poměr, čas a podíl kotací a OI. Plán z něj napojí F2b
+#1742, zatím se jen loguje. Ověření: partice 1DTE dne existuje
+a `/status.tasty_symbol_breakdown.plan_chain` je po snímku 0.
 
 Čistá funkce `compute/option_plan.build_option_plan` (#1741) převede auto-scénář NQ na plán
 opce QQQ 1DTE. Plán **zatím nic nevolá**: vznik v 9:31 ET a uložení napojí F2b #1742,

@@ -19,8 +19,11 @@ Průběh jednoho snímku:
    (OI bez hodnoty do `oimissing`, #465), pak **uvolnění subskripce**.
 
 Point-in-time: kotace přijatá před US openem se nepočítá (před openem jsou ceny zamrzlé z close
-nebo se spreadem 4–6 %, ADR-0062 K4). Co se do limitu nesejde, vrátí snímek jako neúplný
-s důvodem (`reasons`). Naměřené řádky se zapíšou i tak a odhad místo nich nevzniká (K4 a).
+nebo se spreadem 4–6 %, ADR-0062 K4). Totéž platí pro OI: cache stavy nemaže a dnešní 0DTE
+byla včera 1DTE, takže OI ze Summary přijatého před openem by neslo starší publikaci. Řádek ho
+proto dostane jako chybějící (0.0 + `oimissing`, #465). Co se do limitu nesejde, vrátí snímek
+jako neúplný s důvodem (`reasons`). Naměřené řádky se zapíšou i tak a odhad místo nich
+nevzniká (K4 a).
 """
 
 import asyncio
@@ -33,7 +36,7 @@ from dataclasses import dataclass, field, replace
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import ET_TZ, is_trading_session, us_open_ts
 from gexlens_engine.compute.spot import SpotReading
-from gexlens_engine.storage.parquet_store import SnapshotRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import OiMissingRow, SnapshotRow, SnapshotWriter
 from gexlens_engine.tasty.adhoc import ADHOC_MAX_AGE_S, equity_expiry_open
 from gexlens_engine.tasty.extended import build_snapshot_rows
 from gexlens_engine.tasty.provider import TastyChainCache, TastyContractState
@@ -54,7 +57,7 @@ SNAPSHOT_AFTER_OPEN = dt.timedelta(minutes=1)
 LEAD_S = 30.0
 #: Limit čekání na kotace od hranice; snímek tak zůstane v minutě 9:31
 QUOTE_TIMEOUT_S = 40.0
-#: Podíl kontraktů pásma s kotací v každé expiraci, od kterého snímek dál nečeká
+#: Podíl kontraktů pásma s kotací a s OI v každé expiraci, od kterého snímek dál nečeká
 MIN_QUOTED_SHARE = 0.9
 #: Perioda kontroly kotací během čekání
 POLL_S = 0.5
@@ -81,6 +84,19 @@ def next_snapshot(now: dt.datetime) -> tuple[dt.date, dt.datetime]:
             return day, snapshot_boundary(day) - dt.timedelta(seconds=LEAD_S)
         day += dt.timedelta(days=1)
     raise RuntimeError(f"14 dní od {now:%Y-%m-%d} bez obchodní seance — chyba kalendáře")
+
+
+def missed_session(now: dt.datetime) -> dt.date | None:
+    """Dnešní seance, jejíž hranice 9:31 ET už proběhla (start enginu po ní), jinak None.
+
+    Snímek se nedohání (`next_snapshot`), takže v tomto běhu enginu seance snímek nemá.
+    """
+    if now.tzinfo is None:
+        raise ValueError(f"now musí nést časovou zónu: {now!r}")
+    day = now.astimezone(ET_TZ).date()
+    if is_trading_session(day) and snapshot_boundary(day) <= now:
+        return day
+    return None
 
 
 def pick_expiries(
@@ -140,6 +156,8 @@ class ExpirySnapshot:
     contracts: int
     #: Kontrakty pásma s čerstvou kotací po US openu
     quoted: int
+    #: Kontrakty pásma s OI ze Summary přijatého po US openu
+    with_oi: int
     #: Řádky partice (tvar `option_plan.ChainRowLike`); bez platné kotace nebo greeks řádek není
     rows: tuple[SnapshotRow, ...]
     #: Řádky bez OI (v řádku 0.0, v partici `oimissing`, #465)
@@ -148,6 +166,10 @@ class ExpirySnapshot:
     @property
     def quoted_share(self) -> float:
         return self.quoted / self.contracts if self.contracts else 0.0
+
+    @property
+    def oi_share(self) -> float:
+        return self.with_oi / self.contracts if self.contracts else 0.0
 
 
 @dataclass(frozen=True)
@@ -183,7 +205,7 @@ class PlanChainSnapshot:
             else:
                 parts.append(
                     f"{label} {snap.expiry}: kotace {snap.quoted}/{snap.contracts}, "
-                    f"{len(snap.rows)} řádků"
+                    f"OI {snap.with_oi}/{snap.contracts}, {len(snap.rows)} řádků"
                 )
         parts.append(
             f"{PRODUCT} {_fmt(self.spot, 2)}, {REFERENCE} {_fmt(self.spot_nq, 2)} "
@@ -209,6 +231,13 @@ def _fresh_quote(
         return False
     updated = state.quote.updated_at
     return updated >= not_before and (now - updated).total_seconds() <= MAX_AGE_S
+
+
+def _fresh_oi(state: TastyContractState | None, not_before: dt.datetime) -> bool:
+    """OI ze Summary přijatého po US openu; Summary je denní agregát, stáří se dál nehlídá."""
+    if state is None or state.summary.updated_at is None:
+        return False
+    return state.summary.open_interest is not None and state.summary.updated_at >= not_before
 
 
 @dataclass
@@ -319,6 +348,7 @@ class PlanChainSnapshotter:
         for expiry in expiries:
             streamers = band[expiry]
             quoted = self._quoted(streamers, ts, not_before)
+            with_oi = sum(1 for s in streamers if _fresh_oi(self.cache.state(s), not_before))
             band_chain = ChainSymbols(
                 product=chain.product,
                 day=chain.day,
@@ -337,11 +367,13 @@ class PlanChainSnapshotter:
                 now_utc=ts,
                 max_age_s=max_age_s,
             )
+            rows, oi_missing = self._drop_stale_oi(band_chain, rows, oi_missing, not_before)
             label = "0DTE" if expiry == zero else "1DTE"
             snap = ExpirySnapshot(
                 expiry=expiry,
                 contracts=len(streamers),
                 quoted=quoted,
+                with_oi=with_oi,
                 rows=tuple(rows),
                 oi_missing=len(oi_missing),
             )
@@ -350,6 +382,11 @@ class PlanChainSnapshotter:
                 reasons.append(
                     f"{label} {expiry}: kotace {quoted}/{len(streamers)} "
                     f"({snap.quoted_share:.0%}) do {QUOTE_TIMEOUT_S:.0f} s od 9:31 ET"
+                )
+            if snap.oi_share < MIN_QUOTED_SHARE:
+                reasons.append(
+                    f"{label} {expiry}: OI po openu {with_oi}/{len(streamers)} "
+                    f"({snap.oi_share:.0%}) do {QUOTE_TIMEOUT_S:.0f} s od 9:31 ET"
                 )
             if not rows:
                 reasons.append(f"{label} {expiry}: žádný platný řádek")
@@ -408,15 +445,44 @@ class PlanChainSnapshotter:
     def _quoted(self, streamers: Iterable[str], now: dt.datetime, not_before: dt.datetime) -> int:
         return sum(1 for s in streamers if _fresh_quote(self.cache.state(s), now, not_before))
 
+    def _ready(self, streamers: Iterable[str], now: dt.datetime, not_before: dt.datetime) -> int:
+        """Kontrakty s čerstvou kotací i s OI po openu."""
+        ready = 0
+        for streamer in streamers:
+            state = self.cache.state(streamer)
+            if _fresh_quote(state, now, not_before) and _fresh_oi(state, not_before):
+                ready += 1
+        return ready
+
+    def _drop_stale_oi(
+        self,
+        chain: ChainSymbols,
+        rows: list[SnapshotRow],
+        oi_missing: list[OiMissingRow],
+        not_before: dt.datetime,
+    ) -> tuple[list[SnapshotRow], list[OiMissingRow]]:
+        """OI ze Summary před openem (starší publikace) = chybějící OI, ne hodnota (#465)."""
+        streamer_of = {(strike, right): s for (_e, strike, right), s in chain.by_contract.items()}
+        missing = list(oi_missing)
+        known = {(row.strike, row.right) for row in oi_missing}
+        kept: list[SnapshotRow] = []
+        for row in rows:
+            key = (row.strike, row.right)
+            if key not in known and not _fresh_oi(self.cache.state(streamer_of[key]), not_before):
+                row = replace(row, oi=0.0)
+                missing.append(OiMissingRow(ts_min=row.ts_min, strike=row.strike, right=row.right))
+            kept.append(row)
+        return kept, missing
+
     async def _wait_quotes(
         self, band: dict[str, frozenset[str]], not_before: dt.datetime, deadline: dt.datetime
     ) -> None:
-        """Čeká, než má každá expirace pásma `MIN_QUOTED_SHARE` kotací, nejdéle do `deadline`."""
+        """Čeká na `MIN_QUOTED_SHARE` kontraktů s kotací i OI v každé expiraci, do `deadline`."""
         while True:
             now = self.clock()
             if all(
                 streamers
-                and self._quoted(streamers, now, not_before) / len(streamers) >= MIN_QUOTED_SHARE
+                and self._ready(streamers, now, not_before) / len(streamers) >= MIN_QUOTED_SHARE
                 for streamers in band.values()
             ):
                 return
