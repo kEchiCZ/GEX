@@ -5,7 +5,7 @@
   (issuecomment-6587181454). K1–K5 rozhodl v chatu 2.–3. 11.: **K1 A, K2 A** s doporučenými
   dílčími volbami, **K3 A** s oknem spouště až do exitu (bod 5), **K4 A + (a), K5 B** (#1757).
   Body „odvozeno“ platí s nimi. Pravidla verze 1 se před přijetím ADR přehrála zpětně na všech
-  uložených scénářích NQ (#1756, 3. 11.). Přehrání ukázalo slabá místa. **K6–K10 čekají na
+  uložených scénářích NQ (#1756, 3. 11.). Přehrání ukázalo slabá místa. **K6–K11 čekají na
   rozhodnutí vlastníka** (oddíl Zpětné přehrání) a ADR se přijme až po nich.
 - **Datum:** 2026-11-02
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
@@ -275,76 +275,80 @@ stopem.
 Skript `scripts/measure_option_plan_entries_1738.py` přehrál všechny auto scénáře z
 `GET /scenarios` týmiž funkcemi, kterými ověřuje měření K3. Jen čte partice a GET API.
 Na vstupech K3 dává 2. 11. táž čísla jako tabulka K3: vstup A 16:40 za 697,62, SL 699,79,
-R:R 3,40 (přísně 2,27), P4 −72 $, TP1 692,13 / TP2 690,72.
+R:R podkladu 2,53, R:R opce 3,40 (přísně 2,27), P4 −72 $, TP1 692,13 / TP2 690,72.
 
 **Vzorek:**
 
-- 29 scénářů ve 21 dnech tvoří **15 scénářů NQ** (12 long, 3 short) a **14 scénářů ES**.
-- Plán QQQ je převod scénáře NQ (bod 2), proto se ES nepřehrává.
-- #7 (so 26. 9.) a #9 (ne 27. 9.) vznikly mimo obchodní seanci (#1309).
-- Přehráno je **13 scénářů NQ ve 13 dnech** (10 long, 3 short). „Dny se dvěma scénáři“ (8) jsou dny se scénářem ES i NQ.
-- 2. 11. je den, ze kterého pravidla vznikla. Mimo něj zbývá 12 scénářů.
+- 29 scénářů ve 21 dnech = **15 NQ** (12 long, 3 short) + **14 ES** (#1, 2, 4, 6, 8, 10, 12,
+  15, 18, 19, 20, 22, 25, 27). Plán QQQ je převod scénáře NQ (bod 2), ES se proto nepřehrává.
+- Dny se dvěma scénáři jsou vždy ES + NQ:
+  - 22. 9. (#2, #3), 26. 9. (#6, #7), 27. 9. (#8, #9), 29. 9. (#10, #11);
+  - 30. 9. (#12, #13), 2. 10. (#15, #16), 29. 10. (#25, #26), 30. 10. (#27, #28).
+- Mezery NQ:
+  - #7 (so 26. 9.) a #9 (ne 27. 9.) vznikly mimo obchodní seanci (#1309);
+  - #3 (22. 9.) nemá poměr NQ/QQQ bez pohledu dopředu, první pár barů je až 22. 9. 13:02 ET.
+- Přehráno je **12 scénářů NQ ve 12 dnech** (9 long, 3 short). 2. 11. je den, ze kterého
+  pravidla vznikla, mimo vzorek je tedy 11 scénářů.
 
 **Vstupy plánu v 9:31 ET (K4 A) a jejich limity:**
 
-- **Poměr NQ/QQQ** je naměřený jen 1. 10. a 2. 11. (poslední pár barů před 9:31 ET; bar QQQ
-  9:30 ET aplikace nesbírala). V ostatních 11 dnech je převzatý z nejbližší minuty s bary NQ
-  i QQQ (41,30–41,51). Na poměru nezávisí spouště, SL, TP ani R:R podkladu. Ceny QQQ a $ opce
-  se mění úměrně, o ≤ 0,5 %.
+- **Poměr NQ/QQQ** je naměřený jen 1. 10. a 2. 11. jako poslední pár barů před 9:31 ET (bar QQQ
+  9:30 ET aplikace nesbírala). V ostatních 10 dnech je převzatý z posledního dřívějšího páru
+  (23. 9. nebo 1. 10.). Na poměru nezávisí spouště, SL, TP ani R:R podkladu. Ceny QQQ a $ opce
+  se mění úměrně, o ≤ 0,5 % (poměr 41,30–41,51).
 - **EM:** 2. 11. ze straddlu QQQ 0DTE (6,01), jinak ze straddlu NQ 0DTE vyděleného poměrem.
 - **Opce:** \|delta\| nejblíž 0,25, IV = ATM IV NQ 1DTE (12,7–31,4 %). Ceny jsou **model**:
   2. 11. byla IV NQ o 8–10 % nad skutečnou IV QQQ.
-- **P1:** GEX QQQ byla jen 2. 11. (P1 blokuje). Ostatních 12 dní je **bez dat**, takže vstup B
-  zůstává povolený.
-- **Upřesnění při přehrání:** P3 oceňuje cíl nejpozději v exitu. U scénáře s jedním cílem leží
-  bod cesty v termínu settle, tedy po exitu, a přes exit se nedrží (K3 bod 5).
+- **P1:** GEX QQQ byla jen 2. 11. (P1 blokuje). Ostatních 11 dní je **bez dat**, takže vstup B
+  zůstal povolený.
+- **P3 oceňuje cíl nejpozději v exitu** (návrh upřesnění K3 bodu 6, K11).
 
 **Výsledek pravidel v1** (čas Praha; R:R opce a P&L = model, $ na 1 kontrakt; u vyřazených P3
-hypotetický výsledek):
+hypotetický výsledek; plná tabulka se spouští A a B, SL a TP je v #1738):
 
 | # | den | směr | úroveň A (od vstupu) | vstup plánu | R:R opce (přísně) | P4 | výsledek | P&L TP1 / TP2 |
 |---|---|---|---|---|---|---|---|---|
-| 3 | 22. 9. | long | put wall (0,70 EM) | B 15:35 za 743,48 | −0,58 (−0,53) | −117 $ | vyřazeno P3, cena už za TP1 | — |
 | 5 | 25. 9. | long | PDH (0,44 EM) | B 15:55 za 744,61 (A až 17:05) | 0,09 (0,08) | −98 $ | vyřazeno P3 (TP1, pak stop na vstupu) | +10 / −9 $ |
-| 11 | 29. 9. | long | žádná do 1 EM | B 16:30 za 739,31 | 0,24 (0,22) | −112 $ | vyřazeno P3 (exit) | −56 / −56 $ |
-| 13 | 30. 9. | long | PDH (0,06 EM) | B 15:35 za 741,64 | −0,41 (−0,41) | −87 $ | vyřazeno P3 (TP1, jediný cíl) | +8 / +8 $ |
+| 11 | 29. 9. | long | žádná do 1 EM | B 16:30 za 738,82 | 0,24 (0,22) | −122 $ | vyřazeno P3 (exit) | −59 / −59 $ |
+| 13 | 30. 9. | long | PDH (0,06 EM) | B 15:35 za 741,15 | −0,42 (−0,42) | −82 $ | vyřazeno P3 (TP1, jediný cíl) | +8 / +8 $ |
 | 14 | 1. 10. | long | put wall (0,30 EM) | A 15:55 za 742,32 | 1,04 (0,78) | −94 $ | vyřazeno P3 (SL) | −81 / −81 $ |
 | 16 | 2. 10. | long | PDH (0,06 EM) | A 15:45 za 751,76 | 0,03 (0,03) | −108 $ | vyřazeno P3 (TP1, jediný cíl) | +16 / +16 $ |
 | 17 | 6. 10. | long | flip (0,76 EM) | B 15:45 za 759,94 | 0,10 (0,08) | −65 $ | vyřazeno P3 (TP1, pak stop na vstupu) | +10 / −10 $ |
-| 21 | 21. 10. | long | flip (0,08 EM) | B 15:35 za 723,45 (A až 15:50) | 0,02 (0,01) | −78 $ | vyřazeno P3 (SL) | −35 / −35 $ |
-| 23 | 26. 10. | long | put wall (0,91 EM) | B 14:40 za 709,65 | −0,01 (−0,01) | −183 $ | vyřazeno P3 (TP2) | +7 / +47 $ |
-| 24 | 28. 10. | long | PDH (0,18 EM) | A 17:55 za 724,28 | 0,29 (0,29) | −104 $ | vyřazeno P3 (TP1, jediný cíl) | +34 / +34 $ |
-| 26 | 29. 10. | short | call wall (0,05 EM) | B 14:35 za 712,70 | −0,71 (−0,63) | −214 $ | vyřazeno P3, cena už za TP1 i TP2 | — |
-| 28 | 30. 10. | short | žádná do 1 EM | B 14:35 za 694,72 | −0,29 (−0,29) | −223 $ | vyřazeno P3, cena už za TP1 | — |
+| 21 | 21. 10. | long | flip (0,08 EM) | B 15:35 za 720,47 (A až 15:50) | 0,02 (0,01) | −78 $ | vyřazeno P3 (SL) | −35 / −35 $ |
+| 23 | 26. 10. | long | put wall (0,91 EM) | B 14:40 za 706,73 | −0,01 (−0,01) | −183 $ | vyřazeno P3 (TP2) | +7 / +47 $ |
+| 24 | 28. 10. | long | PDH (0,18 EM) | A 17:55 za 721,30 | 0,29 (0,29) | −104 $ | vyřazeno P3 (TP1, jediný cíl) | +34 / +34 $ |
+| 26 | 29. 10. | short | call wall (0,05 EM) | B 14:35 za 709,77 | −0,71 (−0,63) | −211 $ | vyřazeno P3, cena už za TP1 i TP2 | — |
+| 28 | 30. 10. | short | žádná do 1 EM | B 14:35 za 691,86 | −0,29 (−0,29) | −218 $ | vyřazeno P3, cena už za TP1 | — |
 | 29 | 2. 11. | short | flip (0,36 EM) | A 16:35 za 697,99 (B vyřadil P1) | 4,45 (2,69) | −70 $ | **obchod: TP1 18:35, TP2 18:45** | +141 / +190 $ |
 
 **Souhrn:**
 
-- **Vstup plánu:** A 4×, B 9×, bez vstupu 0×.
-- **R:R opce pod 2:** 12 ze 13. Ve 3 případech přišla spoušť až s cenou za cílem 1.
+- **Vstup plánu:** A 4×, B 8×, bez vstupu 0×.
+- **R:R opce pod 2:** 11 z 12. Ve 2 případech přišla spoušť až s cenou za cílem 1.
 - **Obchod:** jediný, 2. 11. (TP2).
-- **Vyřazené P3 hypoteticky** (bez 3 spouští za TP1): −86 $, tedy 6 zisků +7 až +34 $ a 3 ztráty −35 až −81 $.
-- **Úroveň A:** PDH 4, put wall 3, flip 3, call wall 1, žádná do 1 EM 2.
-- **Proč je R:R nízké:**
-  - TP1 scénáře NQ leží 0,13–0,42 EM od vstupu scénáře (2. 11. 0,67 EM);
+- **Vyřazené P3 hypoteticky** (bez 2 spouští za TP1): −90 $, tedy 6 zisků +7 až +34 $ a 3 ztráty
+  −35 až −81 $.
+- **Úroveň A:** PDH 4, flip 3, put wall 2, call wall 1, žádná do 1 EM 2.
+- **Proč je R:R nízké** (mimo 2. 11.):
+  - TP1 scénáře NQ leží 0,14–0,42 EM od vstupu scénáře (2. 11. 0,67 EM);
   - riziko do SL je 0,22–1,81 EM;
-  - R:R podkladu při spoušti mimo 2. 11. nejvýš 1,05 (1. 10.);
-  - cena po spoušti pokračovala ve směru o 0,15–1,67 EM (medián 0,61), o ≥ 1 EM ve 4 dnech.
+  - R:R podkladu při spoušti nejvýš 1,05 (1. 10.);
+  - cena po spoušti pokračovala ve směru o 0,15–1,67 EM (medián 0,54), o ≥ 1 EM ve 3 dnech.
 
-**Alternativy na týchž 13 dnech:**
+**Alternativy na týchž 12 dnech** (každá spoušť se hledá jen jednou, „čekat“ je proto dolní mez):
 
 | varianta | vstup A / B / bez | R:R < 2 | obchody | P&L obchodů TP1 / TP2 | vyřazené P3 hypoteticky |
 |---|---|---|---|---|---|
-| pravidla v1 (K3 A) | 4 / 9 / 0 | 12 (3 za TP1) | 1: TP2 | +141 / +190 $ | −86 $ (6 / 3) |
-| úroveň jen flip (K3 B) | 3 / 6 / 4 | 7 (1 za TP1) | 2: SL 1. 10., TP2 | +82 / +131 $ | +55 $ (5 / 1) |
-| úroveň jen ONH/ONL (K3 C) | 2 / 11 / 0 | 11 (3 za TP1) | 2: SL 1. 10., TP2 | +82 / +131 $ | −16 $ (6 / 2) |
-| test knotem (K3 D) | 7 / 6 / 0 | 12 (3 za TP1) | 1: TP2 | +141 / +190 $ | −64 $ (6 / 3) |
-| rezerva SL 0 | 4 / 9 / 0 | 12 (3 za TP1) | 1: TP2 | +141 / +190 $ | −86 $ (6 / 3) |
-| short jen vstupem A | 4 / 7 / 2 | 10 (1 za TP1) | 1: TP2 | +141 / +190 $ | −86 $ (6 / 3) |
-| jen vstup A (B nikdy) | 6 / 0 / 7 | 5 (0 za TP1) | 1: TP2 | +141 / +190 $ | +22 $ (4 / 1) |
-| po vyřazení P3 čekat na další spoušť | 4 / 9 / 0 | 12 (3 za TP1) | 1: TP2 | +141 / +190 $ | −86 $ (6 / 3) |
-| spoušť za TP1 = bez vstupu | 4 / 6 / 3 | 9 (0 za TP1) | 1: TP2 | +141 / +190 $ | −86 $ (6 / 3) |
-| R:R do TP2 (když je) | 4 / 9 / 0 | 12 (3 za TP1) | 1: TP2 | +141 / +190 $ | −86 $ (6 / 3) |
+| pravidla v1 (K3 A) | 4 / 8 / 0 | 11 (2 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
+| úroveň jen flip (K3 B) | 3 / 5 / 4 | 6 (0 za TP1) | 2: SL 1. 10., TP2 | +82 / +131 $ | +54 $ (5 / 1) |
+| úroveň jen ONH/ONL (K3 C) | 2 / 10 / 0 | 10 (2 za TP1) | 2: SL 1. 10., TP2 | +82 / +131 $ | −20 $ (6 / 2) |
+| test knotem (K3 D) | 7 / 5 / 0 | 11 (2 za TP1) | 1: TP2 | +141 / +190 $ | −68 $ (6 / 3) |
+| rezerva SL 0 | 4 / 8 / 0 | 11 (2 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
+| short jen vstupem A | 4 / 6 / 2 | 9 (0 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
+| jen vstup A (B nikdy) | 6 / 0 / 6 | 5 (0 za TP1) | 1: TP2 | +141 / +190 $ | +21 $ (4 / 1) |
+| po vyřazení P3 čekat na další spoušť | 4 / 8 / 0 | 11 (2 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
+| spoušť za TP1 = bez vstupu | 4 / 6 / 2 | 9 (0 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
+| R:R do TP2 (když je) | 4 / 8 / 0 | 11 (2 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
 
 Úroveň jen flip a jen ONH/ONL přidají 1. 10. (R:R 2,01), který skončil na SL (−59 $). Práh P3 = 1
 by přidal 1. 10. s úrovní A put wall (R:R 1,04, SL −81 $). Práh 1,5 nepřidá nic.
@@ -355,14 +359,14 @@ B se spouští prvním 5min close za vstupem scénáře ∓ 0,05 EM. Vstup scén
 takže B neměří průraz úrovně, jen pohyb ceny po vzniku scénáře. SL B leží za nejbližší úrovní
 (0,2–1,8 EM), cíl 1 je 0,1–0,4 EM od vstupu.
 
-Ve vzorku se B spustil 9× ze 13: 7× do 15 min po openu a 3× s cenou už za cílem 1. R:R měl
+Ve vzorku se B spustil 8× z 12: 6× do 15 min po openu a 2× s cenou už za cílem 1. R:R měl
 nejvýš 0,24, takže ani jednou nevedl k obchodu.
 
 | varianta | výhody | nevýhody |
 |---|---|---|
 | A — ponechat (B podmíněně podle P1, K3 bod 8) | schválená pravidla se nemění; P3 B stejně vyřadí | při K5 B skoro každé ráno upozornění „vstup B spuštěn → neobchodovat“; B jako první spoušť ukončí plán, A už nepřijde (25. 9., 21. 10.; viz K7) |
-| **B — jen vstup A, B nikdy** (doporučeno) | ve vzorku týž obchod (2. 11.); místo spouští s R:R ≤ 0,24 je 7× „bez vstupu“ a A se spustí 6×; P1 plán nepotřebuje (řetěz QQQ zůstává pro ceny a EM); odpovídá poučení 2. 11. (B skončil na SL) | mění schválený výklad P1 (K3 bod 8); den s průrazem bez návratu k úrovni nedá vstup (ve vzorku žádný B neměl R:R ≥ 2, ztráta se nedá změřit) |
-| C — short jen vstupem A (první věta rozboru) | mění jen short | ve vzorku jen 3 short; long dál 7× B s R:R ≤ 0,24 |
+| **B — jen vstup A, B nikdy** (doporučeno) | ve vzorku týž obchod (2. 11.); místo spouští s R:R ≤ 0,24 je 6× „bez vstupu“ a A se spustí 6×; P1 plán nepotřebuje (řetěz QQQ zůstává pro ceny a EM); odpovídá poučení 2. 11. (B skončil na SL) | mění schválený výklad P1 (K3 bod 8); den s průrazem bez návratu k úrovni nedá vstup (ve vzorku žádný B neměl R:R ≥ 2, ztráta se nedá změřit) |
+| C — short jen vstupem A (první věta rozboru) | mění jen short | ve vzorku jen 3 short; long dál 6× B s R:R ≤ 0,24 |
 
 ### K7 — spoušť vyřazená P3: konec plánu, nebo čekat? (k rozhodnutí jen při K6 A nebo C)
 
@@ -373,16 +377,17 @@ Pravidla to neříkají. Přehrání počítá variantu A.
 | A — konec plánu (`spuštěno — vyřazeno P3` je konečný stav) | jedno upozornění, jednoduchý stav | vyřazený B zablokuje pozdější A |
 | **B — čekat na další spoušť do exitu** (doporučeno) | vyřazená spoušť neblokuje lepší pozdější | víc přechodů a upozornění |
 
-Ve vzorku mezi A a B rozdíl není: A po vyřazeném B nedosáhl R:R 2. Při K6 B otázka odpadá: A se
-spouští jednou a skript ho po vyřazení podruhé nehledá.
+Ve vzorku mezi A a B rozdíl není: A po vyřazeném B nedosáhl R:R 2. Jde o dolní mez, protože skript
+hledá A i B jen jednou a opakovaný test úrovně nezkouší. Při K6 B otázka odpadá, pokud se A smí
+spustit jen jednou.
 
 ### K8 — R:R ≥ 2 jen 2. 11. (k rozhodnutí)
 
 | varianta | výhody | nevýhody |
 |---|---|---|
-| **A — přijmout** (doporučeno) | P3 dělá, k čemu je: vyřazené spouště by daly −86 $; pravidla se nemění; track record počítá i vyřazené (K3 bod 9), takže důkaz roste s každým plánem, ne jen s obchodem | plán QQQ bude většinou „neobchodovat — R:R < 2“; obchodů málo (ve vzorku 1 ze 13), n ≥ 30 obchodů potrvá dlouho |
+| **A — přijmout** (doporučeno) | P3 dělá, k čemu je: vyřazené spouště by daly −90 $; pravidla se nemění; track record počítá i vyřazené (K3 bod 9), takže důkaz roste s každým plánem, ne jen s obchodem | plán QQQ bude většinou „neobchodovat — R:R < 2“; obchodů málo (ve vzorku 1 z 12), n ≥ 30 obchodů potrvá dlouho |
 | B — snížit práh P3 na 1,5 nebo 1 | víc obchodů | 1,5 ve vzorku nic nepřidá; 1 přidá 1. 10. (SL −81 $); oslabuje pravidlo z rozboru |
-| C — vlastní cíle plánu QQQ dál než cíle scénáře | využil by pohyb za cílem (≥ 1 EM ve 4 dnech) | mění přijatý bod 2 (cíle = cíle scénáře); nové pravidlo bez měření, na 13 dnech hrozí přeučení; R:R do TP2 scénáře nepřidal nic; jen jako nová `rules_version` podle track recordu |
+| C — vlastní cíle plánu QQQ dál než cíle scénáře | využil by pohyb za cílem (≥ 1 EM ve 3 dnech) | mění přijatý bod 2 (cíle = cíle scénáře); nové pravidlo bez měření, na 12 dnech hrozí přeučení; R:R do TP2 scénáře nepřidal nic; jen jako nová `rules_version` podle track recordu |
 
 ### K9 — čísla 2. 11. podle K4 A (rozpor, k potvrzení)
 
@@ -393,7 +398,7 @@ Odvozeno ale určují vznik plánu v 9:31 ET:
 - **poměr z poslední uzavřené minuty:** 41,311 (pár 9:25 ET, bar QQQ 9:30 ET chybí);
 - **EM 6,01** ze straddlu 695.
 
-Minuta snímku úrovní mění úroveň A jen ve 2 ze 13 dní (2. 11. flip o +0,56, 26. 10. put wall
+Minuta snímku úrovní mění úroveň A jen ve 2 z 12 dní (2. 11. flip o +0,56, 26. 10. put wall
 místo flipu). Výsledek P3 nemění v žádném dni.
 
 | varianta | výhody | nevýhody |
@@ -411,6 +416,19 @@ výsledku vedle hlavního (K2 A) a do výsledku obchodů se nepočítá.
 | A — žádné (jen v1 a hypotetický výsledek vyřazených P3, K3 bod 9) | F3 (#1748) a F5b (#1749) beze změny | co přehrání nerozhodlo, zůstane bez dat |
 | **B — dva stíny: vstup B (při K6 B) a test knotem** (doporučeno) | měří právě to, co vzorek nerozhodl: B neměl data P1, knot dal víc spouští (7 proti 4) se stejným výsledkem | o něco víc práce v F3 a v track recordu F5b |
 | C — všechny alternativy z tabulky | nejvíc dat | úroveň jen flip a jen ONH/ONL vzorek už vyvrátil (ztráta 1. 10.); víc šumu v track recordu |
+
+### K11 — čas ocenění cíle pro P3 nejpozději v exitu (upřesnění K3 bodu 6, k potvrzení)
+
+K3 bod 6 oceňuje SL i TP1 v čase cíle 1 podle cesty scénáře. U scénáře s jedním cílem leží tento
+bod v termínu settle, tedy 15 min po exitu, kdy pozice už neexistuje (K3 bod 5).
+
+| varianta | výhody | nevýhody |
+|---|---|---|
+| **A — čas cíle podle cesty, nejpozději exit** (doporučeno; přehrání počítá takto) | oceňuje jen okamžik, kdy pozice může existovat; F2a (#1741) počítá stejně | mění znění schváleného bodu 6 |
+| B — doslova podle bodu 6 (i po exitu) | znění beze změny | oceňuje pozici po exitu |
+
+Ve vzorku jde o 4 scénáře s jedním cílem (30. 9., 2. 10., 28. 10., 30. 10.). R:R se mění nejvýš
+o 0,03 a výsledek P3 v žádném z nich.
 
 ## Zvažované a odmítnuté (rozhodnuto 2. 11.)
 
@@ -436,7 +454,7 @@ výsledku vedle hlavního (K2 A) a do výsledku obchodů se nepočítá.
   s plánem). RAM podle K1.
 - **Relevance dat:** ceny jsou měřené a nesou stáří. Model (BS z naměřené IV) počítá jen
   hypotetické ceny při SL a TP a nese štítek. Chybějící řetěz = mezera.
-- **Riziko:** pravidla stojí na jednom dni (2. 11.). Zpětné přehrání (#1756) dalo ze 13 plánů
+- **Riziko:** pravidla stojí na jednom dni (2. 11.). Zpětné přehrání (#1756) dalo z 12 plánů
   jediný obchod, právě 2. 11.; ostatní vyřadil P3. Brána pro jakoukoli úpravu je track record
   (n ≥ 30). Úprava znamená novou `rules_version`, nikdy větší stop.
 - Scénář NQ, verdikt dne a jejich golden data zůstávají beze změny.

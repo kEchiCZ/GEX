@@ -11,9 +11,10 @@ R:R opce 3,40 (přísně 2,27), P4 −72 $, TP1 692,13 / TP2 690,72.
 **Zpětné přehrání**: všechny scénáře z `GET /scenarios`, pravidla verze 1 (K3 A, okno spouště
 do exitu, K4 A = plán v 9:31 ET) a alternativy. Vstupy plánu v minutě 9:31 ET:
 - poměr NQ/QQQ = close posledního 1m baru s cenou NQ i QQQ uzavřeného před 9:31 ET téže
-  seance. Bary QQQ v RTH aplikace nesbírala (ad-hoc pohled), proto jinak nejbližší naměřená
-  minuta jiného dne se štítkem „převzatý“. Spouště, SL, TP a R:R podkladu na poměru nezávisí
-  (všechny úrovně se dělí týmž číslem); ceny QQQ a $ opce se mění úměrně chybě poměru;
+  seance. Bary QQQ v RTH aplikace nesbírala (ad-hoc pohled), proto jinak poslední dřívější
+  naměřená minuta se štítkem „převzatý“; bez dřívějšího páru mezera (bez pohledu dopředu).
+  Spouště, SL, TP a R:R podkladu na poměru nezávisí (všechny úrovně se dělí týmž číslem);
+  ceny QQQ a $ opce se mění úměrně chybě poměru;
 - flip a call/put wall NQ 0DTE z posledního snímku `levels` do 9:31 ET; ONH/ONL a PDH/PDL
   z `scenario_auto.gather_context`, tedy táž funkce jako scénář (seance od 17:00 CT D−1);
 - EM = `straddle_em` nad řetězem QQQ 0DTE (kotace ≤ 10 min před plánem), jinak nad NQ 0DTE
@@ -27,7 +28,9 @@ do exitu, K4 A = plán v 9:31 ET) a alternativy. Vstupy plánu v minutě 9:31 ET
 Průběh (5min bary NQ / poměr od US openu): spoušť a SL na 5min close, TP na dotyk v baru
 (dotyk je v baru dřív než jeho close). Po TP1 jde SL na vstup, exit = settle − 15 min.
 Plán má jeden vstup, ten, který se spustí první (A, nebo B, pokud ho P1 nevyřadí). R:R opce
-pod 2 = „vyřazeno P3“, hypotetický výsledek se počítá zvlášť.
+pod 2 = „vyřazeno P3“, hypotetický výsledek se počítá zvlášť. P3 oceňuje cíl nejpozději
+v exitu (bod cesty scénáře s jedním cílem leží v settle, po exitu). Každá spoušť (A, B) se
+hledá jen jednou, varianta „čekat“ je proto dolní mez.
 
 Spuštění (z kořene worktree; `data` = produkční adresář, API produkce na :8010):
     PYTHONPATH=engine/src python scripts/measure_option_plan_entries_1738.py \
@@ -72,6 +75,7 @@ TARGET_DELTA = 0.25
 MIN_RR = 2.0
 #: Množina úrovní vstupu A (K3 A bod 1); těžiště a PDC v ní nejsou
 LEVEL_SET = ("flip", "ONH", "ONL", "PDH", "PDL", "call wall", "put wall")
+SCENARIO_LIMIT = 500  # strop `GET /scenarios`
 ADR_DAY = dt.date(2026, 11, 2)
 ADR_TIME = "16:40"
 ADR_EXPECTED = {
@@ -151,7 +155,8 @@ def chain_em(chain: dict[tuple[float, str], dict[str, Any]], spot: float) -> tup
 
 
 def atm_iv(chain: dict[tuple[float, str], dict[str, Any]], spot: float) -> float | None:
-    """Průměrná IV obou stran striku nejblíž spotu (definice `tendency._atm_iv`)."""
+    """Průměrná IV obou stran striku nejblíž spotu (jako `tendency._atm_iv`, ta je vázaná na
+    runtime). Rozdíl: nejbližší strike se hledá jen mezi kotacemi s IV."""
     ivs = {key: float(row["iv"]) for key, row in chain.items() if finite(row["iv"]) and row["iv"]}
     if not ivs:
         return None
@@ -200,15 +205,17 @@ def ratio_pairs(data: Path) -> list[Pair]:
     return pairs
 
 
-def ratio_for(pairs: list[Pair], day: dt.date, closed: dt.datetime) -> tuple[float, str]:
-    """Poslední pár téže seance do `closed` včetně; jinak nejbližší naměřený („převzatý“)."""
+def ratio_for(pairs: list[Pair], day: dt.date, closed: dt.datetime) -> tuple[float, str] | None:
+    """Poslední pár do `closed` včetně (bez pohledu dopředu): z téže seance „naměřený“,
+    z dřívější „převzatý“; žádný dřívější pár = None (mezera)."""
     start, _ = session_bounds(day)
-    same = [p for p in pairs if start <= p.ts <= closed]
-    if same:
-        pair = same[-1]
-        return pair.ratio, f"{cz(pair.ratio, 3)} naměřený {pair.ts.astimezone(ET):%H:%M} ET"
-    pair = min(pairs, key=lambda p: abs(p.ts - closed))
+    before = [p for p in pairs if p.ts <= closed]
+    if not before:
+        return None
+    pair = before[-1]
     local = pair.ts.astimezone(ET)
+    if pair.ts >= start:
+        return pair.ratio, f"{cz(pair.ratio, 3)} naměřený {local:%H:%M} ET"
     return pair.ratio, f"{cz(pair.ratio, 3)} převzatý {dm(local.date())} {local:%H:%M} ET"
 
 
@@ -455,6 +462,12 @@ def risk_reward(plan: Plan, entry: Entry, target: int = 0) -> RiskReward:
     return RiskReward(paid, at_stop, at_tp1, ratio(at_stop), ratio(strict), (worst - paid) * 100)
 
 
+def underlying_rr(plan: Plan, entry: Entry) -> float:
+    """R:R podkladu při spoušti: od ceny vstupu k TP1 proti vzdálenosti k SL."""
+    reward = (plan.targets[0] - entry.bar.close) * plan.side
+    return reward / ((entry.bar.close - entry.stop) * plan.side)
+
+
 def manage(plan: Plan, entry: Entry) -> Outcome:
     """Průběh po vstupu: TP na dotyk, SL na 5min close, po TP1 SL na vstup, exit."""
     side, opt = plan.side, plan.option
@@ -552,7 +565,14 @@ async def build_plan(
     nq_close = {r["ts_min"]: r["close"] for r in nq}
     if closed not in nq_close:
         return f"bez 1m baru NQ {closed.astimezone(ET):%H:%M} ET"
-    ratio, ratio_src = ratio_for(pairs, day, closed)
+    found = ratio_for(pairs, day, closed)
+    if found is None:
+        later = next((p for p in pairs if p.ts > closed), None)
+        first = (
+            f", první až {dm(later.ts.date())} {later.ts.astimezone(ET):%H:%M} ET" if later else ""
+        )
+        return f"bez poměru NQ/QQQ: žádný pár barů NQ a QQQ do 9:30 ET{first} (bez pohledu dopředu)"
+    ratio, ratio_src = found
     spot_nq = nq_close[closed]
     spot = spot_nq / ratio
     exp0 = f"{day:%Y%m%d}"
@@ -565,6 +585,9 @@ async def build_plan(
         return f"bez snímku levels NQ 0DTE do {levels_ts.astimezone(ET):%H:%M} ET"
     snap = max(level_rows, key=lambda r: r["ts_min"])
     ctx = await gather_context(api, "NQ", None, day, plan_ts)
+    bars_failed = [reason for reason in ctx.failures if reason.startswith("bars")]
+    if bars_failed:
+        return "čtení barů z API selhalo (ONH/ONL, PDH/PDL): " + ", ".join(bars_failed)
     raw = {
         "flip": snap["flip"],
         "call wall": snap["call_wall"],
@@ -600,8 +623,12 @@ async def build_plan(
         iv_source = "IV podle ADR"
     side = 1 if direction == "long" else -1
     p1 = "bez dat"
-    p1_detail = "řetěz QQQ 0DTE do 10 min před plánem není"
-    if qqq_chain:
+    p1_detail = "řetěz QQQ 0DTE s gamma a OI do 10 min před plánem není"
+    has_gex = any(
+        finite(row["gamma"]) and finite(row["oi"]) and row["gamma"] and row["oi"]
+        for row in qqq_chain.values()
+    )
+    if has_gex:
         top, value = gex_top(qqq_chain, spot)
         distance = abs(top - spot) / em if math.isfinite(top) else math.nan
         blocks = math.isfinite(top) and (top - spot) * side < 0 and distance <= 1.0
@@ -632,6 +659,7 @@ async def build_plan(
             "IV": iv_source,
             "P1": p1_detail,
             "spot": cz(spot),
+            "chybí": ", ".join(ctx.missing) or "—",
         },
     )
 
@@ -665,10 +693,9 @@ def adr_check(plan: Plan) -> tuple[list[str], bool]:
             out.append(f"- {name} {cz(level)}: vstup A nespuštěn")
             continue
         risk, outcome = risk_reward(plan, entry), manage(plan, entry)
-        under = (plan.entry - plan.targets[0]) / (entry.stop - entry.bar.close)
         out.append(
             f"- {name} {cz(level)}: vstup A {entry_text(entry)}, R:R podkladu "
-            f"{cz(-under * plan.side)}, opce {cz(risk.paid)} / SL {cz(risk.at_stop)} "
+            f"{cz(underlying_rr(plan, entry))}, opce {cz(risk.paid)} / SL {cz(risk.at_stop)} "
             f"({usd((risk.at_stop - risk.paid) * 100)}) / TP1 {cz(risk.at_tp1)} "
             f"({usd((risk.at_tp1 - risk.paid) * 100)}), R:R opce {cz(risk.rr)} (přísně "
             f"{cz(risk.rr_strict)}), P4 {usd(risk.p4)}; {outcome.detail}"
@@ -815,13 +842,12 @@ def diagnostic_rows(plans: list[tuple[dict[str, Any], Plan]]) -> list[str]:
             )
             continue
         risk = (entry.stop - entry.bar.close) * -plan.side / plan.em
-        reward = (plan.targets[0] - entry.bar.close) * plan.side / plan.em
         after = [b for b in plan.fives if entry.bar.end < b.end <= plan.exit_ts]
         best = max(((b.high if plan.side > 0 else -b.low) for b in after), default=math.nan)
         move = (best - entry.bar.close * plan.side) / plan.em
         out.append(
             f"| {plan.scenario} | {dm(plan.day)} | {cz(tp1)} EM | {cz(risk)} EM | "
-            f"{cz(reward / risk)} | {cz(move)} EM | {verdict} |"
+            f"{cz(underlying_rr(plan, entry))} | {cz(move)} EM | {verdict} |"
         )
     return out
 
@@ -835,8 +861,12 @@ async def main() -> int:
     args = parser.parse_args()
     api = ApiReader(args.api, timeout_s=60.0)
     try:
-        scenarios = (await api.get("/scenarios", {"limit": 40}))["scenarios"]
-        scenarios = [s for s in scenarios if s.get("source") == "auto"]
+        scenarios = (await api.get("/scenarios", {"limit": SCENARIO_LIMIT, "source": "auto"}))[
+            "scenarios"
+        ]
+        if len(scenarios) >= SCENARIO_LIMIT:
+            print(f"GET /scenarios vrátil {len(scenarios)} = limit, seznam může být neúplný")
+            return 1
         pairs = ratio_pairs(args.data)
         adr_scenario = next(s for s in scenarios if s["day"] == ADR_DAY.isoformat())
         adr_plan = await build_plan(
