@@ -229,6 +229,8 @@ class OptionVariant:
 
 @dataclass(frozen=True)
 class OptionPlan:
+    """Plán opce QQQ v minutě vzniku, s bary po vzniku i se spouští vstupu (ceny QQQ)."""
+
     rules_version: int
     rules: str
     day: dt.date
