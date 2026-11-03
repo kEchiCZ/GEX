@@ -225,8 +225,8 @@ def _pinned_expires_on(symbol: str, day: dt.date) -> bool:
 def history_expiry_settle(
     expiry: str, symbol: str, trading_class: str | None = None
 ) -> tuple[dt.datetime | None, bool]:
-    """Settle expirace pro offline nástroje (přepočet setupů, backtest), kde
-    trading class řetězu chybí (#1366) — a zda se dovozovala.
+    """Settle expirace pro offline nástroje (přepočet setupů, backtest) a extended
+    plán tasty (#1759), kde trading class řetězu chybí (#1366) — a zda se dovozovala.
 
     Se třídou platí `expiry_settle` jako v enginu. Bez ní (řádky a partice před
     #1366) se na kvartální datum dovodí z tickeru: kořenový ticker sbíral po

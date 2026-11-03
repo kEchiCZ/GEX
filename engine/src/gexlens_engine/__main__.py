@@ -2740,7 +2740,11 @@ async def main() -> None:
                             planned = plan_extended_expiries(
                                 chain,
                                 ibkr_expiries_of(symbol),
-                                today=today,
+                                symbol=symbol,
+                                # Čas až u volání: IBKR množina se čte teď, po
+                                # awaitech chain mapy — hranice settle (#1759)
+                                # se musí ptát téhož okamžiku jako roll
+                                now=dt.datetime.now(dt.UTC),
                                 horizon_days=settings.tasty_extended_horizon_days,
                             )
                             validate_disjoint(planned, ibkr_expiries_of(symbol))
