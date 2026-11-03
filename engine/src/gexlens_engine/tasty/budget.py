@@ -25,7 +25,9 @@ Dvě věci, které z toho plynou:
 Rezerva pro ad-hoc: běžný plán smí zabrat jen `max_entries − adhoc_reserve`,
 aby vyhledaný symbol vždy měl kam přijít; nevyužitá rezerva se nevrací
 extended — jinak by první ad-hoc pohled vyřadil kus extended pokrytí a heal
-by je pak střídal.
+by je pak střídal. Z téže rezervy bere i krátký snímek řetězu QQQ pro plán opce
+(`plan_chain`, #1740): ~520 položek na pár sekund v 9:31 ET se vejde vedle
+jednoho ad-hoc pohledu a extended kvůli němu nepřijde o nic.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ from gexlens_engine.tasty.symbols import ChainSymbols
 
 #: Strop položek (symbol × event) na jedno DXLink spojení — měřeno 2. 9. 2026
 MAX_ENTRIES = 25_000
-#: Rezerva pro ad-hoc pohledy: ~2 pohledy à 300 symbolů × 3 eventy
+#: Rezerva pro ad-hoc pohledy (~2 pohledy à 300 symbolů × 3 eventy) a snímek plánu (#1740)
 ADHOC_RESERVE_ENTRIES = 2_000
 
 ALL_EVENTS: tuple[str, ...] = ("Quote", "Greeks", "Summary", "TimeAndSale")
@@ -47,13 +49,16 @@ EVENTS_BY_PURPOSE: dict[str, tuple[str, ...]] = {
     "underlying": ALL_EVENTS,  # cena + CVD podkladu (#829)
     "chain": ALL_EVENTS,  # validátor, OI fill, recorder printů, stínové CumΔ
     "adhoc": ("Quote", "Greeks", "Summary"),  # pohled bez flows (#521 C)
+    "plan_chain": ("Quote", "Greeks", "Summary"),  # snímek řetězu QQQ pro plán (#1740)
     "extended": ("Quote", "Greeks", "Summary"),  # #616: snapshoty z mid + greeks
     "wide": ("Quote", "Summary"),  # #828: jen OI; Quote drží „nemlčí"
 }
 
 #: Pořadí přidělování; ořezává se jen `TRIMMABLE`, a to zezadu seznamu
-KEEP_ORDER: tuple[str, ...] = ("underlying", "chain", "adhoc", "wide", "extended")
+KEEP_ORDER: tuple[str, ...] = ("underlying", "chain", "adhoc", "plan_chain", "wide", "extended")
 TRIMMABLE: frozenset[str] = frozenset({"wide", "extended"})
+#: Účely, které čerpají rezervu ad-hoc (snímek plánu #1740 sdílí rezervu s pohledy)
+RESERVE_PURPOSES: frozenset[str] = frozenset({"adhoc", "plan_chain"})
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,7 @@ def plan_subscriptions(
     # Rezerva chrání běžný plán před ad-hoc a naopak: běžné účely končí na
     # `max_entries − nevyužitá rezerva`, ad-hoc smí až na tvrdý strop
     regular_limit = max_entries - max(0, adhoc_reserve)
+    reserve_used = 0
     for name in [*known, *extra]:
         events = events_by_purpose.get(name, ALL_EVENTS)
         limit = regular_limit if name in TRIMMABLE else max_entries
@@ -107,10 +113,11 @@ def plan_subscriptions(
             subscriptions.setdefault(symbol, set()).update(events)
             entries += cost
             purpose_cost += cost
-        if name == "adhoc":
-            # Co ad-hoc z rezervy skutečně vzal, je už započtené v `entries`;
-            # nevyužitý zbytek rezervy zůstává volný pro další pohled
-            regular_limit = max_entries - max(0, adhoc_reserve - purpose_cost)
+        if name in RESERVE_PURPOSES:
+            # Co ad-hoc a snímek plánu z rezervy skutečně vzaly, je už započtené
+            # v `entries`; nevyužitý zbytek rezervy zůstává volný pro další pohled
+            reserve_used += purpose_cost
+            regular_limit = max_entries - max(0, adhoc_reserve - reserve_used)
     return BudgetPlan(
         subscriptions={symbol: frozenset(events) for symbol, events in subscriptions.items()},
         entries=entries,

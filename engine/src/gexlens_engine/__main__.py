@@ -173,6 +173,15 @@ from gexlens_engine.tasty.extended import (
 from gexlens_engine.tasty.greeks_validator import GreeksAlert, GreeksValidator
 from gexlens_engine.tasty.kpi import StreamKpi
 from gexlens_engine.tasty.monitor import MAX_AGE_MS, FeedMonitor, tracked_symbols
+from gexlens_engine.tasty.plan_chain import PURPOSE as PLAN_CHAIN_PURPOSE
+from gexlens_engine.tasty.plan_chain import REFERENCE as PLAN_CHAIN_REFERENCE
+from gexlens_engine.tasty.plan_chain import (
+    PlanChainSnapshotter,
+    missed_session,
+    missing_data_level,
+    next_snapshot,
+    snapshot_boundary,
+)
 from gexlens_engine.tasty.provider import TastyChainCache, _number
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.spot_fallback import SpotFallback
@@ -2173,6 +2182,23 @@ async def main() -> None:
             on_change=plan_wakeup.set,
         )
 
+        def _plan_reference_spot() -> SpotReading:
+            """Spot NQ pro poměr plánu QQQ (#1740): spot pipeline (IBKR → 5s bar → tasty)."""
+            pipe = pipelines.get(PLAN_CHAIN_REFERENCE)
+            if pipe is None or pipe.spot_reading is None:
+                return SpotReading(None, None, None, False)
+            return pipe.spot_reading()
+
+        # Snímek řetězu QQQ pro plán opce (ADR-0062 K4 A, #1740): striky jen po dobu
+        # snímku v 9:31 ET, z rezervy ad-hoc; probuzení reconcileru jako u ad-hoc
+        plan_chain_snapshotter = PlanChainSnapshotter(
+            symbol_map=symbol_map,
+            cache=tasty_cache,
+            writer=writer,
+            reference_spot=_plan_reference_spot,
+            on_change=plan_wakeup.set,
+        )
+
         def _tasty_event(event_type: str, values: list[object]) -> None:
             tasty_cache.on_event(event_type, values)
             if trades_recorder is not None:
@@ -2804,6 +2830,10 @@ async def main() -> None:
                         adhoc_syms = adhoc_viewer.streamers()
                         symbols |= adhoc_syms
                         purpose.setdefault("adhoc", set()).update(adhoc_syms)
+                        # Snímek řetězu QQQ pro plán (#1740): mimo snímek prázdné
+                        plan_syms = plan_chain_snapshotter.streamers()
+                        symbols |= plan_syms
+                        purpose.setdefault(PLAN_CHAIN_PURPOSE, set()).update(plan_syms)
                         symbol_breakdown.clear()
                         symbol_breakdown.update(
                             {name: len(values) for name, values in purpose.items()}
@@ -3160,9 +3190,57 @@ async def main() -> None:
                 except Exception:
                     logger.exception("Ad-hoc smyčka selhala — další tik jede dál")
 
+        async def plan_chain_loop() -> None:
+            """Snímek řetězu QQQ 0DTE + 1DTE pro plán opce v 9:31 ET (ADR-0062 K4 A, #1740).
+
+            Jednou za obchodní seanci, víkend a svátek NYSE snímek nemají. Neúplný snímek
+            hlásí WARNING jen při otevřeném trhu (AGENTS.md). Plán z výsledku sestaví F2b #1742.
+            Start enginu po 9:31 ET snímek nedohání; mezeru dne nahlásí hned při startu.
+            """
+            started = dt.datetime.now(dt.UTC)
+            missed = missed_session(started)
+            if missed is not None:
+                logger.log(
+                    missing_data_level(started),
+                    "Snímek řetězu QQQ pro plán (#1740): seance %s v tomto běhu bez snímku — "
+                    "engine startoval po 9:31 ET, snímek se nedohání",
+                    missed,
+                )
+            while not shadow_stop.is_set():
+                now = dt.datetime.now(dt.UTC)
+                session, start = next_snapshot(now)
+                logger.info(
+                    "Snímek řetězu QQQ pro plán (#1740): příští seance %s, náběh %s",
+                    session,
+                    start.isoformat(),
+                )
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        shadow_stop.wait(), timeout=max(0.0, (start - now).total_seconds())
+                    )
+                if shadow_stop.is_set():
+                    return
+                try:
+                    snapshot = await plan_chain_snapshotter.run(session)
+                    if snapshot is not None:
+                        level = (
+                            logging.INFO
+                            if snapshot.complete
+                            else missing_data_level(dt.datetime.now(dt.UTC))
+                        )
+                        logger.log(level, "%s", snapshot.describe())
+                except Exception:
+                    logger.exception("Snímek řetězu QQQ pro plán (#1740) selhal — příští seance")
+                # Hranice musí být za námi, ať výběr příštího snímku vezme další seanci
+                rest = (snapshot_boundary(session) - dt.datetime.now(dt.UTC)).total_seconds()
+                if rest > 0:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(shadow_stop.wait(), timeout=rest + 1.0)
+
         shadow_tasks = [
             asyncio.create_task(tasty_stream.run(shadow_stop)),
             asyncio.create_task(adhoc_loop()),
+            asyncio.create_task(plan_chain_loop()),
             asyncio.create_task(monitor.run(shadow_stop)),
             asyncio.create_task(shadow_symbols_loop()),
             asyncio.create_task(orphan_spot_loop()),

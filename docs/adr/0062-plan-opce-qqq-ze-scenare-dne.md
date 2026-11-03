@@ -104,7 +104,10 @@ a epiky liší, říká to poznámka u pravidla.
 
 - **Minuta vzniku:** poměr NQ/QQQ = close poslední uzavřené 1m minuty NQ a QQQ před vznikem
   plánu (bez pohledu dopředu). Úrovně NQ ze snímku minuty vzniku. ONH/ONL od začátku seance
-  (17:00 CT předchozího dne), tedy i z partice D−1 (#1002).
+  (17:00 CT předchozího dne), tedy i z partice D−1 (#1002). Upřesnění 3. 11. (F1a #1740):
+  živě je to stav na hranici 9:31:00 ET, tedy mid QQQ (bary QQQ se nesbírají) a spot NQ
+  pipeline (IBKR → 5s bar → tasty) v témže okamžiku. Close baru by se od něj lišil o zlomek
+  ticku.
 - **1DTE** = nejbližší expirace s datem po obchodní seanci vzniku (`is_trading_session`, svátky
   NYSE podle ADR-0046): pondělí → úterý, pátek → pondělí.
 - **EM QQQ** = `compute/emrespect.straddle_em` (ATM strike nejblíž spotu se zaplacenýma oběma
