@@ -20,7 +20,7 @@ kontraktu. Nesou štítek `MODEL_LABEL`, naměřené ceny přinese až vyhodnoce
 
 Při vzniku plán R:R ani ztrátu při SL nemá: SL podle K3 bodu 3 závisí na extrému po testu
 úrovně, který při vzniku ještě nenastal. R:R se proto počítá při spoušti, jak říká Návrh
-epiky („R:R při spoušti“) a K3 bod 6 („nejdřív v čase vstupu“).
+epiky („R:R při spoušti“) a K3 bod 6 („nejdřív v čase vstupu“); rozhodnuto K12 A.
 """
 
 import datetime as dt

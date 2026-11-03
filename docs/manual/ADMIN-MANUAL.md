@@ -612,7 +612,7 @@ vyhodnocení F3 #1748. Pravidla verze 1 (`RULES_VERSION`, ADR-0062 K3 A, K6 B, K
 - **P3 a P4 při spoušti:** SL i TP1 se oceňují v čase cíle 1 podle cesty, nejdřív ve vstupu
   a nejpozději v exitu (K11 A). „Přísně“ znamená SL v čase exitu. P4 = čerpání na SL + 0,2 EM
   v exitu, v $ i v % účtu. R:R < 2 = `neobchodovat`, čerpání nad `max_loss_usd` = `nad rozpočtem`.
-  Při vzniku (bez barů) R:R ani SL ještě nejsou, protože SL závisí na extrému po testu.
+  Při vzniku (bez barů) R:R ani SL ještě nejsou, protože SL závisí na extrému po testu (K12 A).
   Varianty tehdy čekají („čeká na vstup A“).
 - **Verdikt varianty:** `obchodovat`, `neobchodovat — důvod` (rozpočet nenastaven, vstup A není,
   bez vstupu do exitu, P3, P4) nebo `čeká`. Plán obchoduje, když aspoň jedna varianta.

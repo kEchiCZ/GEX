@@ -7,7 +7,8 @@
   Body „odvozeno“ platí s nimi. Pravidla verze 1 se před přijetím ADR přehrála zpětně na všech
   uložených scénářích NQ (#1756, 3. 11.). Přehrání ukázalo slabá místa. K6–K11 rozhodl vlastník
   3. 11. v chatu podle doporučení: **K6 B** (jen vstup A, K7 tím odpadá), **K8 A, K9 A, K10 B,
-  K11 A**. Tím je ADR **přijat** (3. 11. 2026).
+  K11 A**. Tím je ADR **přijat** (3. 11. 2026). Rozpor P2/P3 s K3 A, který se ukázal při
+  implementaci F2a (#1741), rozhodl vlastník 3. 11. jako **K12 A**.
 - **Datum:** 2026-11-02
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1741 (F2a), #1742 (F2b), #1743 (F4a),
@@ -87,10 +88,12 @@ a epiky liší, říká to poznámka u pravidla.
   hlavní plán vstup B nemá. P1 rozhoduje jen o stínu vstupu B v track recordu (K10 B).
 - **P2** SL = 5min close za extrémem výběru stopů + rezerva (definice v K3). Plán k němu uvede
   ekvivalentní cenu opce v čase vzniku (model) i v čase spouště (kotace). *Rozbor říká „v čase
-  vstupu“, epika „v čase vzniku“. Plán uvede obojí.*
+  vstupu“, epika „v čase vzniku“. Plán uvede obojí.* **Rozhodnuto 3. 11. (K12 A):** SL podle K3
+  bodu 3 je známý až při spoušti, takže model ceny opce při SL se počítá při spoušti, kotace ve
+  vyhodnocení.
 - **P3** R:R se počítá z cen opce, SL proti TP1, při skutečné spoušti. Pod 2 = neobchodovat.
   Plán při vzniku uvede R:R z modelu, vyhodnocení (a živé upozornění podle K5) z kotace v minutě
-  spouště. Čas, ve kterém se SL a TP1 oceňují, je v K3, bod 6.
+  spouště. **Rozhodnuto 3. 11. (K12 A):** R:R z modelu počítá plán při spoušti, ne při vzniku. Čas, ve kterém se SL a TP1 oceňují, je v K3, bod 6.
 - **P4** Plán uvede ztrátu opce při SL i nejhorší průběžné čerpání (K3, bod 7). Nevejde-li se do
   rozpočtu (bod 5), varianta je `nad rozpočtem`.
 - **P5** Plán doporučí stop navázaný na podklad: podmíněný příkaz v TWS (podmínka ceny QQQ →
@@ -463,6 +466,23 @@ Ve vzorku jde o 4 scénáře s jedním cílem (30. 9., 2. 10., 28. 10., 30. 10.)
 o 0,03 a výsledek P3 v žádném z nich.
 
 **Rozhodnuto 3. 11.: A** (vlastník). Znění K3 bodu 6 je upravené.
+
+### K12 — R:R a rozpočet při vzniku plánu (rozhodnuto 3. 11.: A)
+
+P2 a P3 chtějí cenu opce při SL a R:R z modelu už při vzniku plánu (9:31 ET). SL podle K3 bodu 3
+je ale 5min close za extrémem od testu úrovně a test v 9:31 ET ještě nenastal. 2. 11. přišel
+až v 16:35 SEČ a SL vyšel 699,66. Rozpor se ukázal při implementaci F2a (#1741).
+
+| varianta | výhody | nevýhody |
+|---|---|---|
+| **A — R:R, P3, P4 a rozpočet až při spoušti** (doporučeno) | nic se neodhaduje; odpovídá Návrhu epiky („R:R při spoušti“) a K3 bodu 6 („nejdřív v čase vstupu“); R:R z kotace přinese živé upozornění K5 B (#1757) | ranní plán ještě neřekne, zda se varianta vejde do rozpočtu |
+| B — předběžně při vzniku (vstup na úrovni A, SL = úroveň + 0,05 EM, štítek „předběžně“) | rozpočet vidět ráno | odhad je systematicky optimistický, protože SL leží nejblíž, jak může: 2. 11. R:R 9,20 a P4 −53 $ proti 4,61 a −65 $ při spoušti |
+
+**Rozhodnuto 3. 11.: A** (vlastník v chatu). Při vzniku plán nese opci, kotace, úroveň vstupu A,
+cíle a model ceny v TP1/TP2. Varianta má stav `čeká — čeká na vstup A (úroveň)`, nebo
+`neobchodovat — důvod`, když vstup nebo opce nejde (rozpočet nenastaven, žádná úroveň do 1 EM,
+chybí EM nebo řetěz). Táž čistá funkce s bary po vzniku najde spoušť a ocení ji (P3, P4).
+Verdikt varianty je pak `obchodovat`, nebo `neobchodovat — důvod`.
 
 ## Zvažované a odmítnuté (rozhodnuto 2. 11.)
 
