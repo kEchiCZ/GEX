@@ -443,7 +443,8 @@ def risk_reward(plan: Plan, entry: Entry, target: int = 0) -> RiskReward:
     opt, start = plan.option, entry.bar.end
     paid = opt.price(entry.bar.close, start)
     index = min(target, len(plan.targets) - 1)
-    horizon = max(start, plan.t1 if index == 0 else plan.t2)
+    # Bod cesty může ležet za exitem (scénář s jedním cílem = termín settle); déle se nedrží
+    horizon = min(max(start, plan.t1 if index == 0 else plan.t2), plan.exit_ts)
     at_stop, at_tp1 = opt.price(entry.stop, horizon), opt.price(plan.targets[index], horizon)
     strict = opt.price(entry.stop, plan.exit_ts)
     worst = opt.price(entry.stop - plan.side * P4_EXTRA_EM * plan.em, plan.exit_ts)
