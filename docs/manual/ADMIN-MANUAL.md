@@ -607,8 +607,8 @@ vyhodnocení F3 #1748. Pravidla verze 1 (`RULES_VERSION`, ADR-0062 K3 A, K6 B, K
 - **Vstup A:** úroveň = nejbližší z {flip, ONH/ONL, PDH/PDL, call/put wall} proti směru
   do 1 EM od vstupu scénáře. Spoušť = 5min close za úrovní (test), pak první 5min close zpět.
   Okno trvá od prvního 5min close po US openu do exitu (settle − 15 min). SL = extrém od testu
-  + 0,05 EM. Hledá se jednou a vstup B hlavní plán nemá. 5min bary se skládají jen z uzavřených
-  minut.
+  + 0,05 EM. Hledá se jednou a vstup B hlavní plán nemá. Vstupem jsou jen uzavřené 1m bary
+  a 5min bar se použije, až je uzavřený.
 - **P3 a P4 při spoušti:** SL i TP1 se oceňují v čase cíle 1 podle cesty, nejdřív ve vstupu
   a nejpozději v exitu (K11 A). „Přísně“ znamená SL v čase exitu. P4 = čerpání na SL + 0,2 EM
   v exitu, v $ i v % účtu. R:R < 2 = `neobchodovat`, čerpání nad `max_loss_usd` = `nad rozpočtem`.
@@ -617,8 +617,11 @@ vyhodnocení F3 #1748. Pravidla verze 1 (`RULES_VERSION`, ADR-0062 K3 A, K6 B, K
 - **Verdikt varianty:** `obchodovat`, `neobchodovat — důvod` (rozpočet nenastaven, vstup A není,
   bez vstupu do exitu, P3, P4) nebo `čeká`. Plán obchoduje, když aspoň jedna varianta.
 - **Mezery:** chybějící úroveň, řetěz 0DTE (EM, P1), řetěz 1DTE, záložní strike, poměr
-  a spot jdou do `missing` a do verdiktu, ne do odhadu (K4 a). Mimo obchodní seanci funkce
-  vyhodí `ValueError`.
+  a spot jdou do `missing`, ne do odhadu (K4 a). Verdikt `neobchodovat` dají jen ty, bez kterých
+  vstup nebo opce nejde: poměr, spot, EM, úroveň A a řetěz 1DTE. Plán nese i čas nejnovější
+  kotace 0DTE (`chain_0dte_ts`, stáří EM a P1). `ValueError` dostane volající mimo obchodní
+  seanci, s expirací 1DTE, která není následující obchodní seancí, a s kotací řetězu po čase
+  vzniku plánu (pohled dopředu).
 - **Stíny K10 B** jsou parametry téže funkce: `SHADOW_B` (vstup B = první 5min close za
   vstupem scénáře ∓ 0,05 EM a SL za nejbližší úrovní; P1 ho vyřadí, když největší kladná
   GEX QQQ 0DTE leží proti směru do 1 EM od spotu) a `SHADOW_WICK` (test úrovně knotem).

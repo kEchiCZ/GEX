@@ -190,6 +190,10 @@ def test_shadow_entry_b_blocked_by_p1() -> None:
     assert b is not None and b.kind == "B"
     assert _hm(b.ts) == "15:35"
     assert (round(b.price, 2), round(b.stop, 2)) == (694.95, 698.51)
+    for case in ("fixture_iv", "ac_iv_nq"):
+        replay = DATA["expected"][case]["stín vstup B"]["trigger_b"]
+        assert b.ts == dt.datetime.fromisoformat(replay["ts"])
+        assert (b.price, b.stop) == pytest.approx((replay["price"], replay["stop"]), abs=1e-4)
     assert plan.p1 is not None and plan.p1.blocks
     assert plan.entry is not None and plan.entry.kind == "A" and _hm(plan.entry.ts) == "16:35"
     assert plan.rules == "stín vstup B"
@@ -199,10 +203,11 @@ def test_shadow_b_without_p1_block_enters_b() -> None:
     """Bez kladné GEX proti směru (P1 nepropustí jen blokující GEX) vstoupí stín v B."""
     no_gamma = [dataclasses.replace(row, gamma=None) for row in CHAIN_0DTE]
     plan = _plan(rules=SHADOW_B, chain_0dte=no_gamma)
-    assert plan.p1 is None and "P1 bez dat" in " ".join(plan.missing)
+    assert plan.p1 is None and "P1 bez dat: řetěz 0DTE bez gamma a OI" in plan.missing
     assert plan.entry is not None and plan.entry.kind == "B" and _hm(plan.entry.ts) == "15:35"
     main = _plan(chain_0dte=no_gamma)
     assert main.trigger_b is None and main.entry is not None and main.entry.kind == "A"
+    assert main.missing == ()  # hlavní plán P1 nepotřebuje (K6 B)
 
 
 def test_shadow_wick_same_entry() -> None:
@@ -232,7 +237,7 @@ def test_bars_before_creation_do_not_trigger() -> None:
     later = NOW.replace(hour=16)  # 17:31 SEČ, po spoušti 16:35; flip se pak už netestuje
     plan = _plan(now=later)
     assert plan.entry is None and plan.trigger_a is None
-    assert plan.variants[0].verdict == "čeká"
+    assert plan.variants[0].reasons == ("bez vstupu do exitu",)
 
 
 @pytest.mark.parametrize(
@@ -253,8 +258,14 @@ def test_account_not_set(account: AccountParams) -> None:
     assert len(plan.variants) == 2
     for variant in plan.variants:
         assert variant.verdict == "neobchodovat"
-        assert "rozpočet nenastaven" in variant.reasons
+        assert variant.reasons[0].startswith("rozpočet nenastaven (chybí ")
     assert plan.verdict.startswith("neobchodovat — rozpočet nenastaven")
+    assert ("velikost účtu" in plan.verdict) is not _positive(account.account_usd)
+    assert ("rozpočet na obchod" in plan.verdict) is not _positive(account.max_loss_usd)
+
+
+def _positive(value: float | None) -> bool:
+    return value is not None and value > 0
 
 
 def test_account_has_no_default() -> None:
@@ -446,13 +457,56 @@ def test_long_mirrors_short() -> None:
     assert "≤" in plan.p5 and "call 713" in plan.p5
 
 
-def test_weekend_and_bad_expiry_raise() -> None:
-    """Plán vzniká jen v obchodní seanci (#1309); 1DTE musí ležet po ní."""
-    saturday = dt.datetime(2026, 10, 31, 14, 31, tzinfo=dt.UTC)
+def _at(now: dt.datetime, rows: list[Row]) -> list[Row]:
+    return [dataclasses.replace(row, ts_min=now) for row in rows]
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        dt.datetime(2026, 10, 31, 14, 31, tzinfo=dt.UTC),  # sobota
+        dt.datetime(2026, 11, 1, 15, 0, tzinfo=dt.UTC),  # neděle před otevřením Globexu
+        dt.datetime(2026, 11, 26, 15, 0, tzinfo=dt.UTC),  # Thanksgiving (NYSE zavřená)
+    ],
+)
+def test_no_plan_outside_trading_session(now: dt.datetime) -> None:
+    """Plán vzniká jen v obchodní seanci (`is_trading_session`, #1309)."""
     with pytest.raises(ValueError, match="obchodní seanci"):
-        _plan(now=saturday)
-    with pytest.raises(ValueError, match="1DTE"):
-        _plan(expiry_1dte=NOW.date())
+        _plan(now=now, chain_0dte=_at(now, CHAIN_0DTE), chain_1dte=_at(now, CHAIN_1DTE))
+
+
+@pytest.mark.parametrize(
+    ("now", "expiry", "ok"),
+    [
+        (NOW, dt.date(2026, 11, 3), True),  # pondělí → úterý (golden)
+        (dt.datetime(2026, 10, 30, 13, 31, tzinfo=dt.UTC), dt.date(2026, 11, 2), True),  # pá → po
+        (dt.datetime(2026, 10, 30, 13, 31, tzinfo=dt.UTC), dt.date(2026, 10, 31), False),  # sobota
+        (dt.datetime(2026, 11, 25, 14, 31, tzinfo=dt.UTC), dt.date(2026, 11, 26), False),  # svátek
+        (NOW, NOW.date(), False),  # 0DTE není 1DTE
+    ],
+)
+def test_expiry_1dte_is_next_trading_session(now: dt.datetime, expiry: dt.date, ok: bool) -> None:
+    """1DTE = obchodní seance po dni plánu (ADR-0062 Odvozeno): pátek → pondělí, svátek ne."""
+    kwargs: dict[str, Any] = {
+        "now": now,
+        "expiry_1dte": expiry,
+        "chain_0dte": _at(now, CHAIN_0DTE),
+        "chain_1dte": _at(now, CHAIN_1DTE),
+    }
+    if ok:
+        plan = _plan(**kwargs)
+        assert plan.day == now.date() and plan.variants[0].expiry == expiry
+    else:
+        with pytest.raises(ValueError, match="1DTE"):
+            _plan(**kwargs)
+
+
+def test_quotes_after_creation_raise() -> None:
+    """Kotace řetězu po vzniku plánu = pohled dopředu, chyba volajícího."""
+    early = NOW - dt.timedelta(minutes=10)
+    with pytest.raises(ValueError, match="po vzniku plánu"):
+        _plan(now=early)
+    assert _plan().chain_0dte_ts == dt.datetime(2026, 11, 2, 14, 25, tzinfo=dt.UTC)
 
 
 def test_rules_parameters_are_the_same_function() -> None:

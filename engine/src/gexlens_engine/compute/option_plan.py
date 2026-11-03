@@ -241,6 +241,8 @@ class OptionPlan:
     spot: float | None
     em: float | None
     em_strike: float | None
+    #: Nejnovější kotace řetězu 0DTE (stáří EM a P1)
+    chain_0dte_ts: dt.datetime | None
     #: Vstup a cíle scénáře v cenách QQQ, časy cílů podle cesty scénáře
     scenario_entry: float | None
     targets: tuple[float, ...]
@@ -305,8 +307,8 @@ def five_minute_bars(
 ) -> tuple[FiveMinuteBar, ...]:
     """Uzavřené 5min bary po hodinách od `start` (US open) do `end` (settle) z 1m barů.
 
-    Bar je uzavřený, když vstup má jeho poslední minutu nebo kteroukoli pozdější. Rozpracovaný
-    bar by dal close, který se ještě změní.
+    Vstup smí obsahovat jen uzavřené 1m bary, rozpracovaná minuta by dala close, který se ještě
+    změní. 5min bar je uzavřený, když vstup má jeho poslední minutu nebo kteroukoli pozdější.
     """
     ordered = sorted((bar for bar in bars if start <= bar.ts < end), key=lambda bar: bar.ts)
     buckets: dict[dt.datetime, FiveMinuteBar] = {}
@@ -503,8 +505,13 @@ def _verdict(
     """Verdikt varianty: parametry účtu (K2), vstup (K3), P3 a P4."""
     reasons: list[str] = []
     limit = account.max_loss_usd
-    if not (_positive(account.account_usd) and _positive(limit)):
-        reasons.append("rozpočet nenastaven")
+    unset = [
+        name
+        for name, value in (("rozpočet na obchod", limit), ("velikost účtu", account.account_usd))
+        if not _positive(value)
+    ]
+    if unset:
+        reasons.append(f"rozpočet nenastaven (chybí {' a '.join(unset)})")
     if blocked is not None:
         reasons.append(blocked)
     if pricing is not None:
@@ -681,13 +688,18 @@ def build_option_plan(
     - `ratio` = NQ/QQQ z close poslední uzavřené minuty obou před vznikem, `spot` = cena QQQ.
     - `bars` = 1m bary QQQ. Prázdné = plán při vzniku. S bary po vzniku se hledá spoušť
       v okně od prvního 5min close do exitu (K3 bod 5).
-    - Chybějící vstup = viditelná mezera v `missing` a ve verdiktu, ne odhad (K4 a).
+    - Chybějící vstup = viditelná mezera v `missing`, ne odhad (K4 a). Verdikt je
+      `neobchodovat`, když bez něj vstup nebo opce nejde (poměr, spot, EM, úroveň A, řetěz 1DTE).
+    - Kotace řetězu po `now` jsou chyba volajícího (pohled dopředu) → `ValueError`.
     """
     day = trading_session_date(now)
     if not is_trading_session(day):
         raise ValueError(f"plán QQQ vzniká jen v obchodní seanci, {day} ji nemá (#1309)")
-    if expiry_1dte <= day:
-        raise ValueError(f"expirace 1DTE {expiry_1dte} musí ležet po seanci {day}")
+    if expiry_1dte <= day or not is_trading_session(expiry_1dte):
+        raise ValueError(f"expirace 1DTE {expiry_1dte} musí být obchodní seance po {day}")
+    late = [row for row in (*chain_0dte, *chain_1dte) if row.ts_min > now]
+    if late:
+        raise ValueError(f"řetěz má {len(late)} kotací po vzniku plánu {now:%H:%M} UTC")
     if not scenario.targets or len(scenario.path) != len(scenario.targets) + 1:
         raise ValueError("cesta scénáře = vstup a bod na každý cíl")
     side = 1 if scenario.direction == "long" else -1
@@ -723,7 +735,7 @@ def build_option_plan(
         if em_found is not None:
             em = em_found[1]
             p1 = _gex_top(chain_0dte, spot, side, em)
-            if p1 is None:
+            if p1 is None and rules.entry_b:  # hlavní plán P1 nepotřebuje (K6 B)
                 missing.append("P1 bez dat: řetěz 0DTE bez gamma a OI")
             fives = five_minute_bars(bars, us_open_ts(day), settle_ts(day))
             entries = _entries(
@@ -762,6 +774,7 @@ def build_option_plan(
         spot=spot,
         em=em_value,
         em_strike=em_found[0] if em_found else None,
+        chain_0dte_ts=max((row.ts_min for row in chain_0dte), default=None),
         scenario_entry=scenario_entry,
         targets=targets,
         target_ts=target_ts,
