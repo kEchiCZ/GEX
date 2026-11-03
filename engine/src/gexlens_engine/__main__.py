@@ -2708,7 +2708,8 @@ async def main() -> None:
             """Denní obnova chain mapy + průběžné dorovnání subskripce."""
             while not shadow_stop.is_set():
                 try:
-                    today = dt.datetime.now(dt.UTC).date()
+                    now = dt.datetime.now(dt.UTC)
+                    today = now.date()
                     # Jedna mapa per produkt; ES i NQ jsou v témže chain endpointu
                     # svých produktů — mapy se drží per symbol pipeline
                     symbols: set[str] = set()
@@ -2740,7 +2741,7 @@ async def main() -> None:
                             planned = plan_extended_expiries(
                                 chain,
                                 ibkr_expiries_of(symbol),
-                                today=today,
+                                now=now,
                                 horizon_days=settings.tasty_extended_horizon_days,
                             )
                             validate_disjoint(planned, ibkr_expiries_of(symbol))

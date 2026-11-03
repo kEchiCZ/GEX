@@ -359,6 +359,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-11-03 — „aplikace stojí, data jsou ze včera“: jeden řádek vypršelé expirace přebil celý den (#1759).**
+  Extended plán (`plan_extended_expiries`) vyřazoval prošlé expirace kalendářním dnem UTC, IBKR
+  pipeline ale roluje v settle (#1331). Vypršelá expirace tak po settle přešla do extended plánu
+  a do půlnoci UTC se psaly zmrzlé kotace. Minuta 00:00 podle plánu ze 23:59 skončila v partici
+  dalšího dne a `list_days` (vyhrává nejmenší expirace s particí) přiřadil den vypršelé expiraci.
+  Frontend (`expiryWithData`) pak výchozí expiraci v seznamu dnů nenašel a při každém načtení
+  doskočil na včerejšek. Stalo se to třikrát (22. 10., 29. 10., 3. 11.), než to vlastník nahlásil.
+  Odhalil to až dotaz `/instruments/NQ/days`, engine byl celou dobu zdravý. Je to druhý výskyt
+  poučení #1331 níže. → Každý výběr „živých“ expirací filtrovat hranicí settle, ne datem. Když UI
+  ukazuje starý den a engine je zdravý, nejdřív se podívat na seznam dnů a expirací API.
+
 - **2026-10-30 — poplatek paperu zafixovaný při startu enginu, nová verze parametrů ho minula (#1402).**
   `PaperBroker` dostal `fee_per_contract_usd` z parametrů setupů jednou v konstruktoru pipeline
   (`__main__`), smyčka nastavení předávala novou verzi jen `SetupEngine.apply_params`. Po params v2

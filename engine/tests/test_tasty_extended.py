@@ -28,7 +28,7 @@ def chain_with(expiries: list[str]) -> ChainSymbols:
 def test_plan_vynechava_ibkr_prosle_a_za_horizontem() -> None:
     chain = chain_with(["20260821", "20260824", "20260825", "20260918", "20260930"])
 
-    planned = plan_extended_expiries(chain, {"20260824"}, today=TODAY, horizon_days=30)
+    planned = plan_extended_expiries(chain, {"20260824"}, now=NOW, horizon_days=30)
 
     # 0821 prošlá, 0824 drží IBKR, 0930 za horizontem (30 dnů = do 21. 9.)
     assert planned == ["20260825", "20260918"]
@@ -38,10 +38,50 @@ def test_plan_bez_ibkr_pokryva_vse_v_horizontu() -> None:
     """Start bez TWS (#756): extended = kompletní množina (ADR-0025 dodatek)."""
     chain = chain_with(["20260824", "20260825"])
 
-    assert plan_extended_expiries(chain, set(), today=TODAY, horizon_days=30) == [
+    assert plan_extended_expiries(chain, set(), now=NOW, horizon_days=30) == [
         "20260824",
         "20260825",
     ]
+
+
+def test_plan_vyrazuje_expiraci_v_settle_ne_o_pulnoci_utc() -> None:
+    """#1759: po rollu IBKR v settle (#1331) vypršelá expirace do plánu nepřejde.
+
+    2. 11. 2026 (SEČ, settle 21:00 UTC): roll přesunul IBKR na 1103 a denní
+    filtr nechal 1102 v plánu do půlnoci — minuta 00:00 skončila v partici 3. 11.
+    """
+    chain = chain_with(["20261102", "20261103", "20261104"])
+    after_roll = {"20261103"}
+
+    def plan(now: dt.datetime, ibkr: set[str]) -> list[str]:
+        return plan_extended_expiries(chain, ibkr, now=now, horizon_days=30)
+
+    # Před settle (start bez TWS) dnešní expirace v plánu je
+    assert plan(dt.datetime(2026, 11, 2, 20, 59, tzinfo=dt.UTC), set())[0] == "20261102"
+    assert plan(dt.datetime(2026, 11, 2, 21, 0, tzinfo=dt.UTC), after_roll) == ["20261104"]
+    assert plan(dt.datetime(2026, 11, 2, 23, 59, tzinfo=dt.UTC), after_roll) == ["20261104"]
+    assert plan(dt.datetime(2026, 11, 3, 0, 0, tzinfo=dt.UTC), after_roll) == ["20261104"]
+
+
+@pytest.mark.parametrize(
+    ("expiry", "before", "at_settle"),
+    [
+        # SELČ: 16:00 ET = 20:00 UTC (21. 10. 2026)
+        ("20261021", dt.datetime(2026, 10, 21, 19, 59), dt.datetime(2026, 10, 21, 20, 0)),
+        # Zkrácená seance po Díkůvzdání: 13:00 ET = 18:00 UTC (#1308)
+        ("20261127", dt.datetime(2026, 11, 27, 17, 59), dt.datetime(2026, 11, 27, 18, 0)),
+        # Kvartální datum: týdenní série do 16:00 ET, ne SOQ 9:30 ET (#1366)
+        ("20261218", dt.datetime(2026, 12, 18, 20, 59), dt.datetime(2026, 12, 18, 21, 0)),
+    ],
+)
+def test_plan_hranice_settle(expiry: str, before: dt.datetime, at_settle: dt.datetime) -> None:
+    chain = chain_with([expiry])
+
+    def plan(now: dt.datetime) -> list[str]:
+        return plan_extended_expiries(chain, set(), now=now.replace(tzinfo=dt.UTC), horizon_days=30)
+
+    assert plan(before) == [expiry]
+    assert plan(at_settle) == []
 
 
 def test_validate_disjoint_prekryv_je_chyba() -> None:

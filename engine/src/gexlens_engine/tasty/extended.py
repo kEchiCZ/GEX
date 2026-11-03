@@ -39,7 +39,7 @@ def plan_extended_expiries(
     chain: ChainSymbols,
     ibkr_expiries: set[str],
     *,
-    today: dt.date,
+    now: dt.datetime,
     horizon_days: int,
 ) -> list[str]:
     """Expirace pro tasty: (chain − IBKR) do horizontu, vzestupně.
@@ -48,7 +48,17 @@ def plan_extended_expiries(
     se počítá každou minutu). Prázdná IBKR množina (start bez TWS, #756)
     znamená, že extended pokrývá vše — přesně chování „kompletní množiny"
     z ADR-0025 dodatku.
+
+    Prošlá = po settle expirace, ne po kalendářním dni UTC (#1759): IBKR
+    pipeline roluje v settle (#1331), vypršelá expirace tím z IBKR množiny
+    vypadne a s denním filtrem ji plán do půlnoci UTC převzal — psaly se
+    zmrzlé kotace vypršelé série a minuta 00:00 skončila v partici dalšího
+    dne, kde přebila `/days`. Bez trading class platí settle 16:00 ET
+    (`settle_ts`): SOQ 9:30 ET patří jen standardní kvartální třídě, kvartální
+    datum drží IBKR jako týdenní sérii do odpoledne (ADR-0039 bod 1, #1366)
+    a start bez TWS ho tu tak neztratí od rána.
     """
+    today = now.date()
     horizon = today + dt.timedelta(days=horizon_days)
     chain_expiries = {expiry for (expiry, _strike, _right) in chain.by_contract}
     planned = []
@@ -58,7 +68,7 @@ def plan_extended_expiries(
         except ValueError:
             logger.warning("Nečitelná expirace %r v chain mapě — přeskakuji", expiry)
             continue
-        if today <= expiry_date <= horizon:
+        if now < settle_ts(expiry_date) and expiry_date <= horizon:
             planned.append(expiry)
     return planned
 
