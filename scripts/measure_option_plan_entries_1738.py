@@ -339,6 +339,8 @@ ALTERNATIVES = (
     Rules("short jen vstupem A", short_b=False),
     # Podklad k rozhodnutí o slabých místech (#1756), nad rámec zadaných alternativ
     Rules("jen vstup A (B nikdy)", short_b=False, long_b=False),
+    # Rozhodnuto 3. 11.: hlavní pravidla = jen vstup A (K6 B); stíny K10 B = v1 a tento řádek
+    Rules("jen A + test knotem (stín K10 B)", test="wick", short_b=False, long_b=False),
     Rules("po vyřazení P3 čekat na další spoušť", after_p3="wait"),
     Rules("spoušť za TP1 = bez vstupu", skip_past_tp1=True),
     Rules("R:R do TP2 (když je)", target=1),

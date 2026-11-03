@@ -5,8 +5,9 @@
   (issuecomment-6587181454). K1–K5 rozhodl v chatu 2.–3. 11.: **K1 A, K2 A** s doporučenými
   dílčími volbami, **K3 A** s oknem spouště až do exitu (bod 5), **K4 A + (a), K5 B** (#1757).
   Body „odvozeno“ platí s nimi. Pravidla verze 1 se před přijetím ADR přehrála zpětně na všech
-  uložených scénářích NQ (#1756, 3. 11.). Přehrání ukázalo slabá místa. **K6–K11 čekají na
-  rozhodnutí vlastníka** (oddíl Zpětné přehrání) a ADR se přijme až po nich.
+  uložených scénářích NQ (#1756, 3. 11.). Přehrání ukázalo slabá místa. K6–K11 rozhodl vlastník
+  3. 11. v chatu podle doporučení: **K6 B** (jen vstup A, K7 tím odpadá), **K8 A, K9 A, K10 B,
+  K11 A**. Tím je ADR **přijat** (3. 11. 2026).
 - **Datum:** 2026-11-02
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1741 (F2a), #1742 (F2b), #1743 (F4a),
@@ -82,7 +83,8 @@ a epiky liší, říká to poznámka u pravidla.
 - **P1** Průrazový vstup B se nenavrhuje, když je největší kladná GEX QQQ 0DTE proti směru
   do 1 EM od spotu QQQ v minutě vzniku plánu (short: nad spotem, long: pod spotem). 2. 11.:
   strike 700, +208 M, 0,63 EM → B vyřazen. *Rozbor má navíc první větu „Short jen po odmítnutí
-  (vstup A)“. Epika B jen podmiňuje. Volba výkladu je v K3, bod 8.*
+  (vstup A)“. Epika B jen podmiňuje. Volba výkladu je v K3, bod 8.* **Rozhodnuto 3. 11. (K6 B):**
+  hlavní plán vstup B nemá. P1 rozhoduje jen o stínu vstupu B v track recordu (K10 B).
 - **P2** SL = 5min close za extrémem výběru stopů + rezerva (definice v K3). Plán k němu uvede
   ekvivalentní cenu opce v čase vzniku (model) i v čase spouště (kotace). *Rozbor říká „v čase
   vstupu“, epika „v čase vzniku“. Plán uvede obojí.*
@@ -190,7 +192,8 @@ spustil v 15:35 za 695,08. SL B za úrovní A (flip + rezerva = 697,95) i za ONH
 3. **SL A:** 5min close za extrémem od testu (pro short high) + 0,05 EM.
 4. **Vstup B:** první 5min close za vstupem scénáře ∓ 0,05 EM. SL B = 5min close za nejbližší
    úrovní proti směru z téže množiny (bez omezení 1 EM) + 0,05 EM. Když je úroveň A, je to ona.
-   Vstup B jen tehdy, když P1 nenajde blokující GEX.
+   Vstup B jen tehdy, když P1 nenajde blokující GEX. *Od 3. 11. (K6 B) jen stín v track recordu
+   (K10 B), hlavní plán vstup B nemá.*
 5. **Okna a časový stop:** spoušť v US RTH od prvního 5min close (9:35 ET) až do exitu
    (vlastník 2. 11.: „až do exitu (settle − 15 min)“; navržené okno do 12:00 ET podle ručního
    vzoru „do 18:00 SEČ“ nepřijato, 2. 11. beze změny výsledku). Časový stop epiky („bez spuštění
@@ -201,11 +204,13 @@ spustil v 15:35 za 695,08. SL B za úrovní A (flip + rezerva = 697,95) i za ONH
    max pain a z jednoho dne se obecné pravidlo odvodit nedá. Po TP1 se SL posune na vstup
    (zpřísnění).
 6. **Oceňování pro P3:** SL i TP1 v témže čase = čas cíle 1 podle cesty scénáře, nejdřív v čase
-   vstupu. Přísné ocenění (SL v čase exitu) plán uvede vedle něj, rozhoduje ale tohle.
+   vstupu a nejpozději v exitu (K11 A, 3. 11.). Přísné ocenění (SL v čase exitu) plán uvede
+   vedle něj, rozhoduje ale tohle.
 7. **Čerpání (P4):** ztráta opce na úrovni SL + 0,2 EM v čase exitu. Je to nejhorší rozumný
    případ: 5min close může přestřelit (2. 11. bar SL B 0,16 EM) a put s časem ztrácí.
 8. **Výklad P1:** vstup B podmíněně podle GEX, pro long zrcadlově (znění schválené epiky).
-   Alternativa je první věta rozboru: short jen vstupem A vždy.
+   Alternativa je první věta rozboru: short jen vstupem A vždy. *Od 3. 11. (K6 B) platí jen pro
+   stín vstupu B.*
 9. **Track record:** vstup za ask, výstup za bid z naměřených kotací v minutě události. P&L pro
    výstup v TP1 i pro držení do TP2 se stopem na vstupu, obojí na 1 kontrakt. Spoušť, kterou P3
    vyřadí (R:R z kotace < 2), dostane stav `spuštěno — vyřazeno P3`. Do výsledku obchodů se
@@ -229,7 +234,8 @@ spustil v 15:35 za 695,08. SL B za úrovní A (flip + rezerva = 697,95) i za ONH
 **Důsledek pro AC epiky:** kritérium „vstup A 16:50 SEČ“ odpovídalo úrovni 697,0 z ručního plánu.
 Při zvolené A je spoušť v 16:40 (při B také, při C v 16:35); AC epiky a #1741 upraveny 3. 11. TP1 a TP2 z poměru minuty vzniku vyjdou 692,13
 a 690,72 (v rozboru 691,9 a 690,4 při poměru 41,32). Tato čísla stojí na vstupech z 9:15 ET.
-Podle K4 A (plán v 9:31 ET) vycházejí jinak, rozpor řeší K9.
+Podle K4 A (plán v 9:31 ET) vycházejí jinak. Rozhodnuto K9 A (3. 11.): AC epiky, #1741, #1748
+a #1757 platí pro 9:31 ET, tedy vstup A 16:35 za 697,99, SL 699,66, TP1 691,99 / TP2 690,59.
 
 **Rozhodnuto 3. 11.: A** (vlastník; body 1–4 a 6–9 podle návrhu, výklad P1 v bodě 8 = vstup B
 podmíněně podle GEX, bod 5 s oknem do exitu). Pravidla nejsou pevný scénář: postup je stálý,
@@ -301,7 +307,7 @@ R:R podkladu 2,53, R:R opce 3,40 (přísně 2,27), P4 −72 $, TP1 692,13 / TP2 
   2. 11. byla IV NQ o 8–10 % nad skutečnou IV QQQ.
 - **P1:** GEX QQQ byla jen 2. 11. (P1 blokuje). Ostatních 11 dní je **bez dat**, takže vstup B
   zůstal povolený.
-- **P3 oceňuje cíl nejpozději v exitu** (návrh upřesnění K3 bodu 6, K11).
+- **P3 oceňuje cíl nejpozději v exitu** (upřesnění K3 bodu 6, rozhodnuto K11 A).
 
 **Výsledek pravidel v1** (čas Praha; R:R opce a P&L = model, $ na 1 kontrakt; u vyřazených P3
 hypotetický výsledek; plná tabulka se spouští A a B, SL a TP je v #1738):
@@ -345,7 +351,8 @@ hypotetický výsledek; plná tabulka se spouští A a B, SL a TP je v #1738):
 | test knotem (K3 D) | 7 / 5 / 0 | 11 (2 za TP1) | 1: TP2 | +141 / +190 $ | −68 $ (6 / 3) |
 | rezerva SL 0 | 4 / 8 / 0 | 11 (2 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
 | short jen vstupem A | 4 / 6 / 2 | 9 (0 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
-| jen vstup A (B nikdy) | 6 / 0 / 6 | 5 (0 za TP1) | 1: TP2 | +141 / +190 $ | +21 $ (4 / 1) |
+| **jen vstup A (B nikdy) = hlavní pravidla od K6 B** | 6 / 0 / 6 | 5 (0 za TP1) | 1: TP2 | +141 / +190 $ | +21 $ (4 / 1) |
+| jen A + test knotem (stín K10 B) | 7 / 0 / 5 | 6 (0 za TP1) | 1: TP2 | +141 / +190 $ | −26 $ (4 / 2) |
 | po vyřazení P3 čekat na další spoušť | 4 / 8 / 0 | 11 (2 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
 | spoušť za TP1 = bez vstupu | 4 / 6 / 2 | 9 (0 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
 | R:R do TP2 (když je) | 4 / 8 / 0 | 11 (2 za TP1) | 1: TP2 | +141 / +190 $ | −90 $ (6 / 3) |
@@ -353,7 +360,7 @@ hypotetický výsledek; plná tabulka se spouští A a B, SL a TP je v #1738):
 Úroveň jen flip a jen ONH/ONL přidají 1. 10. (R:R 2,01), který skončil na SL (−59 $). Práh P3 = 1
 by přidal 1. 10. s úrovní A put wall (R:R 1,04, SL −81 $). Práh 1,5 nepřidá nic.
 
-### K6 — vstup B (k rozhodnutí)
+### K6 — vstup B (rozhodnuto 3. 11.: B)
 
 B se spouští prvním 5min close za vstupem scénáře ∓ 0,05 EM. Vstup scénáře je cena z 9:15 ET,
 takže B neměří průraz úrovně, jen pohyb ceny po vzniku scénáře. SL B leží za nejbližší úrovní
@@ -368,7 +375,12 @@ nejvýš 0,24, takže ani jednou nevedl k obchodu.
 | **B — jen vstup A, B nikdy** (doporučeno) | ve vzorku týž obchod (2. 11.); místo spouští s R:R ≤ 0,24 je 6× „bez vstupu“ a A se spustí 6×; P1 plán nepotřebuje (řetěz QQQ zůstává pro ceny a EM); odpovídá poučení 2. 11. (B skončil na SL) | mění schválený výklad P1 (K3 bod 8); den s průrazem bez návratu k úrovni nedá vstup (ve vzorku žádný B neměl R:R ≥ 2, ztráta se nedá změřit) |
 | C — short jen vstupem A (první věta rozboru) | mění jen short | ve vzorku jen 3 short; long dál 6× B s R:R ≤ 0,24 |
 
-### K7 — spoušť vyřazená P3: konec plánu, nebo čekat? (k rozhodnutí jen při K6 A nebo C)
+**Rozhodnuto 3. 11.: B** (vlastník v chatu, „Ano“ k doporučení). Hlavní plán má jen vstup A
+(K3 body 1–3). Vstup A se hledá jednou: spoušť vyřazená P3 je konečný stav `spuštěno — vyřazeno
+P3`, takže K7 odpadá. Vstup B podle K3 bodu 4 a P1 zůstává jako stín v track recordu (K10 B).
+Ve vzorku dají hlavní pravidla vstup A 6×, bez vstupu 6× a týž jediný obchod (2. 11.).
+
+### K7 — spoušť vyřazená P3: konec plánu, nebo čekat? (odpadá s K6 B)
 
 Pravidla to neříkají. Přehrání počítá variantu A.
 
@@ -381,7 +393,7 @@ Ve vzorku mezi A a B rozdíl není: A po vyřazeném B nedosáhl R:R 2. Jde o do
 hledá A i B jen jednou a opakovaný test úrovně nezkouší. Při K6 B otázka odpadá, pokud se A smí
 spustit jen jednou.
 
-### K8 — R:R ≥ 2 jen 2. 11. (k rozhodnutí)
+### K8 — R:R ≥ 2 jen 2. 11. (rozhodnuto 3. 11.: A)
 
 | varianta | výhody | nevýhody |
 |---|---|---|
@@ -389,7 +401,10 @@ spustit jen jednou.
 | B — snížit práh P3 na 1,5 nebo 1 | víc obchodů | 1,5 ve vzorku nic nepřidá; 1 přidá 1. 10. (SL −81 $); oslabuje pravidlo z rozboru |
 | C — vlastní cíle plánu QQQ dál než cíle scénáře | využil by pohyb za cílem (≥ 1 EM ve 3 dnech) | mění přijatý bod 2 (cíle = cíle scénáře); nové pravidlo bez měření, na 12 dnech hrozí přeučení; R:R do TP2 scénáře nepřidal nic; jen jako nová `rules_version` podle track recordu |
 
-### K9 — čísla 2. 11. podle K4 A (rozpor, k potvrzení)
+**Rozhodnuto 3. 11.: A** (vlastník). Práh P3 zůstává 2. Plán bude většinou „neobchodovat —
+R:R < 2“ a track record počítá i vyřazené spouště (K3 bod 9).
+
+### K9 — čísla 2. 11. podle K4 A (rozhodnuto 3. 11.: A)
 
 AC epiky, AC #1741 i tabulka K3 počítají vstupy z minuty scénáře (9:15 ET). K4 A a oddíl
 Odvozeno ale určují vznik plánu v 9:31 ET:
@@ -406,7 +421,14 @@ místo flipu). Výsledek P3 nemění v žádném dni.
 | **A — AC epiky a golden #1741 přepočítat na K4 A** (doporučeno) | odpovídá přijatému K4 A a Odvozeno; 2. 11.: vstup A 16:35 za 697,99, SL 699,66, TP1 691,99 / TP2 690,59, R:R 4,45 (přísně 2,69), P4 −70 $ (put 687, model IV 31,4 %) | mění čísla AC, která vlastník zná z 2. 11. |
 | B — úrovně ze snímku scénáře 9:15 ET, poměr a opce z 9:31 ET | úrovně odpovídají snímku scénáře NQ | úrovně jsou o 16 min starší a Odvozeno se mění; 2. 11.: 16:40 za 697,48, SL 699,66, R:R 3,27 (2,16), P4 −80 $ |
 
-### K10 — stínové varianty v track recordu (k rozhodnutí)
+**Rozhodnuto 3. 11.: A** (vlastník). Golden 2. 11. stojí na snímku úrovní NQ 14:31 UTC (flip
+28 843,74, call wall 29 025, put wall 28 500, těžiště 28 741,59), ONH/ONL 28 844 / 28 587,
+poměru 41,311 (pár 14:25 UTC) a řetězu QQQ 0DTE z 9:23–9:25 ET. Spot QQQ v 9:31 je
+695,26 (NQ 28 722) a EM 6,01. P1 pro stín vstupu B blokuje: největší kladná GEX je 700
+(+208 M), 0,79 EM od spotu. Kontrola měření K3 (vstupy z 9:15 ET) zůstává ve skriptu
+jako AC #1756.
+
+### K10 — stínové varianty v track recordu (rozhodnuto 3. 11.: B)
 
 Stín = táž čistá funkce s jinými parametry pravidel. Hypotetický výsledek se uloží v JSON
 výsledku vedle hlavního (K2 A) a do výsledku obchodů se nepočítá.
@@ -417,7 +439,17 @@ výsledku vedle hlavního (K2 A) a do výsledku obchodů se nepočítá.
 | **B — dva stíny: vstup B (při K6 B) a test knotem** (doporučeno) | měří právě to, co vzorek nerozhodl: B neměl data P1, knot dal víc spouští (7 proti 4) se stejným výsledkem | o něco víc práce v F3 a v track recordu F5b |
 | C — všechny alternativy z tabulky | nejvíc dat | úroveň jen flip a jen ONH/ONL vzorek už vyvrátil (ztráta 1. 10.); víc šumu v track recordu |
 
-### K11 — čas ocenění cíle pro P3 nejpozději v exitu (upřesnění K3 bodu 6, k potvrzení)
+**Rozhodnuto 3. 11.: B** (vlastník). Stíny jsou dva:
+
+1. **vstup B** = pravidla v1 (K3 body 4 a 8, P1);
+2. **test knotem** nad hlavními pravidly (jen A).
+
+Oba počítá táž čistá funkce jako hlavní plán. Výsledek stínů jde do JSON `result` (K2 A), do
+výsledku obchodů ani do track recordu hlavního plánu se nepočítá a živá upozornění (K5 B) nemá.
+Ve vzorku by stín knotu dal 7 spouští A (hlavní 6) a týž jediný obchod. 2. 11. vstoupí stejně
+jako hlavní plán.
+
+### K11 — čas ocenění cíle pro P3 nejpozději v exitu (rozhodnuto 3. 11.: A)
 
 K3 bod 6 oceňuje SL i TP1 v čase cíle 1 podle cesty scénáře. U scénáře s jedním cílem leží tento
 bod v termínu settle, tedy 15 min po exitu, kdy pozice už neexistuje (K3 bod 5).
@@ -429,6 +461,8 @@ bod v termínu settle, tedy 15 min po exitu, kdy pozice už neexistuje (K3 bod 5
 
 Ve vzorku jde o 4 scénáře s jedním cílem (30. 9., 2. 10., 28. 10., 30. 10.). R:R se mění nejvýš
 o 0,03 a výsledek P3 v žádném z nich.
+
+**Rozhodnuto 3. 11.: A** (vlastník). Znění K3 bodu 6 je upravené.
 
 ## Zvažované a odmítnuté (rozhodnuto 2. 11.)
 
@@ -455,6 +489,7 @@ o 0,03 a výsledek P3 v žádném z nich.
 - **Relevance dat:** ceny jsou měřené a nesou stáří. Model (BS z naměřené IV) počítá jen
   hypotetické ceny při SL a TP a nese štítek. Chybějící řetěz = mezera.
 - **Riziko:** pravidla stojí na jednom dni (2. 11.). Zpětné přehrání (#1756) dalo z 12 plánů
-  jediný obchod, právě 2. 11.; ostatní vyřadil P3. Brána pro jakoukoli úpravu je track record
+  jediný obchod, právě 2. 11.; ostatní vyřadil P3 nebo zůstaly bez vstupu (po K6 B 6×). Co
+  vzorek nerozhodl, měří stíny K10 B. Brána pro jakoukoli úpravu je track record
   (n ≥ 30). Úprava znamená novou `rules_version`, nikdy větší stop.
 - Scénář NQ, verdikt dne a jejich golden data zůstávají beze změny.
