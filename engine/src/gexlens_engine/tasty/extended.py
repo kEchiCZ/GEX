@@ -133,9 +133,10 @@ def build_snapshot_rows(
     nesmí tvrdit změřenou nulu tam, kde nikdo neměřil) a do řádku se zapíše
     0.0 jako v IBKR cestě.
 
-    Po nejpozdějším settle data (16:00 ET) nevznikne řádek nikdy (#1759):
-    pojistka v místě vzniku pro případ, že plán z `plan_extended_expiries`
-    zůstal starý (obnova subskripce visí přes settle, #1646).
+    Po settle data expirace (`settle_ts`: 16:00 ET, ve zkrácené seanci 13:00 ET)
+    nevznikne řádek nikdy (#1759): pojistka v místě vzniku pro případ, že plán
+    z `plan_extended_expiries` zůstal starý (obnova subskripce visí přes settle,
+    #1646). Platí i pro ad-hoc pohledy a snímek plánu QQQ, které funkci sdílejí.
     """
     settle = settle_ts(dt.datetime.strptime(expiry, "%Y%m%d").date())
     if now_utc >= settle:
