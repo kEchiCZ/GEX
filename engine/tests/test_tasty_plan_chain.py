@@ -2,6 +2,7 @@
 
 import datetime as dt
 import logging
+import threading
 from pathlib import Path
 from typing import cast
 
@@ -10,7 +11,7 @@ import pytest
 
 from gexlens_engine.compute.spot import SpotReading
 from gexlens_engine.config import Settings
-from gexlens_engine.storage.parquet_store import SnapshotWriter
+from gexlens_engine.storage.parquet_store import SnapshotRow, SnapshotWriter
 from gexlens_engine.tasty.adhoc import ADHOC_MAX_STRIKES_PER_SIDE
 from gexlens_engine.tasty.budget import ADHOC_RESERVE_ENTRIES, EVENTS_BY_PURPOSE, plan_subscriptions
 from gexlens_engine.tasty.mock import feed_greeks, feed_quote, feed_summary
@@ -363,3 +364,48 @@ def test_snimek_s_adhoc_pohledem_se_vejde_do_rezervy() -> None:
     # Snímek čerpá rezervu, extended kvůli němu nepřijde o nic navíc
     assert set(with_plan.trimmed) == {"extended"}
     assert with_plan.trimmed == adhoc_only.trimmed
+
+
+# --- zápis do partice sdílené s ad-hoc pohledem ---------------------------------
+
+
+def test_soubezny_zapis_adhoc_a_snimku_do_tele_partice(tmp_path: Path) -> None:
+    """Otevřený ad-hoc pohled QQQ píše tutéž partici 0DTE jako snímek, každý ze svého vlákna.
+
+    Bez zámku partice si zápisy přepisovaly tabulku i sdílený .tmp soubor (týž pid).
+    """
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    errors: list[BaseException] = []
+
+    def write(offset: int) -> None:
+        try:
+            for minute in range(offset, 80, 2):
+                ts = dt.datetime(2026, 11, 3, 14, 0, tzinfo=UTC) + dt.timedelta(minutes=minute)
+                row = SnapshotRow(
+                    ts_min=ts,
+                    strike=700.0,
+                    right="C",
+                    bid=1.0,
+                    ask=1.1,
+                    last=1.05,
+                    volume=None,
+                    iv=0.3,
+                    delta=0.5,
+                    gamma=0.05,
+                    theta=0.0,
+                    vega=0.0,
+                    oi=120.0,
+                    stale_age=1.0,
+                )
+                writer.write_minute("QQQ", "20261103", SESSION, [row])
+        except BaseException as error:  # chyba ve vlákně by jinak zmizela
+            errors.append(error)
+
+    threads = [threading.Thread(target=write, args=(offset,)) for offset in (0, 1)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    path = tmp_path / "snapshots" / "QQQ" / "20261103" / f"{SESSION.isoformat()}.parquet"
+    assert pq.read_table(path).num_rows == 80

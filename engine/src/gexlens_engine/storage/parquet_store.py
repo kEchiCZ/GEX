@@ -810,6 +810,10 @@ class _PartitionBuffer:
         #: Klíčový string sloupec tabulky (pro `key`) — udržuje se přírůstkově,
         #: přepočet celého dne každou minutu by rostl s délkou dne
         self._keys: tuple[PartitionKey, pa.Array] | None = None
+        #: Zápis jedné partice ze dvou vláken naráz (ad-hoc pohled QQQ a snímek
+        #: řetězu pro plán #1740, předání IBKR × extended #1047): bez zámku by si
+        #: přepsala tabulku a sdílený .tmp soubor (týž pid) a partice by se rozbila
+        self._write_lock = threading.Lock()
 
     @property
     def rows(self) -> int:
@@ -839,6 +843,17 @@ class _PartitionBuffer:
         key: PartitionKey | None = None,
         *,
         keep_existing: Callable[[dict[str, object], dict[str, object]], bool] | None = None,
+    ) -> Path:
+        """Přidá řádky a přepíše partici pod zámkem partice (viz `_append_and_write`)."""
+        with self._write_lock:
+            return self._append_and_write(rows, key, keep_existing=keep_existing)
+
+    def _append_and_write(
+        self,
+        rows: Sequence[dict[str, object]],
+        key: PartitionKey | None,
+        *,
+        keep_existing: Callable[[dict[str, object], dict[str, object]], bool] | None,
     ) -> Path:
         """Přidá řádky a přepíše partici; s `key` nahradí řádky téhož klíče (upsert).
 
@@ -930,10 +945,11 @@ class _PartitionBuffer:
         Předchozí obsah se nenačítá: po restartu enginu je starý stav bezcenný,
         první cyklus ho přepíše čerstvým polem.
         """
-        self._loaded = True
-        self._table = self._to_table(list(rows))
-        self._keys = None
-        return self._write()
+        with self._write_lock:
+            self._loaded = True
+            self._table = self._to_table(list(rows))
+            self._keys = None
+            return self._write()
 
     def _write(self) -> Path:
         self._path.parent.mkdir(parents=True, exist_ok=True)
