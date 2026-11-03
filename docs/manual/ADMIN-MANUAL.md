@@ -588,6 +588,49 @@ víkend a svátek, zimní čas), `test_settle.py` (`verdict_writable`), `test_da
 s dosavadní TS implementací), `api/tests/test_api.py` (`/oidelta` pondělí proti
 pátku), `test_briefing_api.py`.
 
+### Plán opce QQQ ze scénáře dne (ADR-0062, epika #1738)
+
+Čistá funkce `compute/option_plan.build_option_plan` (#1741) převede auto-scénář NQ na plán
+opce QQQ 1DTE. Plán **zatím nic nevolá**: vznik v 9:31 ET a uložení napojí F2b #1742,
+vyhodnocení F3 #1748. Pravidla verze 1 (`RULES_VERSION`, ADR-0062 K3 A, K6 B, K11 A):
+
+- **Vstupy:** scénář (`dayverdict.AutoScenario`) a úrovně NQ v minutě vzniku
+  (`dayverdict.LevelInputs`: flip, call/put wall, těžiště, ONH/ONL, PDH/PDL, PDC). Dál poměr
+  NQ/QQQ z poslední uzavřené minuty obou před vznikem, spot QQQ, řádky řetězu QQQ 0DTE a 1DTE
+  (tvar `SnapshotRow`), parametry účtu (`AccountParams`, bez výchozí hodnoty v kódu), čas
+  a volitelně 1m bary QQQ po vzniku.
+- **Převod:** úrovně, vstup a cíle se dělí poměrem. Směr = směr scénáře (long → call,
+  short → put). EM = `emrespect.straddle_em` nad 0DTE.
+- **Varianty:** hlavní = strike 1DTE s |delta| nejblíž 0,25, záložní = sousední strike dál od
+  peněz. Každá nese bid/ask/IV/delta se zdrojem a časem kotace a model ceny v TP1/TP2
+  (`gexfield.bs_price` s IV kontraktu, štítek „model z naměřené IV“).
+- **Vstup A:** úroveň = nejbližší z {flip, ONH/ONL, PDH/PDL, call/put wall} proti směru
+  do 1 EM od vstupu scénáře. Spoušť = 5min close za úrovní (test), pak první 5min close zpět.
+  Okno trvá od prvního 5min close po US openu do exitu (settle − 15 min). SL = extrém od testu
+  + 0,05 EM. Hledá se jednou a vstup B hlavní plán nemá. 5min bary se skládají jen z uzavřených
+  minut.
+- **P3 a P4 při spoušti:** SL i TP1 se oceňují v čase cíle 1 podle cesty, nejdřív ve vstupu
+  a nejpozději v exitu (K11 A). „Přísně“ znamená SL v čase exitu. P4 = čerpání na SL + 0,2 EM
+  v exitu, v $ i v % účtu. R:R < 2 = `neobchodovat`, čerpání nad `max_loss_usd` = `nad rozpočtem`.
+  Při vzniku (bez barů) R:R ani SL ještě nejsou, protože SL závisí na extrému po testu.
+  Varianty tehdy čekají („čeká na vstup A“).
+- **Verdikt varianty:** `obchodovat`, `neobchodovat — důvod` (rozpočet nenastaven, vstup A není,
+  bez vstupu do exitu, P3, P4) nebo `čeká`. Plán obchoduje, když aspoň jedna varianta.
+- **Mezery:** chybějící úroveň, řetěz 0DTE (EM, P1), řetěz 1DTE, záložní strike, poměr
+  a spot jdou do `missing` a do verdiktu, ne do odhadu (K4 a). Mimo obchodní seanci funkce
+  vyhodí `ValueError`.
+- **Stíny K10 B** jsou parametry téže funkce: `SHADOW_B` (vstup B = první 5min close za
+  vstupem scénáře ∓ 0,05 EM a SL za nejbližší úrovní; P1 ho vyřadí, když největší kladná
+  GEX QQQ 0DTE leží proti směru do 1 EM od spotu) a `SHADOW_WICK` (test úrovně knotem).
+- **P5:** text doporučení podmíněného příkazu v TWS (cena QQQ → prodat opci).
+
+Golden 2. 11. 2026: `engine/tests/golden/option_plan_1741.json`, test
+`test_option_plan_golden_1741.py`. Dataset generuje `scripts/build_option_plan_golden_1741.py`
+z partic a GET API. Řetěz 1DTE je v něm rekonstrukce (popis `readme_1dte`). Očekávaná čísla
+počítá nezávisle skript přehrání #1756. Výsledek: vstup A 16:35 SEČ za 697,99, SL 699,66,
+TP1 691,99, TP2 690,59, put 687 / 686. Při IV 31,4 % (ATM IV NQ 1DTE, AC) vychází R:R 4,45
+(přísně 2,69) a P4 −70 $, při IV fixture 30 % R:R 4,61 (2,82) a P4 −65 $.
+
 ## 6. Datové formáty a persistence
 
 ### Parquet (`GEXLENS_DATA_DIR`; retence — ADR-0029)
