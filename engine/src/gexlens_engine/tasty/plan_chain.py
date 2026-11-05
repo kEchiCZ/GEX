@@ -464,9 +464,7 @@ class PlanChainSnapshotter:
         if started_at > boundary:
             # Probuzení po hranici (uspaný hostitel, start uprostřed náběhu po hranici): vzorek
             # cen by nebyl stavem hranice a snímek by nesl jinou minutu než plán
-            reasons.append(
-                f"hranice {slot.label} ET zmeškána (start {started_at:%H:%M:%S} UTC)"
-            )
+            reasons.append(f"hranice {slot.label} ET zmeškána (start {started_at:%H:%M:%S} UTC)")
             return replace(empty, reasons=tuple(reasons))
 
         try:

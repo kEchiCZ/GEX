@@ -25,9 +25,9 @@ Dvě věci, které z toho plynou:
 Rezerva pro ad-hoc: běžný plán smí zabrat jen `max_entries − adhoc_reserve`,
 aby vyhledaný symbol vždy měl kam přijít; nevyužitá rezerva se nevrací
 extended — jinak by první ad-hoc pohled vyřadil kus extended pokrytí a heal
-by je pak střídal. Z téže rezervy bere i krátký snímek řetězu QQQ pro plán opce
-(`plan_chain`, #1740): ~520 položek na pár sekund v 9:31 ET se vejde vedle
-jednoho ad-hoc pohledu a extended kvůli němu nepřijde o nic.
+by je pak střídal. Z téže rezervy berou i krátké snímky řetězu QQQ pro plán opce
+(`plan_chain`, #1740, #1768): ~520 položek na ~2 min v 9:15 ET a na pár sekund
+v 9:31 ET se vejde vedle jednoho ad-hoc pohledu a extended kvůli nim nepřijde o nic.
 """
 
 from __future__ import annotations

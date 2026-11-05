@@ -326,6 +326,10 @@ Odvozeno z C (zapsal agent 5. 11., aby C šlo implementovat):
    z close, kterou DXLink pošle při odběru, nepočítá. OI bere ze Summary téhož rána. Že nese
    dnešní publikaci, F1c ověří proti OI po openu. Práh pokrytí 90 % platí, dokud ho měření v 9:15
    nevyvrátí. Změnit ho může jen vlastník.
+   *Upřesnění 5. 11. (F1c #1768, rozhodl vlastník: Q1 A, Q2 A):* feed čas kotace nenese
+   (`bidTime` = 0), takže kotace a greeks se počítají jen po aktualizaci, která přijde po eventu
+   z odběru. Pásmo se odebere už v náběhu 9:13:30 ET, 90 s před hranicí. OI se počítá jen ze
+   Summary s `dayId` = den seance.
 8. **Souběh:** scénář vzniká v minutě 9:15 ET a snímek skončí nejpozději 40 s po hranici 9:15:00.
    Plán čeká na obojí (F2b #1742).
 
