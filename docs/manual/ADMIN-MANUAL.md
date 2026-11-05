@@ -631,7 +631,8 @@ Oba snímky:
   zápis jedné partice je proto pod zámkem (`_PartitionBuffer`).
 - Ad-hoc pohled QQQ tak má každou obchodní seanci v seznamu dní a 1DTE s minutami 9:15 a 9:31.
   Σ profil (`/profile/QQQ/aggregate`) sčítá poslední minutu každé expirace, takže 1DTE v něm
-  celý den drží OI vážené deltou z 9:31 (stáří Σ profil neukazuje, #1760).
+  od 9:31 do konce dne drží OI vážené deltou z 9:31, mezi 9:15 a 9:31 z 9:15 (stáří Σ profil
+  neukazuje, #1760).
 
 Log enginu: „Snímek řetězu QQQ 9:15 ET pro plán (#1740, #1768) seance …“ (a totéž s 9:31 ET)
 s kotacemi, OI a řádky obou expirací, cenami, poměrem a stavem `úplný`. `NEÚPLNÝ: důvod` jde jako
