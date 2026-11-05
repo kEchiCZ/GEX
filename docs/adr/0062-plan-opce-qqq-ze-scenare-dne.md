@@ -8,10 +8,14 @@
   uložených scénářích NQ (#1756, 3. 11.). Přehrání ukázalo slabá místa. K6–K11 rozhodl vlastník
   3. 11. v chatu podle doporučení: **K6 B** (jen vstup A, K7 tím odpadá), **K8 A, K9 A, K10 B,
   K11 A**. Tím je ADR **přijat** (3. 11. 2026). Rozpor P2/P3 s K3 A, který se ukázal při
-  implementaci F2a (#1741), rozhodl vlastník 3. 11. jako **K12 A**.
-- **Datum:** 2026-11-02
+  implementaci F2a (#1741), rozhodl vlastník 3. 11. jako **K12 A**. **Revize 5. 11.:** vlastník
+  změnil K4 na **C**. Opce QQQ se od 19.–20. 10. obchodují i před openem, takže plán vzniká
+  v 9:15 ET se scénářem dne a v 9:31 ET se přecení (K4, oddíl „Revize 5. 11.“). (a) a K12 A
+  platí dál.
+- **Datum:** 2026-11-02 (revize K4 2026-11-05)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
-- **Implementace:** epika #1738, sub-issues #1740 (F1a), #1741 (F2a), #1742 (F2b), #1743 (F4a),
+- **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
+  #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
   #1744 (F4b), #1745 (F4c), #1746 (F5a), #1747 (F1b), #1748 (F3), #1757 (F3b), #1749 (F5b),
   #1750 (F6); tento ADR #1739, zpětné přehrání #1756 (F0b).
 - **Podklad:** rozbor 2. 11. (issuecomment-6585788810); skripty
@@ -107,7 +111,9 @@ a epiky liší, říká to poznámka u pravidla.
   (17:00 CT předchozího dne), tedy i z partice D−1 (#1002). Upřesnění 3. 11. (F1a #1740):
   živě je to stav na hranici 9:31:00 ET, tedy mid QQQ (bary QQQ se nesbírají) a spot NQ
   pipeline (IBKR → 5s bar → tasty) v témže okamžiku. Close baru by se od něj lišil o zlomek
-  ticku.
+  ticku. Od K4 C (5. 11.) je hranicí vzniku 9:15:00 ET (ranní snímek F1c #1768, minuta
+  scénáře). Hranice 9:31:00 ET slouží přecenění (F2c #1769). Pravidlo poměru, spotu a úrovní
+  je v obou okamžicích stejné.
 - **1DTE** = nejbližší expirace s datem po obchodní seanci vzniku (`is_trading_session`, svátky
   NYSE podle ADR-0046): pondělí → úterý, pátek → pondělí.
 - **EM QQQ** = `compute/emrespect.straddle_em` (ATM strike nejblíž spotu se zaplacenýma oběma
@@ -121,8 +127,9 @@ a epiky liší, říká to poznámka u pravidla.
   ležel 2. 11. 1,3 % od spotu, největší GEX 0,5 %). To je ~170 kontraktů × 3 eventy (Quote,
   Greeks, Summary) ≈ 520 položek, dočasně v rezervě ad-hoc `ADHOC_RESERVE_ENTRIES` = 2 000
   (`tasty/budget.py:41`). Vejde se tam i s jedním otevřeným ad-hoc pohledem (~300 symbolů ×
-  3 eventy). Přes den 2 kontrakty a podklad. IBKR lines 0. Minutový cyklus se nemění, plán vzniká
-  jednou denně.
+  3 eventy). Od K4 C jsou to dva krátké snímky denně (9:15 a 9:31 ET), každý po svém skončení
+  rezervu uvolní. Přes den 2 kontrakty a podklad. IBKR lines 0. Minutový cyklus se nemění, plán
+  vzniká jednou denně.
 - **Snímek NQ do Telegramu:** heatmapa z frontendu, dorazí-li do 3 min od vzniku scénáře
   (2. 11. dorazila za 59 s), jinak serverový graf NQ. Text odchází hned.
 
@@ -270,7 +277,65 @@ stopem.
 - (b) odhad z IV NQ 1DTE přes poměr se štítkem „odhad“. 2. 11. vyšel o 8–10 % výš a znamená další
   cestu v kódu.
 
-**Rozhodnuto 3. 11.: A + (a)** (vlastník).
+**Rozhodnuto 3. 11.: A + (a)** (vlastník). **Nahrazeno 5. 11. variantou C**, (a) platí dál
+(viz níže).
+
+#### Revize 5. 11. — C: plán v 9:15 ET, přecenění v 9:31 ET (rozhodl vlastník)
+
+**Proč znovu:** tabulka výše počítala s tím, že ceny před openem jsou zamrzlé z close. To platilo
+při měření 23. 9. (2:38–4:23 ET beze změny). Cboe od 19. 10. 2026 a NYSE American od 20. 10.
+2026 obchodují opce QQQ i v ranní seanci 7:30–9:25 ET, takže v 9:15 ET ceny už vznikají.
+Vlastník proto 5. 11. otevřel K4 znovu.
+
+| čas (QQQ 0DTE, pásmo ±3 %) | živé kotace | medián spreadu (0,15 < \|delta\| < 0,85) |
+|---|---|---|
+| 2. 11. 9:23 ET | 56/84 (67 %) | 4,1 % |
+| 2. 11. 9:24 ET | 75/75 | 6,2 % |
+| 4. 11. 9:31 ET (snímek F1a, po openu) | 84/84 | 1,1 % (0DTE), 1,4 % (1DTE) |
+
+Spready před openem jsou 3–5× širší. U putu za 1,40 $ to dělá nejistotu mid ceny asi
+±0,03–0,04 $, tedy ±3–4 $ na kontrakt. Měření v 9:15 ET ani 1DTE před openem zatím není. První
+přinese F1c (#1768).
+
+**Rozhodnuto 5. 11.: C** (vlastník v chatu: „Ano“). Pravidla:
+
+1. **Vznik v 9:15 ET** se scénářem dne (15:15 SEČ, v týdnech posunu času o hodinu dřív) z ranního
+   snímku řetězu (F1c). Úrovně NQ a poměr se berou z minuty scénáře. Plán dál nese EM ze straddlu
+   0DTE, hlavní a záložní strike, kotace, model ceny v TP1/TP2, úroveň vstupu A a cíle. Stav
+   varianty se určí jako v K12 A.
+2. **Přecenění v 9:31 ET** ze snímku F1a: nové kotace vybraných kontraktů, IV a model v TP1/TP2.
+   Strike, úrovně, poměr, vstup A a EM zůstávají z 9:15. Plán drží obě sady cen, každou se svým
+   časem, a zpětně se nic nepřepisuje (K2 A).
+3. **R:R, P3, P4 a rozpočet** se počítají beze změny podle K12 A, tedy až při spoušti (nejdřív
+   v 9:35 ET) z tehdejších kotací (F1b, K5 B).
+4. **Zpráva v 9:31 ET** (zvonek, Telegram F4c) nese přecenění. Když se změní stav varianty
+   (`čeká` × `neobchodovat`), začíná „ZMĚNA“.
+
+Odvozeno z C (zapsal agent 5. 11., aby C šlo implementovat):
+
+5. **Neúplný ranní snímek** znamená, že kotace nebo OI jsou pod prahem, nebo chybí vstup (EM,
+   poměr, spot). Pak plán vznikne v 9:15 bez opce s důvodem (a) a v 9:31 se sestaví celý z 9:31
+   jako dřív K4 A, včetně úrovní, poměru, EM a striku. Neúplnost není výsledek pravidla, jako
+   „žádná úroveň do 1 EM“ nebo „rozpočet nenastaven“. Takový plán z 9:15 platí a jen se
+   přecení. Plán stojí vždy na jednom okamžiku, 9:15 a 9:31 se nemíchají (K9 B s úrovněmi z 9:15
+   a opcí z 9:31 vlastník 3. 11. odmítl). Stav se tak mění, a „ZMĚNA“ vzniká, prakticky jen v tomto
+   případě. Při samotném přecenění se nemění nic, na čem stav stojí.
+6. **Neúplný snímek v 9:31 u úplného plánu:** přecenění se nezapíše a důvod jde do plánu. Platí
+   ceny z 9:15 se svým časem. Když jsou neúplné oba snímky, plán zůstane bez opce (a).
+7. **Ranní snímek F1c** bere jen kotace z ranní seance téhož dne (od 7:30 ET). Poslední kotaci
+   z close, kterou DXLink pošle při odběru, nepočítá. OI bere ze Summary téhož rána. Že nese
+   dnešní publikaci, F1c ověří proti OI po openu. Práh pokrytí 90 % platí, dokud ho měření v 9:15
+   nevyvrátí. Změnit ho může jen vlastník.
+8. **Souběh:** scénář vzniká v minutě 9:15 ET a snímek skončí nejpozději 40 s po hranici 9:15:00.
+   Plán čeká na obojí (F2b #1742).
+
+**Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
+nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test
+přecenění s pevným strikem přinese F2c (#1769), naměřený golden první seance F6 (#1750).
+
+**Důvod:** rychlost, protože plán přijde se scénářem v 15:15 SEČ, a relevance dat, protože přesné
+ceny po openu přijdou v 15:31 a o obchodu rozhodují živé ceny při spoušti (K12 A). Cena: dvě
+zprávy a dvě sady cen jednoho plánu a dva sub-issues navíc (F1c #1768, F2c #1769).
 
 ### K5 — živá upozornění na spoušť
 
@@ -434,6 +499,9 @@ poměru 41,311 (pár 14:25 UTC) a řetězu QQQ 0DTE z 9:23–9:25 ET. Spot QQQ v
 (+208 M), 0,79 EM od spotu. Kontrola měření K3 (vstupy z 9:15 ET) zůstává ve skriptu
 jako AC #1756.
 
+Od K4 C (5. 11.) platí tato čísla dál. 2. 11. ranní řetěz chybí, takže plán by vznikl v 9:15 bez
+opce a v 9:31 celý z 9:31 (K4, revize 5. 11., bod 5).
+
 ### K10 — stínové varianty v track recordu (rozhodnuto 3. 11.: B)
 
 Stín = táž čistá funkce s jinými parametry pravidel. Hypotetický výsledek se uloží v JSON
@@ -485,7 +553,9 @@ až v 16:35 SEČ a SL vyšel 699,66. Rozpor se ukázal při implementaci F2a (#1
 cíle a model ceny v TP1/TP2. Varianta má stav `čeká — čeká na vstup A (úroveň)`, nebo
 `neobchodovat — důvod`, když vstup nebo opce nejde (rozpočet nenastaven, žádná úroveň do 1 EM,
 chybí EM nebo řetěz). Táž čistá funkce s bary po vzniku najde spoušť a ocení ji (P3, P4).
-Verdikt varianty je pak `obchodovat`, nebo `neobchodovat — důvod`.
+Verdikt varianty je pak `obchodovat`, nebo `neobchodovat — důvod`. Od K4 C (5. 11.) to platí
+pro vznik v 9:15 ET i pro přecenění v 9:31 ET. Ani vznik, ani přecenění nepočítají R:R, P3,
+P4 ani rozpočet.
 
 ## Zvažované a odmítnuté (rozhodnuto 2. 11.)
 
@@ -503,10 +573,12 @@ Verdikt varianty je pak `obchodovat`, nebo `neobchodovat — důvod`.
 ## Důsledky
 
 - **Nové prvky:** tabulka `option_plans` (před nasazením F2b záloha PG), partice
-  `derived/QQQ/option_quotes`, dva klíče v `settings`, druhy alertů `option_plan_created`
-  a `option_plan_result`, alerty přechodů stavu (K5 B, #1757), endpointy `/option-plans*`,
-  závislost matplotlib v API (K1 A).
-- **Výkon:** IBKR lines 0. Tasty: krátký snímek ~520 položek v rezervě ad-hoc a přes den 3 symboly.
+  `derived/QQQ/option_quotes`, dva klíče v `settings`, druhy alertů `option_plan_created`,
+  `option_plan_repriced` (K4 C, „ZMĚNA“ při změně stavu varianty) a `option_plan_result`, alerty
+  přechodů stavu (K5 B, #1757), endpointy `/option-plans*`, závislost matplotlib v API (K1 A).
+  JSON plánu nese dvě sady cen (9:15 a 9:31 ET), každou se svým časem.
+- **Výkon:** IBKR lines 0. Tasty: dva krátké snímky (9:15 a 9:31 ET) po ~520 položkách v rezervě
+  ad-hoc a přes den 3 symboly.
   Minutový cyklus beze změny (při K5 B jedna čistá funkce nad dnešními bary, jen ve dnech
   s plánem). RAM podle K1.
 - **Relevance dat:** ceny jsou měřené a nesou stáří. Model (BS z naměřené IV) počítá jen
