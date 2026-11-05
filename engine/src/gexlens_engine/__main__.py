@@ -177,7 +177,7 @@ from gexlens_engine.tasty.plan_chain import PURPOSE as PLAN_CHAIN_PURPOSE
 from gexlens_engine.tasty.plan_chain import REFERENCE as PLAN_CHAIN_REFERENCE
 from gexlens_engine.tasty.plan_chain import (
     PlanChainSnapshotter,
-    missed_session,
+    missed_slots,
     missing_data_level,
     next_snapshot,
     snapshot_boundary,
@@ -2189,8 +2189,8 @@ async def main() -> None:
                 return SpotReading(None, None, None, False)
             return pipe.spot_reading()
 
-        # Snímek řetězu QQQ pro plán opce (ADR-0062 K4 A, #1740): striky jen po dobu
-        # snímku v 9:31 ET, z rezervy ad-hoc; probuzení reconcileru jako u ad-hoc
+        # Snímky řetězu QQQ pro plán opce (ADR-0062 K4 C, #1740, #1768): striky jen po dobu
+        # snímků v 9:15 a 9:31 ET, z rezervy ad-hoc; probuzení reconcileru jako u ad-hoc
         plan_chain_snapshotter = PlanChainSnapshotter(
             symbol_map=symbol_map,
             cache=tasty_cache,
@@ -3195,26 +3195,30 @@ async def main() -> None:
                     logger.exception("Ad-hoc smyčka selhala — další tik jede dál")
 
         async def plan_chain_loop() -> None:
-            """Snímek řetězu QQQ 0DTE + 1DTE pro plán opce v 9:31 ET (ADR-0062 K4 A, #1740).
+            """Snímky řetězu QQQ 0DTE + 1DTE pro plán opce v 9:15 a 9:31 ET (ADR-0062 K4 C).
 
-            Jednou za obchodní seanci, víkend a svátek NYSE snímek nemají. Neúplný snímek
-            hlásí WARNING jen při otevřeném trhu (AGENTS.md). Plán z výsledku sestaví F2b #1742.
-            Start enginu po 9:31 ET snímek nedohání; mezeru dne nahlásí hned při startu.
+            9:15 ET pro vznik plánu se scénářem (#1768), 9:31 ET pro přecenění (#1740). Víkend
+            a svátek NYSE snímky nemají. Neúplný snímek hlásí WARNING jen při otevřeném trhu
+            (AGENTS.md). Plán z výsledků sestaví F2b #1742 a F2c #1769. Zmeškaný snímek se
+            nedohání; mezeru dne nahlásí hned při startu.
             """
             started = dt.datetime.now(dt.UTC)
-            missed = missed_session(started)
+            missed = missed_slots(started)
             if missed is not None:
+                missed_day, missed_list = missed
                 logger.log(
                     missing_data_level(started),
-                    "Snímek řetězu QQQ pro plán (#1740): seance %s v tomto běhu bez snímku — "
-                    "engine startoval po 9:31 ET, snímek se nedohání",
-                    missed,
+                    "Snímek řetězu QQQ pro plán (#1768): seance %s v tomto běhu bez snímku %s ET"
+                    " — engine startoval po hranici, snímek se nedohání",
+                    missed_day,
+                    " a ".join(slot.label for slot in missed_list),
                 )
             while not shadow_stop.is_set():
                 now = dt.datetime.now(dt.UTC)
-                session, start = next_snapshot(now)
+                session, slot, start = next_snapshot(now)
                 logger.info(
-                    "Snímek řetězu QQQ pro plán (#1740): příští seance %s, náběh %s",
+                    "Snímek řetězu QQQ pro plán (#1768): příští %s ET seance %s, náběh %s",
+                    slot.label,
                     session,
                     start.isoformat(),
                 )
@@ -3225,7 +3229,7 @@ async def main() -> None:
                 if shadow_stop.is_set():
                     return
                 try:
-                    snapshot = await plan_chain_snapshotter.run(session)
+                    snapshot = await plan_chain_snapshotter.run(session, slot)
                     if snapshot is not None:
                         level = (
                             logging.INFO
@@ -3234,9 +3238,12 @@ async def main() -> None:
                         )
                         logger.log(level, "%s", snapshot.describe())
                 except Exception:
-                    logger.exception("Snímek řetězu QQQ pro plán (#1740) selhal — příští seance")
-                # Hranice musí být za námi, ať výběr příštího snímku vezme další seanci
-                rest = (snapshot_boundary(session) - dt.datetime.now(dt.UTC)).total_seconds()
+                    logger.exception(
+                        "Snímek řetězu QQQ %s ET pro plán (#1768) selhal — příští snímek",
+                        slot.label,
+                    )
+                # Hranice musí být za námi, ať výběr příštího snímku vezme další snímek
+                rest = (snapshot_boundary(session, slot) - dt.datetime.now(dt.UTC)).total_seconds()
                 if rest > 0:
                     with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(shadow_stop.wait(), timeout=rest + 1.0)

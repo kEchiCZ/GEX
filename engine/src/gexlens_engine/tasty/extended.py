@@ -25,7 +25,7 @@ import logging
 from gexlens_engine.compute.gexfield import fallback_greeks
 from gexlens_engine.compute.settle import history_expiry_settle, settle_ts
 from gexlens_engine.storage.parquet_store import OiMissingRow, SnapshotRow
-from gexlens_engine.tasty.provider import TastyChainCache
+from gexlens_engine.tasty.provider import ContractStates
 from gexlens_engine.tasty.symbols import ChainSymbols
 
 logger = logging.getLogger(__name__)
@@ -118,7 +118,7 @@ def snapshot_minute(planned: dt.datetime, now: dt.datetime) -> tuple[dt.datetime
 def build_snapshot_rows(
     chain: ChainSymbols,
     expiry: str,
-    cache: TastyChainCache,
+    cache: ContractStates,
     *,
     ts_min: dt.datetime,
     spot: float,

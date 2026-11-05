@@ -77,7 +77,8 @@ _BACKOFF_MAX_S = 60.0
 EVENT_FIELDS: dict[str, list[str]] = {
     "Quote": ["eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"],
     "Greeks": ["eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "price"],
-    "Summary": ["eventSymbol", "openInterest", "dayOpenPrice", "prevDayClosePrice"],
+    # dayId: den Summary pro OI ranního snímku QQQ (#1768); 0 = nevyplněno
+    "Summary": ["eventSymbol", "openInterest", "dayOpenPrice", "prevDayClosePrice", "dayId"],
     "TimeAndSale": [
         "eventSymbol",
         "time",

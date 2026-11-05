@@ -44,8 +44,10 @@ def feed_greeks(
     cache.on_event("Greeks", [symbol, iv, delta, gamma, theta, vega, theo])
 
 
-def feed_summary(cache: TastyChainCache, symbol: str, open_interest: float) -> None:
-    cache.on_event("Summary", [symbol, open_interest, None, None])
+def feed_summary(
+    cache: TastyChainCache, symbol: str, open_interest: float, day_id: int | None = None
+) -> None:
+    cache.on_event("Summary", [symbol, open_interest, None, None, day_id])
 
 
 def feed_trade(cache: TastyChainCache, symbol: str, aggressor: str | None) -> None:
