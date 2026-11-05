@@ -11,6 +11,7 @@ import datetime as dt
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,8 @@ class TastyGreeks:
 @dataclass
 class TastySummary:
     open_interest: float | None = None
+    #: Den Summary podle dxFeed (`dayId` = dny od 1970-01-01, obchodní den ET; sonda #1768)
+    day_id: int | None = None
     updated_at: dt.datetime | None = None
 
 
@@ -68,6 +71,25 @@ class TastyContractState:
     last_price: float | None = None
     #: Poslední event JAKÉHOKOLI typu (#936) — vstup cíleného healu
     last_event_at: dt.datetime | None = None
+    #: Počet eventů Quote a Greeks, které stav změnily (#1768). Feed čas kotace nenese
+    #: (`bidTime` = 0), takže aktualizaci po eventu z odběru pozná jen přírůstek. Event se
+    #: stejnými hodnotami (DXLink po reconnectu pošle stav znovu) se nepočítá.
+    quote_changes: int = 0
+    greeks_changes: int = 0
+
+
+def _quote_values(quote: TastyQuote) -> tuple[float | None, ...]:
+    return (quote.bid, quote.ask, quote.bid_size, quote.ask_size)
+
+
+def _greeks_values(greeks: TastyGreeks) -> tuple[float | None, ...]:
+    return (greeks.iv, greeks.delta, greeks.gamma, greeks.theta, greeks.vega, greeks.theo_price)
+
+
+class ContractStates(Protocol):
+    """Zdroj stavů kontraktů pro sestavení řádků: cache, nebo její filtrovaný pohled (#1768)."""
+
+    def state(self, streamer_symbol: str) -> TastyContractState | None: ...
 
 
 class TastyChainCache:
@@ -139,15 +161,18 @@ class TastyChainCache:
         self.last_event_at = now
         state.last_event_at = now
         if event_type == "Quote":
-            state.quote = TastyQuote(
+            quote = TastyQuote(
                 bid=_number(values[1]),
                 ask=_number(values[2]),
                 bid_size=_number(values[3]),
                 ask_size=_number(values[4]),
                 updated_at=now,
             )
+            if _quote_values(quote) != _quote_values(state.quote):
+                state.quote_changes += 1
+            state.quote = quote
         elif event_type == "Greeks":
-            state.greeks = TastyGreeks(
+            greeks = TastyGreeks(
                 iv=_number(values[1]),
                 delta=_number(values[2]),
                 gamma=_number(values[3]),
@@ -156,8 +181,16 @@ class TastyChainCache:
                 theo_price=_number(values[6]),
                 updated_at=now,
             )
+            if _greeks_values(greeks) != _greeks_values(state.greeks):
+                state.greeks_changes += 1
+            state.greeks = greeks
         elif event_type == "Summary":
-            state.summary = TastySummary(open_interest=_number(values[1]), updated_at=now)
+            day = _number(values[4]) if len(values) > 4 else None
+            state.summary = TastySummary(
+                open_interest=_number(values[1]),
+                day_id=int(day) if day is not None and day > 0 else None,
+                updated_at=now,
+            )
         elif event_type == "TimeAndSale":
             state.trades += 1
             price = _number(values[2]) if len(values) > 2 else None
