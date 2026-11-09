@@ -611,6 +611,8 @@ Jsou dva: **9:15 ET** pro vznik plánu se scénářem dne (F1c #1768) a **9:31 E
     (hlavní a záložní varianta);
   - OI má aspoň 90 % kontraktů pásma v každé expiraci.
   Podíl kotací za celé pásmo jde jen do logu: 9. 11. v 9:15 chyběla jen ITM, kterou plán nečte.
+  Snímek 9:31 přesto čeká i na 90 % kotací pásma, protože jeho partice 1DTE drží Σ profil QQQ
+  do konce dne. Snímek 9:15 na ně nečeká: kotace z náběhu by mezitím stárly k limitu 90 s.
 - Kotace a OI (Summary) přijaté před US openem se nepočítají. Cache tasty stavy nemaže
   a dnešní 0DTE byla včera 1DTE, takže OI přijaté před openem by neslo starší publikaci. Řádek ho
   proto dostane jako chybějící.
@@ -632,7 +634,8 @@ v #1738):
 Oba snímky:
 
 - Řádky obou expirací vzniknou v jednom okamžiku, až potom se zapisují, takže `stale_age` není
-  záporné. Řádky (štítek minuty 9:15, resp. 9:31) zapíše `build_snapshot_rows` do standardních partic
+  záporné. Řádky (štítek minuty 9:15, resp. 9:31) zapíše `build_snapshot_rows` do standardních
+  partic
   `snapshots/QQQ/{expirace}/{den}.parquet`, OI bez hodnoty do `oimissing`. Partice se nemažou
   (ADR-0029). Pak se subskripce uvolní. Otevřený ad-hoc pohled QQQ píše tutéž partici 0DTE,
   zápis jedné partice je proto pod zámkem (`_PartitionBuffer`).
@@ -643,22 +646,25 @@ Oba snímky:
 
 Log enginu: „Snímek řetězu QQQ 9:15 ET pro plán (#1740, #1768) seance …“ (a totéž s 9:31 ET)
 s kotacemi, OI a řádky obou expirací, cenami, poměrem a stavem `úplný`. Kontrakty pásma bez řádku
-jsou v závorce podle důvodu, např. `(bez řádku: jen event z odběru 642P 643P; starší 90 s 650P)`:
+jsou v závorce podle důvodu, např. `(bez řádku: 1 změna po odběru (< 2) 642P 643P; starší 90 s
+650P)`:
 
-- 9:15: „bez eventu po odběru“, „jen event z odběru“ (kotace se po odběru nezměnila dvakrát),
+- 9:15: „bez změny po odběru“, „1 změna po odběru (< 2)“ (obvykle jen event z odběru se stavem
+  z close; odebírá-li kontrakt i ad-hoc pohled QQQ, je to skutečná aktualizace),
   „starší 90 s“;
 - 9:31: „bez kotace“, „kotace před openem“, „starší 90 s“;
 - oba: „kotace bez řádku“ (bid, ask nebo IV z mid).
 
 `NEÚPLNÝ: důvod` jde jako warning jen při otevřeném trhu: řetěz nebo podklad chybí, chybí ATM
-straddle 0DTE nebo soused kontraktu |delta| 0,25 v 1DTE (např. „1DTE 20261110: call |delta| 0,25 =
-673: soused 674 bez kotace s IV a delta do 40 s od 9:15 ET“), OI pod 90 % do limitu (u 9:15 „OI dne
-seance“), žádný platný řádek, spot NQ chybí, probuzení po hranici (uspaný hostitel). Zmeškaný snímek
-se nedohání: start enginu mezi 9:15 a 9:31 ET pořídí jen snímek 9:31, start po 9:31 ET žádný.
+straddle 0DTE nebo soused kontraktu |delta| 0,25 v 1DTE (např. „1DTE 20261110: call |delta|
+0,25 = 673: soused 674 bez kotace s IV a delta do 40 s od 9:15 ET“), OI pod 90 % do limitu
+(u 9:15 „OI dne seance“), žádný platný řádek, spot NQ chybí, probuzení po hranici (uspaný
+hostitel). Zmeškaný snímek se nedohání: start enginu mezi 9:15 a 9:31 ET pořídí jen snímek 9:31, start po 9:31 ET žádný.
 Hned při startu zaloguje „seance … v tomto běhu bez snímku 9:15 ET (a 9:31 ET)“, warning jen při
 otevřeném trhu. Nasazení v pauze Globexu tak dá INFO. Naměřené řádky se zapíšou i z neúplného
 snímku. Výsledek `PlanChainSnapshot` nese snímek (`slot`), řádky, ceny, poměr, čas, podíl kotací
-a OI a chybějící kontrakty podle důvodu. Plán z něj napojí F2b #1742 (9:15) a F2c #1769 (9:31), zatím se jen loguje. Ověření: partice
+a OI a chybějící kontrakty podle důvodu. Plán z něj napojí F2b #1742 (9:15) a F2c #1769
+(9:31), zatím se jen loguje. Ověření: partice
 1DTE dne nese minuty 9:15 a 9:31 a `/status.tasty_symbol_breakdown.plan_chain` je po snímku 0.
 
 Čistá funkce `compute/option_plan.build_option_plan` (#1741) převede auto-scénář NQ na plán

@@ -21,7 +21,8 @@ Průběh snímku 9:31 ET (přecenění, F1a):
      (`option_plan.variant_gaps`);
    - OI aspoň u `MIN_OI_SHARE` kontraktů pásma v každé expiraci.
    Podíl kotací za celé pásmo jde jen do logu. Měření 9. 11. ukázalo, že v 9:15 chybí ITM
-   kontrakty (|delta| 0,69–0,95), které plán nečte.
+   kontrakty (|delta| 0,69–0,95), které plán nečte. Snímek 9:31 přesto čeká i na
+   `MIN_BAND_SHARE` kotací pásma kvůli partici (Σ profil), snímek 9:15 ne.
 5. **Zápis** přes `build_snapshot_rows` do standardních partic `snapshots/QQQ/{exp}/{den}.parquet`
    (OI bez hodnoty do `oimissing`, #465), pak **uvolnění subskripce**. Řádky obou expirací
    vzniknou v jednom okamžiku před zápisem, takže `stale_age` není záporné.
@@ -85,6 +86,8 @@ BAND_PCT = 3.0
 QUOTE_TIMEOUT_S = 40.0
 #: Podíl kontraktů pásma s OI v každé expiraci, od kterého je snímek úplný (K4 bod 7)
 MIN_OI_SHARE = 0.9
+#: Podíl kotací pásma, na který snímek 9:31 čeká kvůli partici (úplnost nemění, K4 bod 7)
+MIN_BAND_SHARE = 0.9
 #: Perioda kontroly kotací během čekání
 POLL_S = 0.5
 #: Stáří kotace, po kterém se nepočítá (shodné s ad-hoc pohledem)
@@ -223,7 +226,7 @@ class ExpirySnapshot:
     rows: tuple[SnapshotRow, ...]
     #: Řádky bez OI (v řádku 0.0, v partici `oimissing`, #465)
     oi_missing: int
-    #: Kontrakty pásma bez řádku podle důvodu, např. ("jen event z odběru", ("671P", …)) (E)
+    #: Kontrakty pásma bez řádku podle důvodu, např. ("1 změna po odběru (< 2)", ("671P",)) (E)
     missing: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @property
@@ -401,12 +404,14 @@ class _PreOpen:
         state = self.cache.state(streamer)
         base = self._base.get(streamer)
         if state is None or base is None or state.quote.updated_at is None:
-            return "bez eventu po odběru"
+            return "bez změny po odběru"
         changes = state.quote_changes - base[0]
         if changes <= 0:
-            return "bez eventu po odběru"
+            return "bez změny po odběru"
         if changes < LIVE_CHANGES:
-            return "jen event z odběru"
+            # Obvykle jen event z odběru (stav z close). Odebírá-li kontrakt už jiný účel
+            # (ad-hoc pohled QQQ), event z odběru nepřijde a změna je skutečná aktualizace.
+            return f"{changes} změna po odběru (< {LIVE_CHANGES})"
         return f"starší {MAX_AGE_S:.0f} s"
 
     def oi(self, streamer: str) -> bool:
@@ -577,7 +582,12 @@ class PlanChainSnapshotter:
         }
         while True:
             assessed = self._assess(chains, zero, underlying, spot, rules, slot)
-            if not assessed.reasons or assessed.ts >= deadline:
+            # 9:31 čeká i na kotace pásma: partice 1DTE z 9:31 drží Σ profil QQQ do konce dne.
+            # 9:15 ne, čekáním by kotace z náběhu stárly k limitu 90 s (K4 bod 7).
+            covered = slot.pre_open or all(
+                snap.quoted_share >= MIN_BAND_SHARE for snap in assessed.snaps.values()
+            )
+            if (not assessed.reasons and covered) or assessed.ts >= deadline:
                 break
             await self.sleep(POLL_S)
 

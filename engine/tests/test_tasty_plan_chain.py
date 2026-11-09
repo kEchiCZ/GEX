@@ -22,6 +22,7 @@ from gexlens_engine.tasty.plan_chain import (
     PURPOSE,
     QUOTE_TIMEOUT_S,
     REPRICE_SLOT,
+    ROW_REJECTED,
     PlanChainSnapshotter,
     SnapshotSlot,
     _AfterOpen,
@@ -79,6 +80,10 @@ ITM = frozenset(
 )
 
 
+#: Zpoždění opožděných kotací v testu čekání snímku 9:31
+LATE = dt.timedelta(seconds=2)
+
+
 class _Clock:
     def __init__(self, now: dt.datetime) -> None:
         self.now = now
@@ -121,6 +126,7 @@ class _Harness:
         tick_greeks: bool = False,
         summary_day_id: int | None = None,
         silent: frozenset[str] = frozenset(),
+        zero_bid: frozenset[str] = frozenset(),
     ) -> None:
         self.clock = _Clock(start)
         self.cache = TastyChainCache(clock=self.clock)
@@ -138,6 +144,10 @@ class _Harness:
         self.summary_day_id = summary_day_id
         #: Kontrakty jen s eventem z odběru, bez aktualizace (9. 11.: ITM v 9:15)
         self.silent = silent
+        #: Kontrakty s kotací bez bidu: kotace platí, řádek nevznikne
+        self.zero_bid = zero_bid
+        #: Kontrakty, jejichž event z odběru přijde až `LATE` po hranici 9:31
+        self.deliver_late: frozenset[str] = frozenset()
         self.ticks = 0
         self.chain = chain or _chain(["20261103", "20261104", "20261105"])
         reading = nq if nq is not None else SpotReading(NQ, start, "ibkr", True)
@@ -160,13 +170,23 @@ class _Harness:
                 if self.deliver_underlying:
                     feed_quote(self.cache, "QQQ", SPOT - 0.01, SPOT + 0.01)
             elif self.deliver_options:
-                feed_quote(self.cache, streamer, 1.00, 1.10)
-                feed_greeks(self.cache, streamer, iv=0.30, delta=_delta(streamer), gamma=0.05)
-                if self.deliver_summary and not streamer.endswith("C700"):
-                    feed_summary(self.cache, streamer, 120.0, day_id=self.summary_day_id)
+                self._deliver(streamer, quote=streamer not in self.deliver_late)
+
+    def _deliver(self, streamer: str, *, quote: bool = True) -> None:
+        if quote:
+            bid = 0.0 if streamer in self.zero_bid else 1.00
+            feed_quote(self.cache, streamer, bid, 1.10)
+            feed_greeks(self.cache, streamer, iv=0.30, delta=_delta(streamer), gamma=0.05)
+        if self.deliver_summary and not streamer.endswith("C700"):
+            feed_summary(self.cache, streamer, 120.0, day_id=self.summary_day_id)
 
     async def _sleep(self, seconds: float) -> None:
         self.clock.now += dt.timedelta(seconds=seconds)
+        late = self.deliver_late & self.snapshotter.streamers()
+        if late and self.clock.now >= snapshot_boundary(SESSION, REPRICE_SLOT) + LATE:
+            for streamer in late:
+                self._deliver(streamer)
+            self.deliver_late = frozenset()
         self.ticks += 1
         step = 0.01 * self.ticks
         for streamer in self.snapshotter.streamers():
@@ -539,8 +559,8 @@ async def test_kotace_z_close_pri_odberu_se_nepocita(tmp_path: Path) -> None:
     assert "0DTE 20261103: žádný platný řádek" in snapshot.reasons
     assert "1DTE 20261104: žádný platný řádek" in snapshot.reasons
     # E: kontrakty mají jen event z odběru (stav z close), aktualizace nepřišla
-    assert [why for why, _ in snapshot.zero_dte.missing] == ["jen event z odběru"]
-    assert "bez řádku: jen event z odběru 679C 679P 680C" in snapshot.describe()
+    assert [why for why, _ in snapshot.zero_dte.missing] == ["1 změna po odběru (< 2)"]
+    assert "bez řádku: 1 změna po odběru (< 2) 679C 679P 680C" in snapshot.describe()
     limit = snapshot_boundary(SESSION, PLAN_SLOT) + dt.timedelta(seconds=QUOTE_TIMEOUT_S)
     assert snapshot.ts is not None and limit <= snapshot.ts <= limit + dt.timedelta(seconds=1)
     assert not harness.partition("20261103").exists()
@@ -560,10 +580,10 @@ async def test_ranni_bez_itm_je_uplny(tmp_path: Path) -> None:
         assert (snap.contracts, snap.quoted, len(snap.rows)) == (86, 58, 58)
         assert snap.quoted_share < 0.9  # podíl pásma jen do logu
         expected = tuple(f"{k}C" for k in range(679, 693)) + tuple(f"{k}P" for k in range(708, 722))
-        assert snap.missing == (("jen event z odběru", expected),)
+        assert snap.missing == (("1 změna po odběru (< 2)", expected),)
         assert pq.read_table(harness.partition(snap.expiry)).num_rows == 58
     assert "kotace 58/86" in snapshot.describe()
-    assert "(bez řádku: jen event z odběru 679C 680C" in snapshot.describe()
+    assert "(bez řádku: 1 změna po odběru (< 2) 679C 680C" in snapshot.describe()
 
 
 async def test_ranni_bez_souseda_delta_025_neuplny(tmp_path: Path) -> None:
@@ -576,7 +596,7 @@ async def test_ranni_bez_souseda_delta_025_neuplny(tmp_path: Path) -> None:
         " do 40 s od 9:15 ET",
     )
     assert snapshot.one_dte is not None
-    assert snapshot.one_dte.missing == (("jen event z odběru", ("711C",)),)
+    assert snapshot.one_dte.missing == (("1 změna po odběru (< 2)", ("711C",)),)
     limit = snapshot_boundary(SESSION, PLAN_SLOT) + dt.timedelta(seconds=QUOTE_TIMEOUT_S)
     assert snapshot.ts is not None and limit <= snapshot.ts <= limit + dt.timedelta(seconds=1)
     assert pq.read_table(harness.partition("20261104")).num_rows == 85  # naměřené se zapíše
@@ -625,8 +645,33 @@ async def test_radky_obou_expiraci_z_jednoho_okamziku(tmp_path: Path) -> None:
         assert {row.bid for row in snap.rows} == {1.00}
 
 
+async def test_kotace_bez_bidu_je_kotace_bez_radku(tmp_path: Path) -> None:
+    """E: kotace platí, ale bez bidu řádek nevznikne; mimo vstupy plánu snímek zůstane úplný."""
+    harness = _Harness(
+        tmp_path, start=_start(), zero_bid=frozenset({_streamer("20261104", "C", 720)})
+    )
+    snapshot = await harness.snapshotter.run(SESSION, REPRICE_SLOT)
+    assert snapshot is not None and snapshot.complete, snapshot and snapshot.reasons
+    assert snapshot.one_dte is not None
+    assert (snapshot.one_dte.quoted, len(snapshot.one_dte.rows)) == (86, 85)
+    assert snapshot.one_dte.missing == ((ROW_REJECTED, ("720C",)),)
+
+
+async def test_snimek_9_31_ceka_na_kotace_pasma(tmp_path: Path) -> None:
+    """9:31 nekončí s úplnými vstupy plánu, dokud kotaci nemá 90 % pásma (partice, Σ profil)."""
+    harness = _Harness(tmp_path, start=_start())
+    late = {s for s in harness.chain.by_contract.values() if s.endswith(("C719", "C720", "C721"))}
+    late |= {s for s in harness.chain.by_contract.values() if s[-4] == "P" and int(s[-3:]) < 688}
+    harness.deliver_late = frozenset(late)
+    snapshot = await harness.snapshotter.run(SESSION, REPRICE_SLOT)
+    assert snapshot is not None and snapshot.complete, snapshot and snapshot.reasons
+    assert snapshot.zero_dte is not None and snapshot.zero_dte.quoted == 86
+    boundary = snapshot_boundary(SESSION, REPRICE_SLOT)
+    assert snapshot.ts is not None and boundary + LATE <= snapshot.ts < boundary + 2 * LATE
+
+
 def test_duvod_chybejici_kotace_9_15() -> None:
-    """E: bez eventu po odběru × jen event z odběru × starší 90 s (#1768)."""
+    """E: bez změny po odběru × 1 změna po odběru × starší 90 s (#1768)."""
     clock = _Clock(dt.datetime(2026, 11, 3, 14, 13, 30, tzinfo=UTC))
     cache = TastyChainCache(clock=clock)
     feed_quote(cache, ".OLD", 1.00, 1.10)  # stav z close před odběrem
@@ -637,8 +682,8 @@ def test_duvod_chybejici_kotace_9_15() -> None:
     feed_quote(cache, ".OLD", 1.01, 1.11)  # aktualizace v 9:13:30, pak nic
     now = snapshot_boundary(SESSION, PLAN_SLOT) + dt.timedelta(seconds=QUOTE_TIMEOUT_S)
     assert not any(rules.quote(s, now) for s in (".NONE", ".ONE", ".OLD"))
-    assert rules.why(".NONE", now) == "bez eventu po odběru"
-    assert rules.why(".ONE", now) == "jen event z odběru"
+    assert rules.why(".NONE", now) == "bez změny po odběru"
+    assert rules.why(".ONE", now) == "1 změna po odběru (< 2)"
     assert rules.why(".OLD", now) == f"starší {MAX_AGE_S:.0f} s"
 
 
