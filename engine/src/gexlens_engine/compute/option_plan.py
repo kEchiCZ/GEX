@@ -25,7 +25,7 @@ epiky („R:R při spoušti“) a K3 bod 6 („nejdřív v čase vstupu“); roz
 
 import datetime as dt
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -443,6 +443,59 @@ def _pick_variants(
     further = [row for row in rows if (row.strike - main.strike) * side > 0]
     backup = min(further, key=lambda row: abs(row.strike - main.strike), default=None)
     return main, backup
+
+
+def em_gap(
+    chain_0dte: Sequence[ChainRowLike], strikes: Collection[float], spot: float
+) -> str | None:
+    """Proč EM z řádků 0DTE nevznikne na strike nejbližším spotu; None = vznikne (K4 bod 7, B).
+
+    `strikes` = striky pásma s callem i putem. Chybí-li na nejbližším z nich zaplacená strana,
+    `_straddle_em` by tiše vzal vzdálenější strike a EM by neslo jiný straddle než celý řetěz.
+    """
+    if not strikes:
+        return "pásmo bez striku s callem i putem"
+    atm = min(strikes, key=lambda strike: (abs(strike - spot), strike))
+    found = _straddle_em(chain_0dte, spot)
+    if found is not None and found[0] == atm:
+        return None
+    paid = {(row.strike, row.right) for row in chain_0dte if _mid(row) > 0}
+    sides = [name for right, name in (("C", "call"), ("P", "put")) if (atm, right) not in paid]
+    return f"ATM straddle {atm:g} bez zaplacené kotace {' a '.join(sides)}"
+
+
+def variant_gaps(
+    chain_1dte: Sequence[ChainRowLike], strikes: Mapping[str, Collection[float]]
+) -> tuple[str, ...]:
+    """Proč výběr varianty z řádků 1DTE může uhnout od celého řetězu; prázdné = neuhne (K4 bod 7).
+
+    Kontroluje call i put, protože směr scénáře snímek řetězu nezná. `strikes` = striky pásma
+    per strana (`C`, `P`). Hlavní varianta (`_pick_variants`) musí mít oba sousední striky pásma
+    s kotací. Delta je ve striku monotónní, takže chybějící kontrakt dál od nich by k 0,25 blíž
+    nebyl. Záložní varianta je pak soused dál od peněz.
+    """
+    gaps: list[str] = []
+    for right, side, name in (("C", 1, "call"), ("P", -1, "put")):
+        main, _backup = _pick_variants(chain_1dte, right, side)
+        if main is None:
+            gaps.append(f"{name} bez kotace s IV a delta")
+            continue
+        ladder = sorted(strikes.get(right, ()))
+        if main.strike not in ladder:
+            raise ValueError(f"strike {main.strike:g}{right} řádku mimo striky pásma")
+        index = ladder.index(main.strike)
+        if index == 0 or index == len(ladder) - 1:
+            gaps.append(f"{name} |delta| 0,25 = {main.strike:g} na okraji pásma")
+            continue
+        quoted = {row.strike for row in chain_1dte if _quoted(row, right)}
+        missing = [ladder[i] for i in (index - 1, index + 1) if ladder[i] not in quoted]
+        if missing:
+            gaps.append(
+                f"{name} |delta| 0,25 = {main.strike:g}: soused "
+                + " a ".join(f"{strike:g}" for strike in missing)
+                + " bez kotace s IV a delta"
+            )
+    return tuple(gaps)
 
 
 def _clamp(ts: dt.datetime, low: dt.datetime, high: dt.datetime) -> dt.datetime:

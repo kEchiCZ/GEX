@@ -11,8 +11,9 @@
   implementaci F2a (#1741), rozhodl vlastník 3. 11. jako **K12 A**. **Revize 5. 11.:** vlastník
   změnil K4 na **C**. Opce QQQ se od 19.–20. 10. obchodují i před openem, takže plán vzniká
   v 9:15 ET se scénářem dne a v 9:31 ET se přecení (K4, oddíl „Revize 5. 11.“). (a) a K12 A
-  platí dál.
-- **Datum:** 2026-11-02 (revize K4 2026-11-05)
+  platí dál. **Revize 9. 11.:** úplnost snímků řetězu podle vstupů plánu místo prahu 90 % kotací
+  nad pásmem (K4 bod 7, vlastník „B+E“).
+- **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
   #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
@@ -313,9 +314,9 @@ přinese F1c (#1768).
 
 Odvozeno z C (zapsal agent 5. 11., aby C šlo implementovat):
 
-5. **Neúplný ranní snímek** znamená, že kotace nebo OI jsou pod prahem, nebo chybí vstup (EM,
-   poměr, spot). Pak plán vznikne v 9:15 bez opce s důvodem (a) a v 9:31 se sestaví celý z 9:31
-   jako dřív K4 A, včetně úrovní, poměru, EM a striku. Neúplnost není výsledek pravidla, jako
+5. **Neúplný ranní snímek** znamená, že chybí kotace, ze kterých plán čte (bod 7, 9. 11.), OI
+   je pod prahem, nebo chybí vstup (EM, poměr, spot). Pak plán vznikne v 9:15 bez opce s důvodem
+   (a) a v 9:31 se sestaví celý z 9:31 jako dřív K4 A, včetně úrovní, poměru, EM a striku. Neúplnost není výsledek pravidla, jako
    „žádná úroveň do 1 EM“ nebo „rozpočet nenastaven“. Takový plán z 9:15 platí a jen se
    přecení. Plán stojí vždy na jednom okamžiku, 9:15 a 9:31 se nemíchají (K9 B s úrovněmi z 9:15
    a opcí z 9:31 vlastník 3. 11. odmítl). Stav se tak mění, a „ZMĚNA“ vzniká, prakticky jen v tomto
@@ -325,11 +326,33 @@ Odvozeno z C (zapsal agent 5. 11., aby C šlo implementovat):
 7. **Ranní snímek F1c** bere jen kotace z ranní seance téhož dne (od 7:30 ET). Poslední kotaci
    z close, kterou DXLink pošle při odběru, nepočítá. OI bere ze Summary téhož rána. Že nese
    dnešní publikaci, F1c ověří proti OI po openu. Práh pokrytí 90 % platí, dokud ho měření v 9:15
-   nevyvrátí. Změnit ho může jen vlastník.
+   nevyvrátí. Změnit ho může jen vlastník. (Vyvráceno a změněno 9. 11., viz níže.)
    *Upřesnění 5. 11. (F1c #1768, rozhodl vlastník: Q1 A, Q2 A):* feed čas kotace nenese
    (`bidTime` = 0), takže kotace a greeks se počítají jen po aktualizaci, která přijde po eventu
    z odběru. Pásmo se odebere už v náběhu 9:13:30 ET, 90 s před hranicí. OI se počítá jen ze
    Summary s `dayId` = den seance.
+   *Měření a rozhodnutí 9. 11. (F1c #1768, vlastník v chatu: „B+E“):* práh 90 % kotací nad celým
+   pásmem ±3 % měření vyvrátilo. V 9:15 přišlo 69/80 (0DTE) a 67/80 (1DTE). Chyběly jen ITM
+   kontrakty s |delta| 0,69–0,95, kontrakty plánu byly všechny (#1768 issuecomment-6743822991).
+   Úplnost snímku 9:15 i 9:31 se proto posuzuje podle toho, co plán z řetězu čte:
+   - **0DTE:** ATM straddle na strike nejbližším spotu hranice má zaplacený call i put
+     (`option_plan.em_gap`). Jinak by EM tiše vzniklo z jiného straddlu.
+   - **1DTE:** pro call i put, protože směr scénáře snímek nezná, má kontrakt s |delta| nejblíž
+     0,25 oba sousední striky pásma s kotací (`option_plan.variant_gaps`). Delta je ve striku
+     monotónní, takže chybějící kontrakt dál od nich by k 0,25 blíž nebyl. Záložní varianta je
+     soused dál od peněz. Kontrakt 0,25 na okraji pásma je mezera.
+   - **OI** aspoň u 90 % kontraktů pásma v každé expiraci, beze změny.
+   Podíl kotací za celé pásmo jde jen do logu. Snímek čeká na úplnost nejdéle 40 s od hranice.
+   Úplný snímek 9:15 skončí hned, takže kotace z náběhu nestárnou k limitu 90 s. Snímek 9:31
+   čeká i na 90 % kotací pásma, protože jeho partice 1DTE drží Σ profil QQQ do konce dne.
+   Pravidla čerstvosti (2 změny po odběru, 90 s, `dayId`) se nemění, stará kotace z close tak
+   neprojde.
+   **E:** log uvede kontrakty pásma bez řádku podle důvodu. U 9:15 jsou to důvody „bez změny po
+   odběru“, „1 změna po odběru (< 2)“ (obvykle jen event z odběru) a „starší 90 s“. U 9:31
+   „bez kotace“, „kotace před openem“ a „starší 90 s“. U obou může jít o kotaci bez řádku (bid,
+   ask nebo IV z mid). Z uložených dat 9. 11. příčina zjistit nešla.
+   P1 stínu B čte celý řetěz 0DTE. 9. 11. byl GEX top v 9:31 s kontrakty chybějícími v 9:15
+   i bez nich stejný (663, 670, 660).
 8. **Souběh:** scénář vzniká v minutě 9:15 ET a snímek skončí nejpozději 40 s po hranici 9:15:00.
    Plán čeká na obojí (F2b #1742).
 

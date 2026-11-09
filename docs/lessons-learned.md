@@ -359,6 +359,11 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-11-09 — záporné `stale_age` v řádcích druhé expirace (#1768).** Snímek řetězu QQQ
+  stavěl řádky expirací v cyklu a mezi nimi čekal na zápis partice (`await asyncio.to_thread`).
+  Řádky 1DTE tak vznikly z kotací, které přišly až po okamžiku snímku: 9. 11. v 9:31 nesl řádek
+  `stale_age` −0,04 s a kotaci z doby po štítku. Odhalil to rozbor partice při ověření naživo. →
+  Řádky všech částí jednoho okamžiku postavit bez `await` a teprve potom zapisovat.
 - **2026-11-03 — „aplikace stojí, data jsou ze včera“: jeden řádek vypršelé expirace přebil celý den (#1759).**
   Extended plán (`plan_extended_expiries`) vyřazoval prošlé expirace kalendářním dnem UTC, IBKR
   pipeline ale roluje v settle (#1331). Vypršelá expirace tak po settle přešla do extended plánu
