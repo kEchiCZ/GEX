@@ -11,7 +11,7 @@ import pytest
 
 from gexlens_engine.compute.spot import SpotReading
 from gexlens_engine.config import Settings
-from gexlens_engine.storage.parquet_store import SnapshotRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import OiMissingRow, SnapshotRow, SnapshotWriter
 from gexlens_engine.tasty.adhoc import ADHOC_MAX_STRIKES_PER_SIDE
 from gexlens_engine.tasty.budget import ADHOC_RESERVE_ENTRIES, EVENTS_BY_PURPOSE, plan_subscriptions
 from gexlens_engine.tasty.mock import feed_greeks, feed_quote, feed_summary
@@ -24,6 +24,8 @@ from gexlens_engine.tasty.plan_chain import (
     REPRICE_SLOT,
     PlanChainSnapshotter,
     SnapshotSlot,
+    _AfterOpen,
+    _PreOpen,
     band_streamers,
     missed_slots,
     missing_data_level,
@@ -55,6 +57,26 @@ def _chain(expiries: list[str], low: int = 650, high: int = 750) -> ChainSymbols
             for right in ("C", "P")
         },
     )
+
+
+def _streamer(expiry: str, right: str, strike: int) -> str:
+    return f".QQQ{expiry[2:]}{right}{strike}"
+
+
+def _delta(streamer: str) -> float:
+    """Delta kontraktu mocku podle striku: call 0,25 na 710, put −0,25 na 690 (pásmo 679–721)."""
+    right, strike = streamer[-4], int(streamer[-3:])
+    call = min(0.99, max(0.01, 0.5 - (strike - SPOT) / 40.0))
+    return call if right == "C" else call - 1.0
+
+
+#: ITM kontrakty pásma s |delta| ≥ 0,7 v 0DTE i 1DTE, které 9. 11. v 9:15 chyběly (28 z 86)
+ITM = frozenset(
+    _streamer(expiry, right, strike)
+    for expiry in ("20261103", "20261104")
+    for right, strikes in (("C", range(679, 693)), ("P", range(708, 722)))
+    for strike in strikes
+)
 
 
 class _Clock:
@@ -98,6 +120,7 @@ class _Harness:
         tick_quotes: bool = False,
         tick_greeks: bool = False,
         summary_day_id: int | None = None,
+        silent: frozenset[str] = frozenset(),
     ) -> None:
         self.clock = _Clock(start)
         self.cache = TastyChainCache(clock=self.clock)
@@ -113,6 +136,8 @@ class _Harness:
         self.tick_quotes = tick_quotes
         self.tick_greeks = tick_greeks
         self.summary_day_id = summary_day_id
+        #: Kontrakty jen s eventem z odběru, bez aktualizace (9. 11.: ITM v 9:15)
+        self.silent = silent
         self.ticks = 0
         self.chain = chain or _chain(["20261103", "20261104", "20261105"])
         reading = nq if nq is not None else SpotReading(NQ, start, "ibkr", True)
@@ -136,7 +161,7 @@ class _Harness:
                     feed_quote(self.cache, "QQQ", SPOT - 0.01, SPOT + 0.01)
             elif self.deliver_options:
                 feed_quote(self.cache, streamer, 1.00, 1.10)
-                feed_greeks(self.cache, streamer, iv=0.30, delta=0.5, gamma=0.05)
+                feed_greeks(self.cache, streamer, iv=0.30, delta=_delta(streamer), gamma=0.05)
                 if self.deliver_summary and not streamer.endswith("C700"):
                     feed_summary(self.cache, streamer, 120.0, day_id=self.summary_day_id)
 
@@ -150,11 +175,13 @@ class _Harness:
                     # Mění se velikosti, mid zůstává: pásmo z náběhu = pásmo kolem SPOT
                     size = 1.0 + self.ticks
                     feed_quote(self.cache, "QQQ", SPOT - 0.01, SPOT + 0.01, size, size)
-            else:
+            elif streamer not in self.silent:
                 if self.tick_quotes:
                     feed_quote(self.cache, streamer, 1.00 + step, 1.10 + step)
                 if self.tick_greeks:
-                    feed_greeks(self.cache, streamer, iv=0.30 + step, delta=0.5, gamma=0.05)
+                    feed_greeks(
+                        self.cache, streamer, iv=0.30 + step, delta=_delta(streamer), gamma=0.05
+                    )
 
     def partition(self, expiry: str) -> Path:
         return self.tmp_path / "snapshots" / "QQQ" / expiry / f"{SESSION.isoformat()}.parquet"
@@ -171,6 +198,7 @@ def _morning(
     tick_quotes: bool = True,
     tick_greeks: bool = True,
     summary_day_id: int | None = SESSION_DAY_ID,
+    silent: frozenset[str] = frozenset(),
 ) -> _Harness:
     """Ranní seance opcí (#1768): podklad i opce se aktualizují, Summary nese dayId seance."""
     return _Harness(
@@ -180,6 +208,7 @@ def _morning(
         tick_quotes=tick_quotes,
         tick_greeks=tick_greeks,
         summary_day_id=summary_day_id,
+        silent=silent,
     )
 
 
@@ -369,8 +398,12 @@ async def test_bez_kotaci_do_limitu_neuplny_s_duvodem(tmp_path: Path) -> None:
     harness = _Harness(tmp_path, start=_start(), deliver_options=False)
     snapshot = await harness.snapshotter.run(SESSION, REPRICE_SLOT)
     assert snapshot is not None and not snapshot.complete
-    assert any("0DTE 20261103: kotace 0/86" in reason for reason in snapshot.reasons)
-    assert any("1DTE 20261104: žádný platný řádek" in reason for reason in snapshot.reasons)
+    assert "0DTE 20261103: žádný platný řádek" in snapshot.reasons
+    assert "1DTE 20261104: žádný platný řádek" in snapshot.reasons
+    assert not any("kotace 0/86" in reason for reason in snapshot.reasons)  # jen log (K4 bod 7)
+    assert "kotace 0/86" in snapshot.describe()
+    assert snapshot.zero_dte is not None
+    assert [why for why, _ in snapshot.zero_dte.missing] == ["bez kotace"]
     assert snapshot.ts is not None
     limit = snapshot_boundary(SESSION, REPRICE_SLOT) + dt.timedelta(seconds=QUOTE_TIMEOUT_S)
     assert limit <= snapshot.ts <= limit + dt.timedelta(seconds=1)
@@ -503,12 +536,125 @@ async def test_kotace_z_close_pri_odberu_se_nepocita(tmp_path: Path) -> None:
     assert snapshot is not None and not snapshot.complete
     assert snapshot.zero_dte is not None
     assert (snapshot.zero_dte.quoted, len(snapshot.zero_dte.rows)) == (0, 0)
-    assert any("0DTE 20261103: kotace 0/86 (0%) do 40 s od 9:15 ET" in r for r in snapshot.reasons)
-    assert any("1DTE 20261104: žádný platný řádek" in reason for reason in snapshot.reasons)
+    assert "0DTE 20261103: žádný platný řádek" in snapshot.reasons
+    assert "1DTE 20261104: žádný platný řádek" in snapshot.reasons
+    # E: kontrakty mají jen event z odběru (stav z close), aktualizace nepřišla
+    assert [why for why, _ in snapshot.zero_dte.missing] == ["jen event z odběru"]
+    assert "bez řádku: jen event z odběru 679C 679P 680C" in snapshot.describe()
     limit = snapshot_boundary(SESSION, PLAN_SLOT) + dt.timedelta(seconds=QUOTE_TIMEOUT_S)
     assert snapshot.ts is not None and limit <= snapshot.ts <= limit + dt.timedelta(seconds=1)
     assert not harness.partition("20261103").exists()
     assert harness.history[-1] == set() and harness.snapshotter.streamers() == set()
+
+
+async def test_ranni_bez_itm_je_uplny(tmp_path: Path) -> None:
+    """9. 11.: v 9:15 chyběla jen ITM s |delta| 0,69–0,95, plán je nečte (K4 bod 7, B)."""
+    harness = _morning(tmp_path, silent=ITM)
+    snapshot = await harness.snapshotter.run(SESSION, PLAN_SLOT)
+    assert snapshot is not None
+    assert snapshot.complete, snapshot.reasons
+    # Úplný hned na hranici, nečeká do limitu (kotace by stárly nad 90 s)
+    assert snapshot.ts == snapshot_boundary(SESSION, PLAN_SLOT)
+    assert snapshot.zero_dte is not None and snapshot.one_dte is not None
+    for snap in (snapshot.zero_dte, snapshot.one_dte):
+        assert (snap.contracts, snap.quoted, len(snap.rows)) == (86, 58, 58)
+        assert snap.quoted_share < 0.9  # podíl pásma jen do logu
+        expected = tuple(f"{k}C" for k in range(679, 693)) + tuple(f"{k}P" for k in range(708, 722))
+        assert snap.missing == (("jen event z odběru", expected),)
+        assert pq.read_table(harness.partition(snap.expiry)).num_rows == 58
+    assert "kotace 58/86" in snapshot.describe()
+    assert "(bez řádku: jen event z odběru 679C 680C" in snapshot.describe()
+
+
+async def test_ranni_bez_souseda_delta_025_neuplny(tmp_path: Path) -> None:
+    """Chybí-li soused kontraktu |delta| 0,25, výběr varianty by mohl tiše uhnout."""
+    harness = _morning(tmp_path, silent=frozenset({_streamer("20261104", "C", 711)}))
+    snapshot = await harness.snapshotter.run(SESSION, PLAN_SLOT)
+    assert snapshot is not None and not snapshot.complete
+    assert snapshot.reasons == (
+        "1DTE 20261104: call |delta| 0,25 = 710: soused 711 bez kotace s IV a delta"
+        " do 40 s od 9:15 ET",
+    )
+    assert snapshot.one_dte is not None
+    assert snapshot.one_dte.missing == (("jen event z odběru", ("711C",)),)
+    limit = snapshot_boundary(SESSION, PLAN_SLOT) + dt.timedelta(seconds=QUOTE_TIMEOUT_S)
+    assert snapshot.ts is not None and limit <= snapshot.ts <= limit + dt.timedelta(seconds=1)
+    assert pq.read_table(harness.partition("20261104")).num_rows == 85  # naměřené se zapíše
+
+
+async def test_ranni_bez_atm_callu_neuplny(tmp_path: Path) -> None:
+    """Bez callu na strike nejbližším spotu by EM vzniklo z jiného straddlu."""
+    harness = _morning(tmp_path, silent=frozenset({_streamer("20261103", "C", 700)}))
+    snapshot = await harness.snapshotter.run(SESSION, PLAN_SLOT)
+    assert snapshot is not None and not snapshot.complete
+    assert snapshot.reasons == (
+        "0DTE 20261103: ATM straddle 700 bez zaplacené kotace call do 40 s od 9:15 ET",
+    )
+
+
+async def test_radky_obou_expiraci_z_jednoho_okamziku(tmp_path: Path) -> None:
+    """9. 11. 9:31: řádky 1DTE vznikly až po zápisu 0DTE a nesly `stale_age` −0,04 s."""
+    harness = _Harness(tmp_path, start=_start())
+    writer = harness.snapshotter.writer
+    written: list[str] = []
+
+    class _SlowWriter:
+        """Zápis trvá a DXLink mezitím doručí novější kotace."""
+
+        def write_minute(
+            self, product: str, expiry: str, day: dt.date, rows: list[SnapshotRow]
+        ) -> None:
+            written.append(expiry)
+            harness.clock.now += dt.timedelta(seconds=0.5)
+            for streamer in harness.snapshotter.streamers() - {"QQQ"}:
+                feed_quote(harness.cache, streamer, 2.00, 2.10)
+            writer.write_minute(product, expiry, day, rows)
+
+        def write_oi_missing(
+            self, product: str, expiry: str, day: dt.date, rows: list[OiMissingRow]
+        ) -> None:
+            writer.write_oi_missing(product, expiry, day, rows)
+
+    harness.snapshotter.writer = cast(SnapshotWriter, _SlowWriter())
+    snapshot = await harness.snapshotter.run(SESSION, REPRICE_SLOT)
+    assert snapshot is not None and snapshot.complete, snapshot and snapshot.reasons
+    assert written == ["20261103", "20261104"]
+    for snap in (snapshot.zero_dte, snapshot.one_dte):
+        assert snap is not None
+        assert all(row.stale_age >= 0 for row in snap.rows)
+        assert {row.bid for row in snap.rows} == {1.00}
+
+
+def test_duvod_chybejici_kotace_9_15() -> None:
+    """E: bez eventu po odběru × jen event z odběru × starší 90 s (#1768)."""
+    clock = _Clock(dt.datetime(2026, 11, 3, 14, 13, 30, tzinfo=UTC))
+    cache = TastyChainCache(clock=clock)
+    feed_quote(cache, ".OLD", 1.00, 1.10)  # stav z close před odběrem
+    rules = _PreOpen(cache, SESSION)
+    rules.mark([".NONE", ".ONE", ".OLD"])
+    feed_quote(cache, ".ONE", 1.00, 1.10)  # event z odběru
+    feed_quote(cache, ".OLD", 1.00, 1.10, bid_size=2.0)  # event z odběru
+    feed_quote(cache, ".OLD", 1.01, 1.11)  # aktualizace v 9:13:30, pak nic
+    now = snapshot_boundary(SESSION, PLAN_SLOT) + dt.timedelta(seconds=QUOTE_TIMEOUT_S)
+    assert not any(rules.quote(s, now) for s in (".NONE", ".ONE", ".OLD"))
+    assert rules.why(".NONE", now) == "bez eventu po odběru"
+    assert rules.why(".ONE", now) == "jen event z odběru"
+    assert rules.why(".OLD", now) == f"starší {MAX_AGE_S:.0f} s"
+
+
+def test_duvod_chybejici_kotace_9_31() -> None:
+    open_ts = dt.datetime(2026, 11, 3, 14, 30, tzinfo=UTC)
+    clock = _Clock(open_ts - dt.timedelta(seconds=10))
+    cache = TastyChainCache(clock=clock)
+    rules = _AfterOpen(cache, open_ts)
+    feed_quote(cache, ".PRE", 1.00, 1.10)
+    clock.now = open_ts + dt.timedelta(seconds=1)
+    feed_quote(cache, ".OLD", 1.00, 1.10)
+    now = open_ts + dt.timedelta(seconds=MAX_AGE_S + 5)
+    assert not any(rules.quote(s, now) for s in (".NONE", ".PRE", ".OLD"))
+    assert rules.why(".NONE", now) == "bez kotace"
+    assert rules.why(".PRE", now) == "kotace před openem"
+    assert rules.why(".OLD", now) == f"starší {MAX_AGE_S:.0f} s"
 
 
 async def test_greeks_bez_aktualizace_nahradi_iv_z_mid(tmp_path: Path) -> None:

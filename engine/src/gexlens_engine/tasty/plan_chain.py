@@ -14,10 +14,17 @@ Průběh snímku 9:31 ET (přecenění, F1a):
 3. **Pásmo ±3 %** kolem této ceny v 0DTE a 1DTE (ADR-0062, Odvozeno) se odebere jako vlastní
    účel `plan_chain` v rozpočtu DXLink. Čerpá rezervu ad-hoc (`tasty/budget.py`), takže
    pokrytí, které trader vidí, neubírá.
-4. **Čekání na kotace**, dokud kotaci nemá aspoň `MIN_QUOTED_SHARE` kontraktů pásma v každé
-   expiraci, nejdéle `QUOTE_TIMEOUT_S` od hranice. Řádky tak nesou štítek minuty hranice.
+4. **Čekání na úplnost**, nejdéle `QUOTE_TIMEOUT_S` od hranice. Řádky tak nesou štítek minuty
+   hranice. Úplnost (K4 bod 7, rozhodnuto 9. 11.: B) posuzuje, co plán z řetězu čte:
+   - 0DTE: ATM straddle na strike nejbližším spotu (`option_plan.em_gap`);
+   - 1DTE: pro call i put kontrakt s |delta| nejblíž 0,25 s oběma sousedními striky
+     (`option_plan.variant_gaps`);
+   - OI aspoň u `MIN_OI_SHARE` kontraktů pásma v každé expiraci.
+   Podíl kotací za celé pásmo jde jen do logu. Měření 9. 11. ukázalo, že v 9:15 chybí ITM
+   kontrakty (|delta| 0,69–0,95), které plán nečte.
 5. **Zápis** přes `build_snapshot_rows` do standardních partic `snapshots/QQQ/{exp}/{den}.parquet`
-   (OI bez hodnoty do `oimissing`, #465), pak **uvolnění subskripce**.
+   (OI bez hodnoty do `oimissing`, #465), pak **uvolnění subskripce**. Řádky obou expirací
+   vzniknou v jednom okamžiku před zápisem, takže `stale_age` není záporné.
 
 Point-in-time v 9:31: kotace přijatá před US openem se nepočítá (před openem jsou ceny zamrzlé
 z close nebo se spreadem 4–6 %, ADR-0062 K4). Totéž platí pro OI: cache stavy nemaže a dnešní
@@ -36,7 +43,9 @@ Snímek 9:15 ET (vznik plánu, F1c) se liší ve třech věcech (Rozhodnuto 5. 1
   dnešní publikaci.
 
 Co se do limitu nesejde, vrátí snímek jako neúplný s důvodem (`reasons`). Naměřené řádky se
-zapíšou i tak a odhad místo nich nevzniká (K4 a).
+zapíšou i tak a odhad místo nich nevzniká (K4 a). Kontrakty pásma bez řádku nese log podle
+důvodu (`ExpirySnapshot.missing`, K4 bod 7, E), aby šlo poznat, zda chyběla aktualizace po
+odběru, nebo kotace zestárla nad `MAX_AGE_S`.
 """
 
 import asyncio
@@ -48,6 +57,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.compute.option_plan import em_gap, variant_gaps
 from gexlens_engine.compute.settle import ET_TZ, is_trading_session, us_open_ts
 from gexlens_engine.compute.spot import SpotReading
 from gexlens_engine.storage.parquet_store import OiMissingRow, SnapshotRow, SnapshotWriter
@@ -73,8 +83,8 @@ PURPOSE = "plan_chain"
 BAND_PCT = 3.0
 #: Limit čekání na kotace od hranice; snímek tak zůstane v minutě hranice
 QUOTE_TIMEOUT_S = 40.0
-#: Podíl kontraktů pásma s kotací a s OI v každé expiraci, od kterého snímek dál nečeká
-MIN_QUOTED_SHARE = 0.9
+#: Podíl kontraktů pásma s OI v každé expiraci, od kterého je snímek úplný (K4 bod 7)
+MIN_OI_SHARE = 0.9
 #: Perioda kontroly kotací během čekání
 POLL_S = 0.5
 #: Stáří kotace, po kterém se nepočítá (shodné s ad-hoc pohledem)
@@ -84,6 +94,9 @@ MAX_AGE_S = ADHOC_MAX_AGE_S
 LIVE_CHANGES = 2
 #: dxFeed `dayId` = počet dní od tohoto data
 _DAY_ID_EPOCH = dt.date(1970, 1, 1)
+#: Důvod chybějícího řádku, když kotace platí: bid 0, ask pod bidem nebo greeks nejdou
+#: dopočítat z mid (`build_snapshot_rows`)
+ROW_REJECTED = "kotace bez řádku (bid, ask nebo IV z mid)"
 
 
 @dataclass(frozen=True)
@@ -210,6 +223,8 @@ class ExpirySnapshot:
     rows: tuple[SnapshotRow, ...]
     #: Řádky bez OI (v řádku 0.0, v partici `oimissing`, #465)
     oi_missing: int
+    #: Kontrakty pásma bez řádku podle důvodu, např. ("jen event z odběru", ("671P", …)) (E)
+    missing: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @property
     def quoted_share(self) -> float:
@@ -255,9 +270,11 @@ class PlanChainSnapshot:
             if snap is None:
                 parts.append(f"{label} —")
             else:
+                gaps = "; ".join(f"{why} {' '.join(names)}" for why, names in snap.missing)
                 parts.append(
                     f"{label} {snap.expiry}: kotace {snap.quoted}/{snap.contracts}, "
                     f"OI {snap.with_oi}/{snap.contracts}, {len(snap.rows)} řádků"
+                    + (f" (bez řádku: {gaps})" if gaps else "")
                 )
         parts.append(
             f"{PRODUCT} {_fmt(self.spot, 2)}, {REFERENCE} {_fmt(self.spot_nq, 2)} "
@@ -302,6 +319,10 @@ class _Freshness(Protocol):
 
     def quote(self, streamer: str, now: dt.datetime) -> bool: ...
 
+    def why(self, streamer: str, now: dt.datetime) -> str:
+        """Proč kotace neplatí; volá se jen, když `quote` vrátí False (E)."""
+        ...
+
     def oi(self, streamer: str) -> bool: ...
 
     def states(self) -> ContractStates: ...
@@ -322,6 +343,14 @@ class _AfterOpen:
 
     def quote(self, streamer: str, now: dt.datetime) -> bool:
         return _fresh_quote(self.cache.state(streamer), now, self.not_before)
+
+    def why(self, streamer: str, now: dt.datetime) -> str:
+        state = self.cache.state(streamer)
+        if state is None or state.quote.updated_at is None:
+            return "bez kotace"
+        if state.quote.updated_at < self.not_before:
+            return "kotace před openem"
+        return f"starší {MAX_AGE_S:.0f} s"
 
     def oi(self, streamer: str) -> bool:
         return _fresh_oi(self.cache.state(streamer), self.not_before)
@@ -368,6 +397,18 @@ class _PreOpen:
             return False
         return (now - state.quote.updated_at).total_seconds() <= MAX_AGE_S
 
+    def why(self, streamer: str, now: dt.datetime) -> str:
+        state = self.cache.state(streamer)
+        base = self._base.get(streamer)
+        if state is None or base is None or state.quote.updated_at is None:
+            return "bez eventu po odběru"
+        changes = state.quote_changes - base[0]
+        if changes <= 0:
+            return "bez eventu po odběru"
+        if changes < LIVE_CHANGES:
+            return "jen event z odběru"
+        return f"starší {MAX_AGE_S:.0f} s"
+
     def oi(self, streamer: str) -> bool:
         state = self.cache.state(streamer)
         return (
@@ -393,6 +434,16 @@ class _PreOpen:
 
     def max_age_s(self, ts: dt.datetime) -> float:
         return MAX_AGE_S
+
+
+@dataclass(frozen=True)
+class _Assessment:
+    """Posouzení snímku v okamžiku `ts`: řádky a OI bez hodnoty per expirace, důvody neúplnosti."""
+
+    ts: dt.datetime
+    snaps: dict[str, ExpirySnapshot]
+    oi_missing: dict[str, list[OiMissingRow]]
+    reasons: tuple[str, ...]
 
 
 @dataclass
@@ -512,27 +563,71 @@ class PlanChainSnapshotter:
         if band is None:
             band = band_streamers(chain, expiries, spot)
             self._subscribe(underlying, band, rules)
-        await self._wait_quotes(band, rules, deadline)
-
-        ts = self.clock()
-        ts_min = ts.replace(second=0, microsecond=0)
-        build_spot = self._mid(underlying, ts, rules) or spot
-        max_age_s = rules.max_age_s(ts)
-        states = rules.states()
-        snaps: dict[str, ExpirySnapshot] = {}
-        for expiry in expiries:
-            streamers = band[expiry]
-            quoted = sum(1 for s in streamers if rules.quote(s, ts))
-            with_oi = sum(1 for s in streamers if rules.oi(s))
-            band_chain = ChainSymbols(
+        chains = {
+            expiry: ChainSymbols(
                 product=chain.product,
                 day=chain.day,
                 by_contract={
                     key: streamer
                     for key, streamer in chain.by_contract.items()
-                    if key[0] == expiry and streamer in streamers
+                    if key[0] == expiry and streamer in band[expiry]
                 },
             )
+            for expiry in expiries
+        }
+        while True:
+            assessed = self._assess(chains, zero, underlying, spot, rules, slot)
+            if not assessed.reasons or assessed.ts >= deadline:
+                break
+            await self.sleep(POLL_S)
+
+        reasons.extend(assessed.reasons)
+        day = assessed.ts.replace(second=0, microsecond=0).date()
+        for expiry, snap in assessed.snaps.items():
+            if not snap.rows:
+                continue
+            await asyncio.to_thread(self.writer.write_minute, PRODUCT, expiry, day, list(snap.rows))
+            if assessed.oi_missing[expiry]:
+                await asyncio.to_thread(
+                    self.writer.write_oi_missing, PRODUCT, expiry, day, assessed.oi_missing[expiry]
+                )
+        return replace(
+            empty,
+            reasons=tuple(reasons),
+            spot_ts=spot_ts,
+            spot=spot,
+            spot_nq=spot_nq,
+            nq_source=reading.source if spot_nq is not None else None,
+            ratio=ratio,
+            ts=assessed.ts,
+            zero_dte=assessed.snaps.get(zero) if zero is not None else None,
+            one_dte=assessed.snaps.get(one) if one is not None else None,
+        )
+
+    def _assess(
+        self,
+        chains: dict[str, ChainSymbols],
+        zero: str | None,
+        underlying: str,
+        spot: float,
+        rules: _Freshness,
+        slot: SnapshotSlot,
+    ) -> _Assessment:
+        """Řádky všech expirací a důvody neúplnosti v jednom okamžiku, bez await (K4 bod 7, B).
+
+        EM se posuzuje ke `spot` hranice, tedy k ceně, se kterou plán vznikne.
+        """
+        ts = self.clock()
+        ts_min = ts.replace(second=0, microsecond=0)
+        build_spot = self._mid(underlying, ts, rules) or spot
+        max_age_s = rules.max_age_s(ts)
+        states = rules.states()
+        limit = f"do {QUOTE_TIMEOUT_S:.0f} s od {slot.label} ET"
+        snaps: dict[str, ExpirySnapshot] = {}
+        oi_missing_of: dict[str, list[OiMissingRow]] = {}
+        reasons: list[str] = []
+        for expiry, band_chain in chains.items():
+            contracts = band_chain.by_contract
             rows, oi_missing = build_snapshot_rows(
                 band_chain,
                 expiry,
@@ -543,47 +638,48 @@ class PlanChainSnapshotter:
                 max_age_s=max_age_s,
             )
             rows, oi_missing = self._drop_stale_oi(band_chain, rows, oi_missing, rules)
-            label = "0DTE" if expiry == zero else "1DTE"
+            present = {(row.strike, row.right) for row in rows}
+            quoted = 0
+            missing: dict[str, list[str]] = {}
+            for (_expiry, strike, right), streamer in sorted(contracts.items()):
+                fresh = rules.quote(streamer, ts)
+                quoted += fresh
+                if (strike, right) not in present:
+                    why = ROW_REJECTED if fresh else rules.why(streamer, ts)
+                    missing.setdefault(why, []).append(f"{strike:g}{right}")
+            with_oi = sum(1 for streamer in contracts.values() if rules.oi(streamer))
             snap = ExpirySnapshot(
                 expiry=expiry,
-                contracts=len(streamers),
+                contracts=len(contracts),
                 quoted=quoted,
                 with_oi=with_oi,
                 rows=tuple(rows),
                 oi_missing=len(oi_missing),
+                missing=tuple((why, tuple(names)) for why, names in missing.items()),
             )
             snaps[expiry] = snap
-            if snap.quoted_share < MIN_QUOTED_SHARE:
+            oi_missing_of[expiry] = oi_missing
+            label = "0DTE" if expiry == zero else "1DTE"
+            if snap.oi_share < MIN_OI_SHARE:
                 reasons.append(
-                    f"{label} {expiry}: kotace {quoted}/{len(streamers)} "
-                    f"({snap.quoted_share:.0%}) do {QUOTE_TIMEOUT_S:.0f} s od {slot.label} ET"
-                )
-            if snap.oi_share < MIN_QUOTED_SHARE:
-                reasons.append(
-                    f"{label} {expiry}: {rules.oi_label} {with_oi}/{len(streamers)} "
-                    f"({snap.oi_share:.0%}) do {QUOTE_TIMEOUT_S:.0f} s od {slot.label} ET"
+                    f"{label} {expiry}: {rules.oi_label} {with_oi}/{len(contracts)} "
+                    f"({snap.oi_share:.0%}) {limit}"
                 )
             if not rows:
                 reasons.append(f"{label} {expiry}: žádný platný řádek")
                 continue
-            day = ts_min.date()
-            await asyncio.to_thread(self.writer.write_minute, PRODUCT, expiry, day, rows)
-            if oi_missing:
-                await asyncio.to_thread(
-                    self.writer.write_oi_missing, PRODUCT, expiry, day, oi_missing
-                )
-        return replace(
-            empty,
-            reasons=tuple(reasons),
-            spot_ts=spot_ts,
-            spot=spot,
-            spot_nq=spot_nq,
-            nq_source=reading.source if spot_nq is not None else None,
-            ratio=ratio,
-            ts=ts,
-            zero_dte=snaps.get(zero) if zero is not None else None,
-            one_dte=snaps.get(one) if one is not None else None,
-        )
+            if expiry == zero:
+                calls = {strike for (_e, strike, right) in contracts if right == "C"}
+                puts = {strike for (_e, strike, right) in contracts if right == "P"}
+                gap = em_gap(rows, calls & puts, spot)
+                gaps: tuple[str, ...] = (gap,) if gap is not None else ()
+            else:
+                ladder: dict[str, set[float]] = {"C": set(), "P": set()}
+                for _e, strike, right in contracts:
+                    ladder.setdefault(right, set()).add(strike)
+                gaps = variant_gaps(rows, ladder)
+            reasons.extend(f"{label} {expiry}: {gap} {limit}" for gap in gaps)
+        return _Assessment(ts=ts, snaps=snaps, oi_missing=oi_missing_of, reasons=tuple(reasons))
 
     def _notify(self) -> None:
         try:
@@ -645,21 +741,3 @@ class PlanChainSnapshotter:
                 missing.append(OiMissingRow(ts_min=row.ts_min, strike=row.strike, right=row.right))
             kept.append(row)
         return kept, missing
-
-    async def _wait_quotes(
-        self, band: dict[str, frozenset[str]], rules: _Freshness, deadline: dt.datetime
-    ) -> None:
-        """Čeká na `MIN_QUOTED_SHARE` kontraktů s kotací i OI v každé expiraci, do `deadline`."""
-        while True:
-            now = self.clock()
-            if all(
-                streamers
-                and sum(1 for s in streamers if rules.quote(s, now) and rules.oi(s))
-                / len(streamers)
-                >= MIN_QUOTED_SHARE
-                for streamers in band.values()
-            ):
-                return
-            if now >= deadline:
-                return
-            await self.sleep(POLL_S)
