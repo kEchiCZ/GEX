@@ -25,6 +25,8 @@ from gexlens_engine.compute.option_plan import (
     PlanRules,
     build_option_plan,
     five_minute_bars,
+    jsonable,
+    plan_to_json,
 )
 from gexlens_engine.compute.scenario import Bar
 from gexlens_engine.compute.settle import settle_ts
@@ -534,3 +536,36 @@ def test_five_minute_bars_only_closed() -> None:
     assert (gap[0].high, gap[0].low, gap[0].close) == (4, 0, 3)
     full = five_minute_bars([bar(i, i) for i in range(5)], start, start + dt.timedelta(hours=1))
     assert len(full) == 1 and full[0].close == 4
+
+
+# ── JSON pro option_plans (F2b #1742) ───────────────────────────────
+
+
+def test_plan_to_json_nese_cely_plan_a_verdikt() -> None:
+    """K2 A: plán jde do JSON celý, časy v UTC, verdikt plánu i hlavní slovo do sloupce."""
+    waiting = _plan(bars=())
+    data = plan_to_json(waiting)
+    assert json.loads(json.dumps(data)) == data
+    assert data["verdict"] == waiting.verdict and waiting.verdict_kind == "čeká"
+    assert data["created_at"] == "2026-11-02T14:31:00+00:00"
+    assert data["level_a"][0] == "flip" and data["p1"]["blocks"] is True
+    assert [v["role"] for v in data["variants"]] == ["hlavní", "záložní"]
+    assert data["variants"][0]["expiry"] == "2026-11-03"
+    assert data["variants"][0]["pricing"] is None  # K12 A: R:R až při spoušti
+    traded = _plan()
+    assert traded.verdict_kind == "obchodovat"
+    assert plan_to_json(traded)["entry"]["kind"] == "A"
+    unset = _plan(bars=(), account=AccountParams(None, None))
+    assert unset.verdict_kind == "neobchodovat"
+    empty = _plan(bars=(), chain_1dte=[])
+    assert empty.variants == () and empty.verdict_kind == "neobchodovat"
+
+
+def test_json_odmitne_nan_a_naivni_cas() -> None:
+    """Chyba výpočtu se neschová do `null`; cesta v chybě ukáže pole."""
+    with pytest.raises(ValueError, match=r"plán\.ratio"):
+        plan_to_json(dataclasses.replace(_plan(bars=()), ratio=float("nan")))
+    with pytest.raises(ValueError, match="bez časové zóny"):
+        jsonable({"ts": dt.datetime(2026, 11, 2, 14, 15)})
+    with pytest.raises(TypeError, match="set"):
+        jsonable({"x": {1, 2}})

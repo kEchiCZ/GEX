@@ -6,9 +6,11 @@ Plán je převod auto-scénáře NQ na opci QQQ 1DTE (ADR-0062 bod 2), ne vlastn
 - dvě varianty opce z řetězu 1DTE (bod 4).
 
 Pravidla P1–P5 platí podle K3 A: vstup A po odmítnutí od úrovně, SL za extrémem od testu
-a okno spouště do exitu. Plán vzniká v 9:31 ET (K4 A). Předá-li volající bary po vzniku,
-funkce najde spoušť vstupu A a ocení ji modelem (P3, P4). Kotace v minutě spouště a průběh
-po vstupu patří vyhodnocení (F3 #1748).
+a okno spouště do exitu. Plán vzniká v 9:15 ET se scénářem dne z ranního snímku řetězu
+a v 9:31 ET se přecení (K4 C, F2b #1742, F2c #1769). Neúplný ranní snímek = plán v 9:15 bez
+opce a v 9:31 celý z 9:31 (K4 bod 5). Předá-li volající bary po vzniku, funkce najde spoušť
+vstupu A a ocení ji modelem (P3, P4). Kotace v minutě spouště a průběh po vstupu patří
+vyhodnocení (F3 #1748). Do JSON tabulky `option_plans` plán převede `plan_to_json` (K2 A).
 
 Hlavní plán má jen vstup A a hledá ho jednou (K6 B). Stíny track recordu (K10 B) jsou
 parametry téže funkce:
@@ -23,11 +25,12 @@ Při vzniku plán R:R ani ztrátu při SL nemá: SL podle K3 bodu 3 závisí na 
 epiky („R:R při spoušti“) a K3 bod 6 („nejdřív v čase vstupu“); rozhodnuto K12 A.
 """
 
+import dataclasses
 import datetime as dt
 import math
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from gexlens_engine.compute.dayverdict import AutoScenario, LevelInputs
 from gexlens_engine.compute.emrespect import StraddleQuote, straddle_em
@@ -264,16 +267,29 @@ class OptionPlan:
     p5: str
     model_label: str = MODEL_LABEL
 
-    @property
-    def verdict(self) -> str:
-        """Verdikt plánu: obchodovat, když aspoň jedna varianta; jinak důvod hlavní varianty."""
+    def _chosen(self) -> OptionVariant | None:
+        """Varianta, podle které se čte verdikt plánu: obchodovat, pak čeká, jinak hlavní."""
         if not self.variants:
-            return " — ".join(("neobchodovat", "; ".join(self.missing) or "bez opce"))
+            return None
         for wanted in ("obchodovat", "čeká"):
             chosen = next((v for v in self.variants if v.verdict == wanted), None)
             if chosen is not None:
-                return chosen.label
-        return self.variants[0].label
+                return chosen
+        return self.variants[0]
+
+    @property
+    def verdict(self) -> str:
+        """Verdikt plánu: obchodovat, když aspoň jedna varianta; jinak důvod hlavní varianty."""
+        chosen = self._chosen()
+        if chosen is None:
+            return " — ".join(("neobchodovat", "; ".join(self.missing) or "bez opce"))
+        return chosen.label
+
+    @property
+    def verdict_kind(self) -> Verdict:
+        """Hlavní slovo verdiktu plánu bez důvodu (sloupec `option_plans.verdict`)."""
+        chosen = self._chosen()
+        return chosen.verdict if chosen is not None else "neobchodovat"
 
 
 def _cz(value: float, digits: int = 2) -> str:
@@ -736,7 +752,10 @@ def build_option_plan(
     bars: Sequence[PathBar] = (),
     rules: PlanRules = MAIN_RULES,
 ) -> OptionPlan:
-    """Plán opce QQQ v minutě `now` (9:31 ET, K4 A) z auto-scénáře NQ a úrovní NQ téže minuty.
+    """Plán opce QQQ v minutě `now` z auto-scénáře NQ a úrovní NQ téže minuty.
+
+    `now` je 9:15 ET se scénářem dne (K4 C), nebo 9:31 ET, když ranní snímek nebyl úplný
+    (K4 bod 5). Řetěz i poměr jsou z téhož okamžiku, 9:15 a 9:31 se nemíchají.
 
     - `ratio` = NQ/QQQ z close poslední uzavřené minuty obou před vznikem, `spot` = cena QQQ.
     - `bars` = 1m bary QQQ. Prázdné = plán při vzniku. S bary po vzniku se hledá spoušť
@@ -842,3 +861,40 @@ def build_option_plan(
         missing=tuple(missing),
         p5=_p5(side, entries.chosen, variants[0] if variants else None, em_value),
     )
+
+
+def jsonable(value: object, path: str = "plán") -> Any:
+    """Hodnota plánu jako JSON: pole dataclass, časy ISO 8601 v UTC, n-tice jako seznamy.
+
+    Nekonečné číslo nebo NaN je chyba výpočtu, ne mezera → `ValueError` s cestou k poli.
+    PG by ho do JSON nepřijal a `null` by chybu skryl. Naivní čas je chyba volajícího.
+    """
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {
+            item.name: jsonable(getattr(value, item.name), f"{path}.{item.name}")
+            for item in dataclasses.fields(value)
+        }
+    if isinstance(value, dt.datetime):
+        if value.tzinfo is None:
+            raise ValueError(f"{path}: čas bez časové zóny {value!r}")
+        return value.astimezone(dt.UTC).isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{path}: číslo {value!r} nejde do JSON")
+        return value
+    if value is None or isinstance(value, bool | int | str):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): jsonable(item, f"{path}.{key}") for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [jsonable(item, f"{path}[{index}]") for index, item in enumerate(value)]
+    raise TypeError(f"{path}: typ {type(value).__name__} nejde do JSON")
+
+
+def plan_to_json(plan: OptionPlan) -> dict[str, Any]:
+    """Plán pro JSON `option_plans.plan` (ADR-0062 K2 A): všechna pole a text verdiktu plánu."""
+    out: dict[str, Any] = jsonable(plan)
+    out["verdict"] = plan.verdict
+    return out
