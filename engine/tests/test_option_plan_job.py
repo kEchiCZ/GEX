@@ -311,15 +311,18 @@ def test_nevyplnene_parametry_uctu_plan_vznikne_neobchodovat(
     assert "rozpočet nenastaven" in row.plan["main"]["verdict"]
 
 
-def test_vikend_plan_nevznikne_patek_bere_pondelni_1dte(tmp_path: Path) -> None:
-    """`is_trading_session`, ne `weekday()`: sobota bez plánu, pátek → 1DTE pondělí."""
+def test_vikend_a_svatek_plan_nevznikne_patek_bere_pondelni_1dte(tmp_path: Path) -> None:
+    """`is_trading_session`, ne `weekday()`: so, ne a Díkůvzdání bez plánu, pátek → 1DTE pondělí."""
     friday, monday = dt.date(2026, 11, 6), dt.date(2026, 11, 9)
     maker, plans, _, _ = _maker(
         tmp_path, snapshot_boundary(friday, PLAN_SLOT) + dt.timedelta(seconds=68)
     )
-    saturday = dataclasses.replace(_created(), session=dt.date(2026, 11, 7), scenario_id=7)
-    assert asyncio.run(maker.make(saturday)) is None
-    assert plans.get_for_scenario(7) is None
+    closed = (dt.date(2026, 11, 7), dt.date(2026, 11, 8), dt.date(2026, 11, 26))
+    for scenario_id, day in enumerate(closed, start=7):
+        assert asyncio.run(maker.make(_created(day, scenario_id=scenario_id))) is None
+        assert plans.get_for_scenario(scenario_id) is None
+        noon = dt.datetime.combine(day, dt.time(15), tzinfo=dt.UTC)
+        assert asyncio.run(maker.recover(noon)) is None
     maker.on_snapshot(_snapshot(session=friday, expiry_1dte=monday))
     asyncio.run(maker.make(_created(friday, scenario_id=36)))
     row = _row(plans, 36)
@@ -341,3 +344,23 @@ def _scenario(repo: ScenariosRepository) -> int:
         note=None,
         source="auto",
     )
+
+
+def test_chyba_sestaveni_da_plan_bez_opce_s_duvodem(tmp_path: Path) -> None:
+    """Pád čtení parametrů nebo výpočtu nezanechá mezeru jen v logu (AGENTS.md: fail fast)."""
+    maker, plans, _, publisher = _maker(tmp_path, BOUNDARY + dt.timedelta(seconds=68))
+
+    def broken() -> AccountParams:
+        raise RuntimeError("settings nedostupné")
+
+    maker.account = broken
+    maker.on_snapshot(_snapshot())
+
+    async def run() -> int | None:
+        return await maker.on_scenario(_created())
+
+    plan_id = asyncio.run(run())
+    row = _row(plans)
+    assert (row.id, row.status, row.verdict) == (plan_id, STATUS_NO_OPTION, None)
+    assert row.plan["reasons"] == ["plán se nesestavil (RuntimeError: settings nedostupné)"]
+    assert "bez opce" in publisher.alerts[0]["message"]

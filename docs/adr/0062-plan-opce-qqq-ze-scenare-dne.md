@@ -384,6 +384,8 @@ Odvozeno pro F2b (zapsal agent 10. 11., #1742):
      najde kontrola při startu enginu a založí plán bez opce s důvodem „restart“. Jen do exitu
      seance (settle − 15 min). Nasazení v pauze Globexu tak ke scénáři za termínem obchodu plán
      nepřidá.
+   - **Chyba sestavení** (výpočet, čtení `settings`) dá plán bez opce s důvodem, mezera je
+     v tabulce, ne jen v logu.
    - **Sloupce K2 A:** `status` při vzniku je `sestaven` (z ranního snímku), nebo `bez opce`.
      `verdict` je hlavní slovo verdiktu hlavního plánu (`čeká` nebo `neobchodovat`, K12 A),
      u plánu bez opce NULL. JSON `plan` nese hlavní plán, oba stíny (K10 B), úrovně NQ scénáře,

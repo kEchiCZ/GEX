@@ -1,9 +1,10 @@
 """Automatický scénář dne (#1173 A): port verdiktu, trend, generátor s atrapou API."""
 
 import asyncio
+import dataclasses
 import datetime as dt
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from sqlalchemy import create_engine
@@ -355,6 +356,29 @@ def test_generator_preda_scenar_planu_qqq_a_chyba_predani_ho_nezastavi(tmp_path:
     asyncio.run(other.on_minute(now, _pre_open(api, SESSION, now, 7590.0), runtime))
     assert len(repo.list_for("ES")) == 1
     assert publisher.alerts and publisher.alerts[0]["kind"] == "scenario_created"
+
+
+@pytest.mark.parametrize("kind", ["none", "wait_news"])
+def test_bez_prevahy_scenar_ani_plan_qqq_nevznikne(
+    tmp_path: Path, kind: Literal["none", "wait_news"]
+) -> None:
+    """Verdikt none/wait_news: scénář nevzniká, takže plán opce QQQ nedostane vstup (#1742)."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    repo = ScenariosRepository(db)
+    repo.ensure_schema()
+    api = _verdict_api(SESSION, dt.date(2026, 9, 14))
+    runtime = _runtime(SESSION)
+    received: list[CreatedScenario] = []
+    generator = ScenarioGenerator(
+        "NQ", repo, _Publisher(), minutes_before_open=15, on_created=received.append
+    )
+    now = OPEN - dt.timedelta(minutes=15)
+    pre_open = _pre_open(api, SESSION, now, 7590.0)
+    flat = dataclasses.replace(
+        pre_open, verdict=dataclasses.replace(pre_open.verdict, verdict=kind, score=0)
+    )
+    asyncio.run(generator.on_minute(now, flat, runtime))
+    assert repo.list_for("NQ") == [] and received == []
 
 
 def test_generator_ceka_na_uplny_verdikt_zapisovace(

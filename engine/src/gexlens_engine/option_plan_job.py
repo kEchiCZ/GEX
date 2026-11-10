@@ -197,13 +197,22 @@ class OptionPlanMaker:
         return task
 
     async def _guarded(self, created: CreatedScenario) -> int | None:
+        """Chyba sestavení = plán bez opce s důvodem, ať mezera je v tabulce, ne jen v logu."""
         try:
             return await self.make(created)
-        except Exception:
+        except Exception as error:
             logger.exception(
-                "Plán opce QQQ ke scénáři #%d selhal — plán dnes nevznikl", created.scenario_id
+                "Plán opce QQQ ke scénáři #%d selhal — ukládám plán bez opce", created.scenario_id
             )
-            return None
+            reason = f"plán se nesestavil ({type(error).__name__}: {error})"
+            try:
+                return await self._store_without_option(created, [reason], None)
+            except Exception:
+                logger.exception(
+                    "Plán opce QQQ ke scénáři #%d: ani plán bez opce se neuložil — dnes chybí",
+                    created.scenario_id,
+                )
+                return None
 
     async def make(self, created: CreatedScenario) -> int | None:
         """Plán ke scénáři: id nového řádku, None = nevznikl (už existuje, den bez seance)."""
