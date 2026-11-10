@@ -5,6 +5,9 @@ používají FakeClock, aby se odklady daly řídit deterministicky.
 """
 
 import datetime as dt
+import logging
+
+import pytest
 
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
@@ -416,3 +419,108 @@ async def test_reset_na_otevreni_zahodi_backoff_ale_bs_dopocet_drzi() -> None:
     assert opened.stalled_count == 0
     assert opened.stale_count == 0
     assert opened.computed_greeks == len(atm)
+
+
+# ── Mlčící IBKR: první dávka bez kotace ukončí sweep (#1710) ───────
+
+
+async def test_mlcici_ibkr_sweep_skonci_prvni_davkou_v_rozpoctu_cyklu(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Error 1100: každá dávka čeká timeout naprázdno; sweep skončí po první (#1710).
+
+    3. 11. 2026 trval sweep NQ 36,4 s (dávky po 4 s + 3 kola repair) a kolo
+    minuty 107,8 s. Teď stojí jeden `batch_timeout_s`, takže ES, NQ i oba
+    sekundáry se vejdou do minuty.
+    """
+    contracts = chain_360()
+    settings = Settings(batch_timeout_s=0.2)
+    streamer = MockQuoteStreamer(always_fail=set(contracts), delay_s=settings.batch_timeout_s)
+    scheduler = SubscriptionScheduler(streamer, settings)
+
+    with caplog.at_level(logging.INFO, logger="gexlens_engine.ibkr.scheduler"):
+        metrics = await scheduler.sweep(contracts, SPOT)
+
+    assert len(streamer.fetch_calls) == settings.batch_size  # jen první dávka, bez repair
+    assert metrics.sweep_duration_s < 2 * settings.batch_timeout_s
+    assert 4 * metrics.sweep_duration_s < 60.0  # ES, NQ a dva sekundáry v jedné minutě
+    assert metrics.greeks_complete == 0 and metrics.stale_count == len(contracts)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "IBKR mlčí" in warnings[0].getMessage()
+    assert not any("Repair:" in r.getMessage() for r in caplog.records)
+
+
+async def test_mlcici_ibkr_hlasi_jen_hranu_a_navrat() -> None:
+    """Varování jen na začátku ticha, při návratu jeden řádek a sweep znovu celý (#1710)."""
+    contracts = chain_360()
+    silent = MockQuoteStreamer(always_fail=set(contracts))
+    clock = FakeClock()
+    scheduler = SubscriptionScheduler(silent, Settings(), clock=clock)
+
+    await scheduler.sweep(contracts, SPOT)
+    assert scheduler._silent
+    clock.advance(1.0)
+    # Cyklus 1 bez křídel (ATM ± 30 striků = 122 kontraktů): první neúspěch nemá
+    # odklad, takže sweep zkusí znovu tutéž ATM dávku a zase skončí po ní
+    second = await scheduler.sweep(contracts, SPOT)
+    assert second.total == 122
+    assert len(silent.fetch_calls) == 2 * 80
+    assert set(silent.fetch_calls[80:]) == set(silent.fetch_calls[:80])
+    assert second.greeks_complete == 0
+
+    silent.always_fail.clear()  # IBKR zase dodává
+    clock.advance(Settings().repair_backoff_max_s + 1.0)
+    recovered = await scheduler.sweep(contracts, SPOT)
+    assert not scheduler._silent
+    assert recovered.greeks_complete == recovered.total  # bez ticha se sweepuje vše
+
+
+async def test_prvni_davka_jde_od_atm() -> None:
+    """První dávka = nejlikvidnější striky kolem spotu, ne nejnižší striky křídel (#1710)."""
+    contracts = chain_360()
+    streamer = MockQuoteStreamer()
+    scheduler = SubscriptionScheduler(streamer, Settings())
+
+    await scheduler.sweep(contracts, SPOT)
+
+    first = streamer.fetch_calls[:80]
+    assert max(abs(spec.strike - SPOT) for spec in first) <= 20 * 5  # ±20 striků po 5 b
+    assert len(streamer.fetch_calls) == len(contracts)
+
+
+async def test_castecne_kotace_nejsou_ticho() -> None:
+    """Kotace bez greeks (TWS model mlčí) = IBKR žije; sweep jde celý a repair běží (#547)."""
+    contracts = chain_360()
+    streamer = MockQuoteStreamer(partial_greeks=set(contracts))
+    scheduler = SubscriptionScheduler(streamer, Settings(), clock=FakeClock())
+
+    await scheduler.sweep(contracts, SPOT)
+
+    assert not scheduler._silent
+    assert len(streamer.fetch_calls) >= len(contracts)
+
+
+async def test_not_connected_jeden_radek_bez_tracebacku(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Restart Gateway: „Not connected“ u každého kontraktu = jeden řádek, ne traceback (#1710)."""
+    contracts = chain_360()
+
+    class DisconnectedStreamer(MockQuoteStreamer):
+        async def fetch_quote(
+            self, spec: OptionContractSpec, timeout_s: float
+        ) -> QuoteSnapshot | PartialQuote | None:
+            self.fetch_calls.append(spec)
+            raise ConnectionError("Not connected")
+
+    streamer = DisconnectedStreamer()
+    scheduler = SubscriptionScheduler(streamer, Settings())
+
+    with caplog.at_level(logging.INFO, logger="gexlens_engine.ibkr.scheduler"):
+        metrics = await scheduler.sweep(contracts, SPOT)
+
+    assert len(streamer.fetch_calls) == 80
+    assert metrics.stale_count == len(contracts)
+    assert not any(r.exc_info for r in caplog.records)
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 1 and "Not connected u 80 kontraktů" in messages[0]
