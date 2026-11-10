@@ -108,6 +108,8 @@ from gexlens_engine.instruments import (
 from gexlens_engine.ivrank import IvRankCollector, TastyMetricsLike
 from gexlens_engine.mapstate import MapStateCollector
 from gexlens_engine.memwatch import MemoryWatch
+from gexlens_engine.option_plan_job import ACCOUNT_KEYS as OPTION_PLAN_ACCOUNT_KEYS
+from gexlens_engine.option_plan_job import OptionPlanMaker, account_params
 from gexlens_engine.paper import PaperBroker
 from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.provider import MarketDataProviderLike
@@ -122,7 +124,7 @@ from gexlens_engine.runtime_settings import (
     seed_reconnects,
     should_poll_settings,
 )
-from gexlens_engine.scenario_auto import ApiReader, ScenarioGenerator
+from gexlens_engine.scenario_auto import ApiReader, CreatedScenario, ScenarioGenerator
 from gexlens_engine.scenarios import ScenarioCollector
 from gexlens_engine.setups import SetupEngine, setup_params_from_settings
 from gexlens_engine.spot_stream import SpotStreamer
@@ -138,6 +140,7 @@ from gexlens_engine.storage.mapstate_store import MapStateRepository
 from gexlens_engine.storage.meta import ADHOC_CHANNEL
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
+from gexlens_engine.storage.option_plans_store import OptionPlansRepository
 from gexlens_engine.storage.paper_store import PaperRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter, bar_partition_day, read_bars
 from gexlens_engine.storage.probes_store import ProbeRepository
@@ -932,6 +935,7 @@ async def create_pipeline(
     bar_gap_fill: Callable[[str, dt.datetime, dt.datetime], Awaitable[int]] | None = None,
     discovery_cache: DiscoveryCache | None = None,
     handover: EngineRuntime | None = None,
+    on_scenario_created: Callable[[CreatedScenario], object] | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async.
 
@@ -1627,6 +1631,7 @@ async def create_pipeline(
                 repository=scenarios_repository,
                 publisher=publisher,
                 minutes_before_open=scenario_auto_minutes,
+                on_created=on_scenario_created,
             )
             # Verdikt dodá zapisovač (#1595 d1) — bez něj scénář nevzniká
             if scenarios_repository is not None
@@ -1893,6 +1898,20 @@ async def main() -> None:
     # Scénáře dne (#1173): tabulku zakládá i API, tady jen pro jistotu při startu
     scenarios_repository = ScenariosRepository(db)
     await asyncio.to_thread(scenarios_repository.ensure_schema)
+    # Plán opce QQQ ke scénáři dne NQ v 9:15 ET (ADR-0062 K2 A a K4 C, #1742): scénář předá
+    # generátor NQ, ranní snímek `plan_chain_loop`; spojení běží v úloze mimo minutový cyklus
+    option_plans_repository = OptionPlansRepository(db)
+    await asyncio.to_thread(option_plans_repository.ensure_schema)
+    option_plan_maker = OptionPlanMaker(
+        repository=option_plans_repository,
+        account=lambda: account_params(watchlist_reader.settings_map(OPTION_PLAN_ACCOUNT_KEYS)),
+        publisher=publisher,
+    )
+    try:
+        # Restart po vzniku scénáře dne: plán bez opce s důvodem, jen do exitu seance
+        await option_plan_maker.recover()
+    except Exception:
+        logger.exception("Plán opce QQQ: kontrola scénáře dne bez plánu po startu selhala")
     # Paper účet (#1187 fáze 1): účet + ordery; fily dělá PaperBroker per symbol
     paper_repository = PaperRepository(db)
     await asyncio.to_thread(paper_repository.ensure_schema)
@@ -3237,6 +3256,8 @@ async def main() -> None:
                             else missing_data_level(dt.datetime.now(dt.UTC))
                         )
                         logger.log(level, "%s", snapshot.describe())
+                        # Ranní snímek pro vznik plánu opce QQQ (#1742); 9:31 plán nečte
+                        option_plan_maker.on_snapshot(snapshot)
                 except Exception:
                     logger.exception(
                         "Snímek řetězu QQQ %s ET pro plán (#1768) selhal — příští snímek",
@@ -3479,6 +3500,10 @@ async def main() -> None:
                     futures_cvd=futures_cvd,
                     discovery_cache=discovery_cache,
                     handover=roll_handovers.get(symbol),
+                    # Plán opce QQQ vzniká jen ze scénáře NQ (ADR-0062 bod 2)
+                    on_scenario_created=(
+                        option_plan_maker.on_scenario if symbol == PLAN_CHAIN_REFERENCE else None
+                    ),
                 )
                 # Předání drží subskripci a trasy D+1 až do založení (#1460)
                 roll_handovers.pop(symbol, None)
