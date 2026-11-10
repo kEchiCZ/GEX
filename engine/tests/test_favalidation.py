@@ -2,6 +2,7 @@
 
 import datetime as dt
 import logging
+import random
 from pathlib import Path
 
 import pyarrow as pa
@@ -124,6 +125,56 @@ def test_volumes_at_cutoff_rez_21_utc(tmp_path: Path) -> None:
     )
     volumes = volumes_at_cutoff(path, DAY)
     assert volumes == {(7000.0, "C"): 120.0, (7005.0, "P"): 30.0}
+
+
+def _volumes_by_rows(
+    rows: list[tuple[dt.datetime | None, float, str, float | None]], cutoff: dt.datetime
+) -> dict[tuple[float, str], float]:
+    """Řádkový výpočet před #1695 (Python smyčka nad `to_pylist`) — reference shody."""
+    latest: dict[tuple[float, str], tuple[dt.datetime, float]] = {}
+    for ts, strike, right, volume in rows:
+        if ts is None or ts > cutoff:
+            continue
+        key = (float(strike), str(right))
+        current = latest.get(key)
+        if current is None or ts >= current[0]:
+            latest[key] = (ts, float(volume) if volume is not None else 0.0)
+    return {key: volume for key, (_, volume) in latest.items()}
+
+
+def test_volumes_at_cutoff_shoda_s_radkovym_vypoctem(tmp_path: Path) -> None:
+    """pyarrow dá totéž co dřívější řádkový výpočet (#1695).
+
+    Promíchané pořadí, řádky po řezu, NULL čas i objem a shodná minuta strany
+    dvakrát — vyhrává pozdější řádek souboru.
+    """
+    rng = random.Random(1695)
+    cutoff = dt.datetime.combine(DAY, dt.time(21), tzinfo=dt.UTC)
+    rows: list[tuple[dt.datetime | None, float, str, float | None]] = []
+    for minute in range(18 * 60, 23 * 60):  # 18:00–22:59 UTC, řez ve 21:00
+        ts = dt.datetime.combine(DAY, dt.time(minute // 60, minute % 60), tzinfo=dt.UTC)
+        for strike in (6990.0, 7000.0, 7010.0):
+            for right in "CP":
+                if rng.random() < 0.7:
+                    volume = None if rng.random() < 0.15 else float(rng.randint(0, 400))
+                    rows.append((ts, strike, right, volume))
+    rng.shuffle(rows)
+    rows.append((cutoff, 7000.0, "C", 11.0))
+    rows.append((cutoff, 7000.0, "C", None))  # shodná minuta: pozdější řádek = NULL → 0
+    rows.append((None, 7020.0, "P", 5.0))  # NULL čas se nečte
+    path = tmp_path / "snap.parquet"
+    table = pa.table(
+        {
+            "ts_min": pa.array([r[0] for r in rows], type=pa.timestamp("us", tz="UTC")),
+            "strike": pa.array([r[1] for r in rows], type=pa.float64()),
+            "right": pa.array([r[2] for r in rows], type=pa.string()),
+            "volume": pa.array([r[3] for r in rows], type=pa.float64()),
+        }
+    )
+    pq.write_table(table, path, row_group_size=7)  # víc chunků: pořadí přes hranice row groups
+    volumes = volumes_at_cutoff(path, DAY)
+    assert volumes == _volumes_by_rows(rows, cutoff)
+    assert volumes[(7000.0, "C")] == 0.0 and (7020.0, "P") not in volumes
 
 
 def test_repository_upsert_a_exists() -> None:
