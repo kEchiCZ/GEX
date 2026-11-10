@@ -19,6 +19,7 @@ from gexlens_engine.compute.settle import settle_ts, us_open_ts
 from gexlens_engine.compute.trend import Candle, assess_trends, ema, find_pivots
 from gexlens_engine.runtime import EngineRuntime
 from gexlens_engine.scenario_auto import (
+    CreatedScenario,
     PreOpenVerdict,
     ScenarioGenerator,
     gather_context,
@@ -325,6 +326,35 @@ def test_generator_zalozi_auto_scenar_jednou_pred_openem(tmp_path: Path) -> None
     later = OPEN - dt.timedelta(minutes=5)
     asyncio.run(fresh.on_minute(later, _pre_open(api, SESSION, later, 7590.0), runtime))
     assert len(repo.list_for("ES")) == 1
+
+
+def test_generator_preda_scenar_planu_qqq_a_chyba_predani_ho_nezastavi(tmp_path: Path) -> None:
+    """F2b #1742: po zápisu jde scénář plánu opce QQQ; chyba předání scénář ani alert nezruší."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    repo = ScenariosRepository(db)
+    repo.ensure_schema()
+    api = _verdict_api(SESSION, dt.date(2026, 9, 14))
+    runtime = _runtime(SESSION)
+    received: list[CreatedScenario] = []
+    generator = ScenarioGenerator(
+        "NQ", repo, _Publisher(), minutes_before_open=15, on_created=received.append
+    )
+    now = OPEN - dt.timedelta(minutes=15)
+    asyncio.run(generator.on_minute(now, _pre_open(api, SESSION, now, 7590.0), runtime))
+    (row,) = repo.list_for("NQ")
+    (created,) = received
+    assert (created.scenario_id, created.session, created.created_at) == (row.id, SESSION, now)
+    assert created.scenario.direction == "short" and list(created.scenario.targets) == row.targets
+    assert (created.levels.flip, created.levels.put_wall) == (7620.0, 7550.0)
+
+    def broken(_created: CreatedScenario) -> None:
+        raise RuntimeError("plán spadl")
+
+    publisher = _Publisher()
+    other = ScenarioGenerator("ES", repo, publisher, minutes_before_open=15, on_created=broken)
+    asyncio.run(other.on_minute(now, _pre_open(api, SESSION, now, 7590.0), runtime))
+    assert len(repo.list_for("ES")) == 1
+    assert publisher.alerts and publisher.alerts[0]["kind"] == "scenario_created"
 
 
 def test_generator_ceka_na_uplny_verdikt_zapisovace(

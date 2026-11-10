@@ -21,6 +21,7 @@ Jen dopředu — nic se nedopočítává zpětně.
 import asyncio
 import datetime as dt
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,6 +29,7 @@ import httpx
 
 from gexlens_engine.compute.dayverdict import (
     VERDICT_RULES_VERSION,
+    AutoScenario,
     DayVerdict,
     LevelInputs,
     VerdictInput,
@@ -100,6 +102,19 @@ class PreOpenVerdict:
     @property
     def complete(self) -> bool:
         return not self.missing
+
+
+@dataclass(frozen=True)
+class CreatedScenario:
+    """Auto-scénář po zápisu, vstup plánu opce QQQ (F2b #1742, ADR-0062 K4 C)."""
+
+    scenario_id: int
+    session: dt.date
+    #: Štítek minuty scénáře (`created_at` řádku); plán z něj pozná pozdní scénář
+    created_at: dt.datetime
+    scenario: AutoScenario
+    #: Úrovně NQ téže minuty, ze kterých scénář vznikl
+    levels: LevelInputs
 
 
 class ApiReader:
@@ -297,6 +312,8 @@ class ScenarioGenerator:
     repository: ScenariosRepository
     publisher: Any = None
     minutes_before_open: int = 15
+    #: Po zápisu scénáře (plán opce QQQ, #1742); jen předá vstupy a nečeká
+    on_created: Callable[[CreatedScenario], object] | None = None
 
     _done_for: dt.date | None = field(default=None, init=False)
 
@@ -342,22 +359,23 @@ class ScenarioGenerator:
             self.repository.em_reference, self.symbol, session
         )
         deadline_ts = settle_ts(session)
+        level_inputs = LevelInputs(
+            flip=levels.flip if levels else None,
+            call_wall=levels.call_wall if levels else None,
+            put_wall=levels.put_wall if levels else None,
+            centroid=levels.centroid if levels else None,
+            prev_high=ctx.prev_high,
+            prev_low=ctx.prev_low,
+            prev_close=ctx.prev_close,
+            on_high=ctx.on_high,
+            on_low=ctx.on_low,
+            em_anchor=em_anchor,
+            em_points=em_points,
+        )
         auto = build_auto_scenario(
             verdict,
             spot,
-            LevelInputs(
-                flip=levels.flip if levels else None,
-                call_wall=levels.call_wall if levels else None,
-                put_wall=levels.put_wall if levels else None,
-                centroid=levels.centroid if levels else None,
-                prev_high=ctx.prev_high,
-                prev_low=ctx.prev_low,
-                prev_close=ctx.prev_close,
-                on_high=ctx.on_high,
-                on_low=ctx.on_low,
-                em_anchor=em_anchor,
-                em_points=em_points,
-            ),
+            level_inputs,
             now=now,
             deadline_ts=deadline_ts,
         )
@@ -384,6 +402,13 @@ class ScenarioGenerator:
             source="auto",
             rationale=rationale,
         )
+        if self.on_created is not None:
+            try:
+                self.on_created(CreatedScenario(scenario_id, session, now, auto, level_inputs))
+            except Exception:
+                logger.exception(
+                    "%s: předání scénáře #%d plánu opce QQQ selhalo", self.symbol, scenario_id
+                )
         summary = (
             f"Scénář dne #{scenario_id} ({'LONG' if auto.direction == 'long' else 'SHORT'}, "
             f"skóre {verdict.score:+d}): vstup {spot:g} → "
