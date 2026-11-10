@@ -436,7 +436,7 @@ async def test_mlcici_ibkr_sweep_skonci_prvni_davkou_v_rozpoctu_cyklu(
     contracts = chain_360()
     settings = Settings(batch_timeout_s=0.2)
     streamer = MockQuoteStreamer(always_fail=set(contracts), delay_s=settings.batch_timeout_s)
-    scheduler = SubscriptionScheduler(streamer, settings)
+    scheduler = SubscriptionScheduler(streamer, settings, utc_now=lambda: UTC_NOW)
 
     with caplog.at_level(logging.INFO, logger="gexlens_engine.ibkr.scheduler"):
         metrics = await scheduler.sweep(contracts, SPOT)
@@ -450,29 +450,77 @@ async def test_mlcici_ibkr_sweep_skonci_prvni_davkou_v_rozpoctu_cyklu(
     assert not any("Repair:" in r.getMessage() for r in caplog.records)
 
 
-async def test_mlcici_ibkr_hlasi_jen_hranu_a_navrat() -> None:
+async def test_mlcici_ibkr_hlasi_jen_hranu_a_navrat(caplog: pytest.LogCaptureFixture) -> None:
     """Varování jen na začátku ticha, při návratu jeden řádek a sweep znovu celý (#1710)."""
     contracts = chain_360()
-    silent = MockQuoteStreamer(always_fail=set(contracts))
+    streamer = MockQuoteStreamer()
     clock = FakeClock()
-    scheduler = SubscriptionScheduler(silent, Settings(), clock=clock)
+    scheduler = SubscriptionScheduler(streamer, Settings(), clock=clock, utc_now=lambda: UTC_NOW)
+    await scheduler.sweep(contracts, SPOT)  # zdravý sweep naplní cache
+    streamer.always_fail = set(contracts)  # Error 1100
 
-    await scheduler.sweep(contracts, SPOT)
-    assert scheduler._silent
-    clock.advance(1.0)
-    # Cyklus 1 bez křídel (ATM ± 30 striků = 122 kontraktů): první neúspěch nemá
-    # odklad, takže sweep zkusí znovu tutéž ATM dávku a zase skončí po ní
-    second = await scheduler.sweep(contracts, SPOT)
-    assert second.total == 122
-    assert len(silent.fetch_calls) == 2 * 80
-    assert set(silent.fetch_calls[80:]) == set(silent.fetch_calls[:80])
-    assert second.greeks_complete == 0
+    atm = {spec for spec in contracts if spec.strike == SPOT}
+    with caplog.at_level(logging.INFO, logger="gexlens_engine.ibkr.scheduler"):
+        first = await scheduler.sweep(contracts, SPOT)
+        second = await scheduler.sweep(contracts, SPOT)
+        # Ticho neeskaluje backoff: druhý sweep zkusil znovu tutéž ATM dávku
+        silent_calls = streamer.fetch_calls[len(contracts) :]
+        assert len(silent_calls) == 2 * 80
+        assert set(silent_calls[80:]) == set(silent_calls[:80])
+        assert scheduler._fail_rounds == {} and scheduler._due_at == {}
+        assert first.greeks_complete == 0 and second.greeks_complete == 0
+        # Cache z doby před tichem zůstává, ale nese stale (stáří vidí UI)
+        assert atm <= scheduler.stale_contracts
+        assert all(quote.stale for spec in atm if (quote := scheduler.quote(spec)) is not None)
+        streamer.always_fail.clear()  # IBKR zase dodává
+        recovered = await scheduler.sweep(contracts, SPOT)
 
-    silent.always_fail.clear()  # IBKR zase dodává
-    clock.advance(Settings().repair_backoff_max_s + 1.0)
-    recovered = await scheduler.sweep(contracts, SPOT)
+    # Po návratu je ATM čerstvé hned v prvním sweepu, žádný odklad
+    assert recovered.greeks_complete == recovered.total and recovered.stale_count == 0
+    records = [(r.levelno, r.getMessage()) for r in caplog.records]
+    warnings = [msg for level, msg in records if level == logging.WARNING]
+    assert len(warnings) == 1 and "IBKR mlčí" in warnings[0]
+    assert sum("zase dodává kotace" in msg for _, msg in records) == 1
+
+
+async def test_ticha_pozdejsi_davka_sweep_neukonci() -> None:
+    """Jen první dávka rozhoduje: zdravé ATM a mlčící křídla = sweep jde celý (#1710)."""
+    contracts = chain_360()
+    atm_80 = sorted(contracts, key=lambda spec: abs(spec.strike - SPOT))[:80]
+    wings = set(contracts) - set(atm_80)
+    streamer = MockQuoteStreamer(always_fail=wings)
+    scheduler = SubscriptionScheduler(streamer, Settings(), clock=FakeClock())
+
+    metrics = await scheduler.sweep(contracts, SPOT)
+
     assert not scheduler._silent
-    assert recovered.greeks_complete == recovered.total  # bez ticha se sweepuje vše
+    assert len(set(streamer.fetch_calls)) == len(contracts)  # i křídla se zkusila
+    assert metrics.greeks_complete == 80 and metrics.stale_count == len(wings)
+
+
+@pytest.mark.parametrize(
+    ("utc_now", "level"),
+    [
+        (dt.datetime(2026, 11, 7, 15, 0, tzinfo=dt.UTC), logging.INFO),  # sobota
+        (dt.datetime(2026, 11, 10, 22, 30, tzinfo=dt.UTC), logging.INFO),  # denní pauza
+        (dt.datetime(2026, 11, 8, 22, 30, tzinfo=dt.UTC), logging.INFO),  # neděle před otevřením
+        (dt.datetime(2026, 11, 8, 23, 5, tzinfo=dt.UTC), logging.WARNING),  # nedělní otevření
+        (dt.datetime(2026, 11, 9, 15, 0, tzinfo=dt.UTC), logging.WARNING),  # pondělí RTH
+    ],
+)
+async def test_ticho_pri_zavrenem_trhu_jen_info(
+    caplog: pytest.LogCaptureFixture, utc_now: dt.datetime, level: int
+) -> None:
+    """Zavřený trh: ticho IBKR je očekávané, jen INFO; otevřený trh varování (AGENTS.md)."""
+    contracts = chain_360()
+    streamer = MockQuoteStreamer(always_fail=set(contracts))
+    scheduler = SubscriptionScheduler(streamer, Settings(), utc_now=lambda: utc_now)
+
+    with caplog.at_level(logging.INFO, logger="gexlens_engine.ibkr.scheduler"):
+        await scheduler.sweep(contracts, SPOT)
+
+    silence = [r for r in caplog.records if "první dávka bez jediné kotace" in r.getMessage()]
+    assert len(silence) == 1 and silence[0].levelno == level
 
 
 async def test_prvni_davka_jde_od_atm() -> None:
@@ -514,7 +562,7 @@ async def test_not_connected_jeden_radek_bez_tracebacku(
             raise ConnectionError("Not connected")
 
     streamer = DisconnectedStreamer()
-    scheduler = SubscriptionScheduler(streamer, Settings())
+    scheduler = SubscriptionScheduler(streamer, Settings(), utc_now=lambda: UTC_NOW)
 
     with caplog.at_level(logging.INFO, logger="gexlens_engine.ibkr.scheduler"):
         metrics = await scheduler.sweep(contracts, SPOT)

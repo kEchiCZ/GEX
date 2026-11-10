@@ -2191,7 +2191,8 @@ async def test_otevreni_zahodi_repair_stav_ze_zavreneho_trhu(
 
     await pipeline.run_minute(SUN_OPEN)
 
-    assert max(scheduler._fail_rounds.values()) < settings.repair_stall_rounds
+    # Tichý sweep po otevření kola nepřidá (#1710), stará zahodil reset na hraně
+    assert max(scheduler._fail_rounds.values(), default=0) < settings.repair_stall_rounds
     assert all(due < far for due in scheduler._due_at.values())  # nic v backoffu
     assert alerts_of(publisher, {"strikes_stalled", "greeks_stalled"}) == []
 
