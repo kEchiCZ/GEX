@@ -16,6 +16,19 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-11-10 — job ve vlákně zastavil smyčku asyncio na 4–8,7 s, protože `to_pylist()` časového sloupce drží GIL (#1695).**
+  Pátý výskyt vzorce „minutový cyklus“ (po #1337, #1646, #1701, #1713), druhý s GIL po #1701.
+  FA validace a kalibrace ρ po finalitě OI běžely přes `asyncio.to_thread`, a dávka OI druhého
+  instrumentu přesto nedostala ticky: 26. 10.–9. 11. až 224 kontraktů bez ticku a finalita NQ
+  o ~31 min později, cyklus NQ 9. 11. ve 21:37 skončil 71 s po štítku. Příčinou nebylo pandas ani
+  smyčka v Pythonu, ta GIL po 5 ms pouští. Byl to `to_pylist()` sloupce `ts_min`: 412 tis. časů
+  s časovou zónou se převádí na `datetime` v jednom volání C, 4,6 s bez uvolnění GIL. Odhalila to
+  sonda lagu smyčky (`sleep(0.05)`) při ručním volání jobu nad produkční particí, rozložená po
+  krocích (`scripts/measure_fa_loop_lag_1695.py`). → Vlákno chrání smyčku jen před IO a před
+  kódem, který GIL pouští. Nad celou particí (snímky, netflow) se sloupce nepřevádějí přes
+  `to_pylist()` ani `to_pydict()`, časové hlavně ne. Filtruje a agreguje se v pyarrow compute
+  (`group_by`, `unique`), do Pythonu jde jen výsledek po stranách a shoda se ověří proti staré
+  funkci na produkčních datech. Nový job ve vlákně se měří sondou lagu, ne jen délkou.
 - **2026-11-01 — test padal jen v den svého okna (#1728).** Test markerů zpráv měl pevné okno
   31. 10.–1. 11. 2026 a čekal prázdný výsledek, fixtura ale vkládá zprávy podle hodin běhu
   (`NOW − 1 h`, `NOW + 30 min`). Ten den spadlo CI každého PR, rerun nepomohl. → Test s pevným
