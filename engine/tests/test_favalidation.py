@@ -171,7 +171,7 @@ def test_volumes_at_cutoff_shoda_s_radkovym_vypoctem(tmp_path: Path) -> None:
             "volume": pa.array([r[3] for r in rows], type=pa.float64()),
         }
     )
-    pq.write_table(table, path)
+    pq.write_table(table, path, row_group_size=7)  # víc chunků: pořadí přes hranice row groups
     volumes = volumes_at_cutoff(path, DAY)
     assert volumes == _volumes_by_rows(rows, cutoff)
     assert volumes[(7000.0, "C")] == 0.0 and (7020.0, "P") not in volumes

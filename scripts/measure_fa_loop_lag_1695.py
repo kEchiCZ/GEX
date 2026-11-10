@@ -4,7 +4,8 @@ Spustí `collect_fa_validation` a výpočet ρ (`_collect_rho`) nad jedním dnem
 z produkčních partic ve vlákně (`asyncio.to_thread`, jako engine) a souběžně
 sondu lagu smyčky (`sleep(0.05)`, maximum zpoždění). Pak rozloží řádkový
 postup z doby před opravou (čtení parquetu, `to_pylist`, smyčka v Pythonu)
-na kroky, změří lag každého kroku a porovná ho s variantou v pyarrow.
+na kroky, změří lag každého kroku a porovná jeho výsledek s dodávanou
+`volumes_at_cutoff` (pyarrow).
 
 Naměřeno 10. 11. 2026 (ES 9. 11.): před opravou FA validace lag 4,03 s a ρ
 4,34 s, z toho `to_pylist` `ts_min` 4,60 s v jednom volání. Po opravě je lag
@@ -38,6 +39,7 @@ from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.fa_validation import (
     FaValidationRepository,
     collect_fa_validation,
+    volumes_at_cutoff,
 )
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
@@ -110,8 +112,10 @@ async def measured(
     return result
 
 
-def steps_volumes(path: Path, day: dt.date) -> dict[str, float]:
-    """`volumes_at_cutoff` po krocích — časy jednotlivých kroků."""
+def steps_volumes(
+    path: Path, day: dt.date
+) -> tuple[dict[str, float], dict[tuple[float, str], float]]:
+    """Řádkový `volumes_at_cutoff` z doby před #1695 po krocích — časy kroků a výsledek."""
     times: dict[str, float] = {}
     t = time.perf_counter()
     table = pq.read_table(path, columns=["ts_min", "strike", "right", "volume"])
@@ -133,27 +137,7 @@ def steps_volumes(path: Path, day: dt.date) -> dict[str, float]:
         if current is None or ts >= current[0]:
             latest[key] = (ts, float(volume) if volume is not None else 0.0)
     times["python loop"] = time.perf_counter() - t
-    return times
-
-
-def volumes_arrow(path: Path, day: dt.date) -> dict[tuple[float, str], float]:
-    """Totéž co `volumes_at_cutoff` v pyarrow compute (varianta B, GIL uvolněn)."""
-    import pyarrow as pa
-    import pyarrow.compute as pc
-
-    cutoff = daily_close_utc(day)
-    table = pq.read_table(path, columns=["ts_min", "strike", "right", "volume"])
-    ts = table.column("ts_min")
-    mask = pc.and_(pc.is_valid(ts), pc.less_equal(ts, pa.scalar(cutoff, type=ts.type)))
-    table = table.filter(mask).sort_by([("ts_min", "ascending")])
-    grouped = table.group_by(["strike", "right"], use_threads=False).aggregate([("volume", "last")])
-    strikes = grouped.column("strike").to_pylist()
-    rights = grouped.column("right").to_pylist()
-    volumes = grouped.column("volume_last").to_pylist()
-    return {
-        (float(s), str(r)): float(v) if v is not None else 0.0
-        for s, r, v in zip(strikes, rights, volumes, strict=True)
-    }
+    return times, {key: volume for key, (_, volume) in latest.items()}
 
 
 async def main(symbol: str, today: dt.date) -> None:
@@ -218,21 +202,22 @@ async def steps_only(
         if (p / f"{previous}.parquet").exists()
     ]
     biggest = max(paths, key=lambda p: p.stat().st_size)
-    steps = await measured(
+    steps, reference = await measured(  # type: ignore[misc]
         probe,
-        f"kroky volumes_at_cutoff {biggest.parent.name}/{biggest.name}",
+        f"kroky řádkového postupu {biggest.parent.name}/{biggest.name}",
         steps_volumes,
         biggest,
         previous,
     )
-    for name, value in steps.items():  # type: ignore[union-attr]
+    for name, value in steps.items():
         print(f"  {name}: {value:.3f}" if name != "rows" else f"  rows: {value:.0f}", flush=True)
 
-    arrow = await measured(probe, "varianta pyarrow compute", volumes_arrow, biggest, previous)
-    from gexlens_engine.storage.fa_validation import volumes_at_cutoff
-
-    reference = volumes_at_cutoff(biggest, previous)
-    print(f"  shoda s volumes_at_cutoff: {arrow == reference} ({len(reference)} stran)", flush=True)
+    shipped = await measured(
+        probe, "volumes_at_cutoff (pyarrow)", volumes_at_cutoff, biggest, previous
+    )
+    print(
+        f"  shoda s řádkovým postupem: {shipped == reference} ({len(reference)} stran)", flush=True
+    )
 
     # Jednotlivý to_pylist ts_min: jedno volání C bez uvolnění GIL?
     table = pq.read_table(biggest, columns=["ts_min"])
