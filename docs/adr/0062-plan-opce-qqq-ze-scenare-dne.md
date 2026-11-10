@@ -12,8 +12,11 @@
   změnil K4 na **C**. Opce QQQ se od 19.–20. 10. obchodují i před openem, takže plán vzniká
   v 9:15 ET se scénářem dne a v 9:31 ET se přecení (K4, oddíl „Revize 5. 11.“). (a) a K12 A
   platí dál. **Revize 9. 11.:** úplnost snímků řetězu podle vstupů plánu místo prahu 90 % kotací
-  nad pásmem (K4 bod 7, vlastník „B+E“).
-- **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09)
+  nad pásmem (K4 bod 7, vlastník „B+E“). **Revize 10. 11.:** P1 stínu B z ranního řetězu
+  s podílem kotací pásma 0DTE (K4 bod 7, vlastník „A“), začátek track recordu (bod 7, vlastník
+  „A“) a spojení vstupů při vzniku plánu (K4 bod 9, odvozeno v F2b #1742).
+- **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09, P1, track record a K4 bod 9
+  2026-11-10)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
   #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
@@ -79,7 +82,10 @@ Měření, o která se opírají K1–K4 (partice `data/`, jen čtení; skript v
    graf NQ ve stejném stylu. Bezhlavý prohlížeč ne.
 7. **Q5 A — track record plánu QQQ od začátku**, vedený zvlášť od scénáře NQ: spuštění vstupu,
    SL/TP na podkladu, P&L opce z naměřených kotací. Brána `preliminary` při n < 30 jako u scénáře
-   (ADR-0035).
+   (ADR-0035). *Upřesnění 10. 11. (vlastník v chatu: „A“, #1738 Rozhodnuto):* plán vzniká
+   a ukládá se od nasazení F2b (#1742). Do track recordu (F3 #1748, F5b #1749) se počítá až od
+   první seance s nasazenými opravami vstupů plánu: #1774, #1653 + #1599 a #1610. Dřívější plány
+   zůstanou v PG (K2 A), jen se nehodnotí. Datum začátku je vstup vyhodnocení, ne filtr při zápisu.
 
 ### Pravidla plánu P1–P5 (rozbor 2. 11., znění podle schválené epiky)
 
@@ -353,8 +359,36 @@ Odvozeno z C (zapsal agent 5. 11., aby C šlo implementovat):
    ask nebo IV z mid). Z uložených dat 9. 11. příčina zjistit nešla.
    P1 stínu B čte celý řetěz 0DTE. 9. 11. byl GEX top v 9:31 s kontrakty chybějícími v 9:15
    i bez nich stejný (663, 670, 660).
+   *Rozhodnuto 10. 11. (vlastník v chatu: „A“, varianty v #1742 issuecomment-6770188219):* P1
+   stínu B se počítá z řetězu 9:15 jako ostatní vstupy plánu, plán tak stojí na jednom okamžiku
+   (bod 5). Plán k P1 uloží podíl kotací pásma 0DTE v 9:15 (`plan.chain.zero_dte`: `quoted`,
+   `contracts`, `quoted_share` a chybějící kontrakty podle důvodu), aby F3 viděl, z jak úplného
+   pásma P1 vznikl. Úplnost snímku se nemění. GEX top v 9:15 = v 9:31 dne 9. 11. (663, kotace
+   69/80) i 10. 11. (683, 80/80).
 8. **Souběh:** scénář vzniká v minutě 9:15 ET a snímek skončí nejpozději 40 s po hranici 9:15:00.
    Plán čeká na obojí (F2b #1742).
+
+Odvozeno pro F2b (zapsal agent 10. 11., #1742):
+
+9. **Spojení vstupů** (`option_plan_job.OptionPlanMaker`). Měření 10. 11.: snímek 9:15 skončil
+   ve 14:15:00,9 UTC, scénář NQ #35 se štítkem 14:15:00 UTC se zapsal ve 14:16:08 UTC.
+   Pořadí je tak obvykle snímek → scénář, opačné ale nastat může. Pravidla:
+   - Minutový cyklus NQ na nic nečeká (AGENTS.md, #1337, #1646). Generátor scénáře jen předá
+     vstupy a spojení běží v samostatné úloze.
+   - Na snímek se čeká nejdéle do hranice + 40 s + 60 s rezervy (9:16:40 ET). Potom vznikne plán
+     bez opce s důvodem „ranní snímek nedorazil“ (bod 5).
+   - **Pozdní scénář**, tedy štítek minuty jiný než 9:15 ET (od 22. 9. 17 z 18 scénářů v 9:15,
+     1. 10. v 9:17), dá plán bez opce s důvodem. Úrovně jiné minuty se s řetězem 9:15 nemíchají.
+   - **Restart:** `scenario_id` je v `option_plans` unikátní a existující plán se nepřepíše.
+     Generátor po restartu v okně skončí na `exists_auto`, takže auto-scénář seance bez plánu
+     najde kontrola při startu enginu a založí plán bez opce s důvodem „restart“. Jen do exitu
+     seance (settle − 15 min). Nasazení v pauze Globexu tak ke scénáři za termínem obchodu plán
+     nepřidá.
+   - **Sloupce K2 A:** `status` při vzniku je `sestaven` (z ranního snímku), nebo `bez opce`.
+     `verdict` je hlavní slovo verdiktu hlavního plánu (`čeká` nebo `neobchodovat`, K12 A),
+     u plánu bez opce NULL. JSON `plan` nese hlavní plán, oba stíny (K10 B), úrovně NQ scénáře,
+     zdroj, čas a pokrytí snímku a důvody. Parametry účtu se čtou v okamžiku plánu a do logu
+     ani do zprávy nejdou.
 
 **Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
 nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test
