@@ -12,6 +12,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from sqlalchemy import Column, Date, Float, Integer, MetaData, String, Table, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -175,19 +177,48 @@ def volumes_at_cutoff(path: Path, day: dt.date) -> dict[Key, float]:
     Řez trade date = začátek denní přestávky 16:00 CT (`daily_close_utc`, #232):
     volume counter IBKR se resetuje se startem nové seance v 17:00 CT, poslední
     poctivá kumulativní hodnota dne je před přestávkou.
+
+    Poslední řádek strany = nejpozdější `ts_min`; při shodě vyhrává pozdější
+    řádek souboru (stabilní třídění), NULL objem je 0. Počítá se v pyarrow,
+    v Pythonu jen výsledek po stranách (#1695): `to_pylist()` časového sloupce
+    partice (412 tis. řádků ES) držel GIL 4,6 s v jednom volání, smyčka asyncio
+    stála a dávka OI archivu druhého instrumentu nedostala ticky.
     """
     cutoff = daily_close_utc(day)
-    table = pq.read_table(path, columns=["ts_min", "strike", "right", "volume"])
-    latest: dict[Key, tuple[dt.datetime, float]] = {}
-    columns = [table.column(name).to_pylist() for name in ("ts_min", "strike", "right", "volume")]
-    for ts, strike, right, volume in zip(*columns, strict=True):
-        if ts is None or ts > cutoff:
-            continue
-        key = (float(strike), str(right))
-        current = latest.get(key)
-        if current is None or ts >= current[0]:
-            latest[key] = (ts, float(volume) if volume is not None else 0.0)
-    return {key: volume for key, (_, volume) in latest.items()}
+    table = rows_in_window(
+        pq.read_table(path, columns=["ts_min", "strike", "right", "volume"]), end=cutoff
+    )
+    volume = table.column("volume")
+    table = table.set_column(
+        table.schema.get_field_index("volume"),
+        "volume",
+        pc.fill_null(volume, pa.scalar(0, type=volume.type)),
+    )
+    latest = (
+        table.sort_by([("ts_min", "ascending")])
+        .group_by(["strike", "right"], use_threads=False)
+        .aggregate([("volume", "last")])
+    )
+    volumes = latest.column("volume_last").to_pylist()
+    return {key: float(value) for key, value in zip(side_keys(latest), volumes, strict=True)}
+
+
+def rows_in_window(
+    table: pa.Table, *, end: dt.datetime, start: dt.datetime | None = None
+) -> pa.Table:
+    """Řádky snímku s `ts_min` v [start, end] (NULL čas vypadne), filtr v pyarrow (#1695)."""
+    ts = table.column("ts_min")
+    mask = pc.and_(pc.is_valid(ts), pc.less_equal(ts, pa.scalar(end, type=ts.type)))
+    if start is not None:
+        mask = pc.and_(mask, pc.greater_equal(ts, pa.scalar(start, type=ts.type)))
+    return table.filter(mask)
+
+
+def side_keys(table: pa.Table) -> list[Key]:
+    """Klíče stran (strike, right) tabulky jako Python n-tice — jen pro výsledek po stranách."""
+    strikes = table.column("strike").to_pylist()
+    rights = table.column("right").to_pylist()
+    return [(float(strike), str(right)) for strike, right in zip(strikes, rights, strict=True)]
 
 
 def collect_fa_validation(

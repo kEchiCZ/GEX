@@ -19,6 +19,7 @@ ukázal, že OI roste i na stranách s převahou prodeje, takže znaménko toku
 import datetime as dt
 import statistics
 from collections.abc import Iterable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
 from gexlens_engine.compute.marketclock import is_market_closed
@@ -215,6 +216,30 @@ def session_volume_coverage(
         peak[key] = max(peak.get(key, 0.0), float(volume))
         if key not in last_volume or ts > last_volume[key]:
             last_volume[key] = ts
+    return session_coverage_from_summary(
+        peak, last_volume, seen, minutes, start, cutoff, end_tolerance=end_tolerance
+    )
+
+
+def session_coverage_from_summary(
+    peak: Mapping[Key, float],
+    last_volume: Mapping[Key, dt.datetime],
+    seen: AbstractSet[Key],
+    minutes: AbstractSet[dt.datetime],
+    start: dt.datetime,
+    cutoff: dt.datetime,
+    *,
+    end_tolerance: int = SNAPSHOT_END_TOLERANCE_MIN,
+) -> SessionVolumeCoverage:
+    """Objem stran a pokrytí seance [start, řez] ze souhrnu řádků snímků v okně.
+
+    Souhrn: `peak` = maximum ne-NULL objemu strany (aspoň 0), `last_volume` =
+    poslední minuta strany s ne-NULL objemem, `seen` = strany se snímkem,
+    `minutes` = minuty se snímkem. Z řádků ho skládá `session_volume_coverage`;
+    storage ho počítá rovnou v pyarrow, protože převod celé partice na Python
+    objekty držel GIL ~4,6 s a smyčka asyncio stála (#1695). Pravidla V,
+    „nevíme“ a mezery popisuje `session_volume_coverage`.
+    """
     close = cutoff
     while close > start and is_market_closed(close - _MINUTE):
         close -= _MINUTE

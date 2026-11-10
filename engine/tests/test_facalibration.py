@@ -2,6 +2,7 @@
 
 import datetime as dt
 import logging
+import random
 from pathlib import Path
 
 import pyarrow as pa
@@ -33,6 +34,7 @@ from gexlens_engine.storage.fa_calibration import (
     live_alpha,
     netflow_at_cutoff,
     pending_rho_sessions,
+    snapshot_session_volumes,
 )
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
 from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
@@ -700,6 +702,53 @@ def test_session_volume_coverage_maximum_a_strana_bez_objemu() -> None:
     assert coverage.unknown == {c2, c3}
     assert coverage.last == cutoff and coverage.close == cutoff
     assert coverage.longest_gap == 0 and coverage.problem() is None
+
+
+def test_snapshot_session_volumes_shoda_se_souhrnem_z_radku(tmp_path: Path) -> None:
+    """Souhrn v pyarrow dá totéž pokrytí jako řádky v Pythonu (#1695).
+
+    Dvě UTC partice seance, řádky před začátkem a po řezu, NULL čas i objem,
+    mezera snímků, strana bez objemu a pokles kumulativu.
+    """
+    rng = random.Random(1695)
+    start, cutoff = session_bounds(PREV)[0], daily_close_utc(PREV)
+    sides = [(strike, right) for strike in (7490.0, 7500.0, 7510.0, 7520.0) for right in "CP"]
+    rows: list[tuple[dt.datetime | None, float, str, float | None]] = []
+    moment = start - 30 * MIN
+    while moment <= cutoff + 30 * MIN:
+        inside = start <= moment <= cutoff
+        if not (_at(PREV, 9) <= moment < _at(PREV, 9, 40)):  # mezera 40 min
+            for strike, right in rng.sample(sides, k=rng.randint(1, len(sides))):
+                volume = None if rng.random() < 0.2 else float(rng.randint(0, 500))
+                if not inside and volume is not None:
+                    volume += 10_000.0  # kumulativ předchozí seance / po řezu nesmí do V
+                if (strike, right) == (7520.0, "P"):
+                    volume = None  # strana bez objemu = „nevíme“
+                rows.append((moment, strike, right, volume))
+        moment += MIN
+    rows.append((start, 7530.0, "C", 42.0))  # jediný řádek strany přesně na začátku seance
+    rows.append((None, 7500.0, "C", 999.0))  # NULL čas se nečte
+    chain_dir = tmp_path / "20260806"
+    chain_dir.mkdir()
+    for day in (start.date(), PREV):
+        part = [row for row in rows if row[0] is None or row[0].date() == day]
+        rng.shuffle(part)
+        table = pa.table(
+            {
+                "ts_min": pa.array([r[0] for r in part], type=pa.timestamp("us", tz="UTC")),
+                "strike": pa.array([r[1] for r in part], type=pa.float64()),
+                "right": pa.array([r[2] for r in part], type=pa.string()),
+                "volume": pa.array([r[3] for r in part], type=pa.float64()),
+            }
+        )
+        # Malé row groups = víc chunků, jako partice psaná po minutách
+        pq.write_table(table, chain_dir / f"{day.isoformat()}.parquet", row_group_size=7)
+    expected = session_volume_coverage([row for row in rows if row[0] is not None], start, cutoff)
+    coverage = snapshot_session_volumes(chain_dir, PREV)
+    assert coverage == expected
+    assert coverage.volumes and max(coverage.volumes.values()) <= 500.0  # nic z okolí okna
+    assert (7520.0, "P") in coverage.unknown and (7530.0, "C") in coverage.unknown
+    assert coverage.longest_gap == 40
 
 
 def test_session_volume_coverage_zkracena_seance_konci_v_12_15_ct() -> None:

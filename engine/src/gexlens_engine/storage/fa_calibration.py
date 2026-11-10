@@ -12,7 +12,7 @@ i API (/fa/alpha pro frontend badge).
 Pod mechanikou v6 (ADR-0061) se místo α kalibruje ρ odhadu `OI + ρ·objem
 seance`: řetěz, který byl celou seanci D sekundárem (první expirace po D,
 #1580), objem stran ze snímků (maximum kumulativu do řezu), platný den ze
-snímků (`compute.facalibration.session_volume_coverage`). Ranní job dopočítá
+snímků (`compute.facalibration.session_coverage_from_summary`). Ranní job dopočítá
 i dny bez bodu po posledním bodu symbolu. Stav i body nesou zdroj (`source`:
 NULL = midpoint, `volume` = ρ); stav jiného zdroje se bere jako nekalibrovaný,
 takže faktor se při bumpu resetuje sám a FA jede až po `FA_MIN_DAYS` dnech —
@@ -24,6 +24,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from sqlalchemy import (
     Column,
@@ -54,13 +55,18 @@ from gexlens_engine.compute.facalibration import (
     SessionVolumeCoverage,
     calibrate_alpha,
     calibrate_rho,
-    session_volume_coverage,
+    session_coverage_from_summary,
     update_alpha,
 )
 from gexlens_engine.compute.marketclock import daily_close_utc
 from gexlens_engine.compute.settle import is_trading_session, session_bounds
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS
-from gexlens_engine.storage.fa_validation import PublicationUtc, measured_oi_pair
+from gexlens_engine.storage.fa_validation import (
+    PublicationUtc,
+    measured_oi_pair,
+    rows_in_window,
+    side_keys,
+)
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.parquet_store import read_netflow_latest
 
@@ -353,19 +359,43 @@ def snapshot_session_volumes(chain_dir: Path, session: dt.date) -> SessionVolume
 
     Seance začíná v 17:00 CT předchozího dne, takže leží ve dvou UTC particích
     (#1002); čte se jen `ts_min`, strana a kumulativní `volume`.
+
+    Souhrn stran a minut počítá pyarrow, do Pythonu jde jen výsledek po
+    stranách (#1695): `to_pylist()` obou partic držel GIL 6–9 s a smyčka
+    asyncio stála až 5,8 s. Pokrytí z něj spočítá táž čistá funkce
+    (`session_coverage_from_summary`) jako z řádků.
     """
     start = session_bounds(session)[0]
-    rows: list[tuple[dt.datetime | None, float, str, float | None]] = []
+    cutoff = daily_close_utc(session)
+    peak: dict[Key, float] = {}
+    last_volume: dict[Key, dt.datetime] = {}
+    seen: set[Key] = set()
+    minutes: set[dt.datetime] = set()
     for day in sorted({start.date(), session}):
         path = chain_dir / f"{day.isoformat()}.parquet"
         if not path.exists():
             continue
-        table = pq.read_table(path, columns=["ts_min", "strike", "right", "volume"])
-        columns = [
-            table.column(name).to_pylist() for name in ("ts_min", "strike", "right", "volume")
-        ]
-        rows.extend(zip(*columns, strict=True))
-    return session_volume_coverage(rows, start, daily_close_utc(session))
+        table = rows_in_window(
+            pq.read_table(path, columns=["ts_min", "strike", "right", "volume"]),
+            start=start,
+            end=cutoff,
+        )
+        minutes.update(pc.unique(table.column("ts_min")).to_pylist())
+        seen.update(side_keys(table.group_by(["strike", "right"], use_threads=False).aggregate([])))
+        measured = table.filter(pc.is_valid(table.column("volume")))
+        sides = measured.group_by(["strike", "right"], use_threads=False).aggregate(
+            [("volume", "max"), ("ts_min", "max")]
+        )
+        for key, volume, ts in zip(
+            side_keys(sides),
+            sides.column("volume_max").to_pylist(),
+            sides.column("ts_min_max").to_pylist(),
+            strict=True,
+        ):
+            peak[key] = max(peak.get(key, 0.0), float(volume))
+            if key not in last_volume or ts > last_volume[key]:
+                last_volume[key] = ts
+    return session_coverage_from_summary(peak, last_volume, seen, minutes, start, cutoff)
 
 
 def next_session(day: dt.date) -> dt.date:
