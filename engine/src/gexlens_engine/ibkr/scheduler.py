@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from gexlens_engine.compute.gexfield import fallback_greeks
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
@@ -246,6 +247,10 @@ class SubscriptionScheduler:
         self._no_greeks_sweeps: dict[OptionContractSpec, int] = {}
         # Částečné kotace aktuálního sweepu (kotace ano, greeks ne)
         self._partials: dict[OptionContractSpec, PartialQuote] = {}
+        # Ticho IBKR (#1710): kontrakty sweepu s „Not connected“ a zda poslední
+        # sweep skončil první dávkou bez jediné kotace (hrana do logu)
+        self._not_connected = 0
+        self._silent = False
         self.last_metrics: SweepMetrics | None = None
 
     @property
@@ -275,29 +280,45 @@ class SubscriptionScheduler:
         now = self._clock()
         due = [spec for spec in selected if self._due_at.get(spec, 0.0) <= now]
         deferred = [spec for spec in selected if self._due_at.get(spec, 0.0) > now]
+        if spot > 0.0:
+            # Od ATM (#1710): první dávka je nejlikvidnější, takže její ticho
+            # znamená mlčící IBKR, ne nelikvidní křídla
+            due.sort(key=lambda spec: abs(spec.strike - spot))
 
-        incomplete = await self._fetch_in_batches(due)
+        self._not_connected = 0
+        incomplete, silent = await self._fetch_in_batches(due, stop_when_silent=True)
         repair_count = len(incomplete) + len(deferred)
+        if due:
+            self._log_silence(due[0], silent)
 
         # Repair fronta: retry jen kontraktů, které jsou po backoffu na řadě.
         # Log jde jednou za sweep (#547) — dřív „Repair: retrying" spamoval
         # každé kolo (3× během 10 s), hodiny v kuse.
-        if incomplete:
+        if incomplete and not silent:
             logger.info(
                 "Repair: %d nekompletních striků (v backoffu čeká dalších %d)",
                 len(incomplete),
                 len(deferred),
             )
-        attempts_left = self._settings.repair_max_attempts
+        attempts_left = 0 if silent else self._settings.repair_max_attempts
         while incomplete and attempts_left > 0:
             now = self._clock()
             due_retry = [spec for spec in incomplete if self._due_at.get(spec, 0.0) <= now]
             if not due_retry:
                 break
-            failed = set(await self._fetch_in_batches(due_retry))
+            failed = set((await self._fetch_in_batches(due_retry))[0])
             due_set = set(due_retry)
             incomplete = [spec for spec in incomplete if spec not in due_set or spec in failed]
             attempts_left -= 1
+        if self._not_connected and not silent:
+            # Socket spadl až uprostřed sweepu nebo v repair (ticho první dávky
+            # hlásí `_log_silence`): jeden řádek za sweep, bez tracebacku
+            logger.warning(
+                "Sweep %s %s: %d kontraktů bez kotace — API spojení s IBKR není (Not connected)",
+                due[0].symbol,
+                due[0].expiry,
+                self._not_connected,
+            )
 
         # Fallback vlastní greeks (#547): kotace tečou, TWS model mlčí → po
         # `greeks_fallback_sweeps` sweepech se greeks dopočítají BS modelem
@@ -381,14 +402,25 @@ class SubscriptionScheduler:
                 del state[spec]
 
     async def _fetch_in_batches(
-        self, specs: Sequence[OptionContractSpec]
-    ) -> list[OptionContractSpec]:
-        """Stáhne kotace po dávkách batch_size; vrátí kontrakty bez kompletních dat."""
+        self, specs: Sequence[OptionContractSpec], *, stop_when_silent: bool = False
+    ) -> tuple[list[OptionContractSpec], bool]:
+        """Stáhne kotace po dávkách batch_size; vrátí kontrakty bez kompletních dat.
+
+        `stop_when_silent` (#1710): první dávka bez jediné kotace (ani částečné)
+        = IBKR mlčí (Error 1100, souběh s mobilem, Gateway dolů). Další dávky by
+        čekaly každá `batch_timeout_s` naprázdno; při výpadku 3. 11. 2026 tak sweep
+        NQ trval 36,4 s a kolo minuty 107,8 s. Vrátí se všechny kontrakty jako
+        nekompletní a druhá hodnota je True. Backoff se neeskaluje: ticho je stav
+        feedu, ne vada kontraktu, a ATM dávka po návratu IBKR nesmí čekat
+        v odkladu, zatímco rozhodne vnější prstenec.
+        """
         incomplete: list[OptionContractSpec] = []
         batch_size = self._settings.batch_size
         for offset in range(0, len(specs), batch_size):
             batch = specs[offset : offset + batch_size]
             results = await asyncio.gather(*(self._fetch_one(spec) for spec in batch))
+            if stop_when_silent and offset == 0 and all(result is None for result in results):
+                return list(specs), True
             now = self._clock()
             for spec, result in zip(batch, results, strict=True):
                 if isinstance(result, QuoteSnapshot):
@@ -400,7 +432,39 @@ class SubscriptionScheduler:
                     self._partials[spec] = result
                 self._register_failure(spec, now)
                 incomplete.append(spec)
-        return incomplete
+        return incomplete, False
+
+    def _log_silence(self, first: OptionContractSpec, silent: bool) -> None:
+        """Hrana ticha IBKR do logu (#1710): začátek jako varování, návrat jedním řádkem.
+
+        Řádek za každý sweep by za hodiny výpadku dal tisíce řádků. „Not
+        connected“ (socket API dolů při restartu Gateway) jde do téhož řádku
+        místo tracebacku u každého kontraktu (9. 11. 2026: 602 tracebacků).
+        Při zavřeném trhu (denní pauza, víkend) je ticho očekávané: jen INFO
+        (AGENTS.md „Zavřený trh = žádná upozornění na chybějící data“).
+        """
+        if silent and not self._silent:
+            reason = (
+                f"API spojení není (Not connected u {self._not_connected} kontraktů)"
+                if self._not_connected
+                else "IBKR mlčí"
+            )
+            level = logging.INFO if is_market_closed(self._utc_now()) else logging.WARNING
+            logger.log(
+                level,
+                "Sweep %s %s: první dávka bez jediné kotace — %s; zbytek sweepu a repair se "
+                "přeskakují, dokud první dávka zase kotaci nedodá (#1710)",
+                first.symbol,
+                first.expiry,
+                reason,
+            )
+        elif not silent and self._silent:
+            logger.info(
+                "Sweep %s %s: první dávka zase dodává kotace — sweep znovu celý (#1710)",
+                first.symbol,
+                first.expiry,
+            )
+        self._silent = silent
 
     def _register_failure(self, spec: OptionContractSpec, now: float) -> None:
         """Neúspěšné kolo: eskaluje backoff kontraktu (#547)."""
@@ -474,6 +538,11 @@ class SubscriptionScheduler:
     async def _fetch_one(self, spec: OptionContractSpec) -> QuoteSnapshot | PartialQuote | None:
         try:
             return await self._streamer.fetch_quote(spec, self._settings.batch_timeout_s)
+        except ConnectionError:
+            # Socket API dolů („Not connected“) — stav spojení, ne chyba kontraktu;
+            # sweep ho zaloguje jednou (#1710)
+            self._not_connected += 1
+            return None
         except Exception:
             # Chyba streamu = nekompletní kontrakt; nesmí shodit celý sweep (SPEC kap. 8)
             logger.exception("fetch_quote selhal pro %s", spec)
