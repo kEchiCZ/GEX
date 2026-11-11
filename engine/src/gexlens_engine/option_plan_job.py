@@ -23,7 +23,8 @@ se zapíše jednou do klíče `plan.repricing` (`OptionPlansRepository.record_re
   plán i oba stíny. Strike, úrovně, poměr, vstup A, EM ani stav se nemění (K4 C bod 2);
 - **plán bez opce:** sestaví se celý z 9:31 (K4 bod 5). Scénář je z řádku `scenarios`,
   flip, zdi a těžiště z úrovní NQ minuty 9:31 (`on_levels`), ONH/ONL a PDH/PDL/PDC z barů
-  v 9:31 (`day_levels`, táž funkce jako scénář). Zpráva začíná „ZMĚNA“, když stav přejde na
+  v 9:31 (`day_levels`, táž funkce jako scénář). Sloupce `status` a `verdict` pak popíšou
+  plán z 9:31 (vlastník 11. 11., #1738). Zpráva začíná „ZMĚNA“, když stav přejde na
   `čeká` (K4 bod 4);
 - **neúplný snímek 9:31** nebo kontrakt plánu bez kotace: ceny se nezapíšou a do plánu jde
   důvod (K4 bod 6). Když snímek 9:31 v běhu enginu nedorazí (chyba, tasty, start po 9:31),
@@ -108,6 +109,20 @@ NQ_MINUTE_LEVELS = ("flip", "call_wall", "put_wall", "centroid")
 LEVELS_WAIT = dt.timedelta(minutes=3)
 #: Strop čtení ONH/ONL a PDH/PDL/PDC z API (verdikt dne čte celý kontext ~2,4 s)
 LEVELS_READ_TIMEOUT_S = 20.0
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    """Přecenění jednoho plánu: JSON `plan.repricing`, zpráva a úroveň logu.
+
+    `verdict` jen u plánu sestaveného celého v 9:31: sloupce `status` a `verdict` pak
+    popíšou aktuální stav plánu (vlastník 11. 11., #1738). Jinak zůstanou z 9:15.
+    """
+
+    repricing: dict[str, Any]
+    message: str
+    level: int
+    verdict: str | None = None
 
 
 def snapshot_deadline(session: dt.date, slot: SnapshotSlot = PLAN_SLOT) -> dt.datetime:
@@ -477,12 +492,12 @@ class OptionPlanMaker:
                 self._repriced_exists(row.id)
                 continue
             try:
-                repricing, message, level = await self._repricing(row, snapshot)
+                outcome = await self._repricing(row, snapshot)
             except Exception as error:
                 logger.exception("Přecenění plánu opce QQQ #%d selhalo", row.id)
                 reasons = [f"přecenění se nesestavilo ({type(error).__name__}: {error})"]
-                repricing, message, level = self._gap(row, reasons, None)
-            if await self._record(row, repricing, message, level, boundary):
+                outcome = self._gap(row, reasons, None)
+            if await self._record(row, outcome, boundary):
                 written.append(row.id)
         return written
 
@@ -513,43 +528,38 @@ class OptionPlanMaker:
             for row in rows:
                 if REPRICING_KEY in row.plan:
                     continue
-                repricing, message, level = self._gap(row, [reason], None)
-                if await self._record(row, repricing, message, level, now):
+                if await self._record(row, self._gap(row, [reason], None), now):
                     written.append(row.id)
             return written
         except Exception:
             logger.exception("Plán opce QQQ: hlídač přecenění seance %s selhal", session)
             return []
 
-    async def _record(
-        self,
-        row: OptionPlanRow,
-        repricing: dict[str, Any],
-        message: str,
-        level: int,
-        ts: dt.datetime,
-    ) -> bool:
+    async def _record(self, row: OptionPlanRow, outcome: _Outcome, ts: dt.datetime) -> bool:
         """Zápis `plan.repricing` jednou, log a alert; False = už zapsané (restart, hlídač)."""
-        if not await asyncio.to_thread(self.repository.record_repricing, row.id, repricing):
+        written = await asyncio.to_thread(
+            self.repository.record_repricing,
+            row.id,
+            outcome.repricing,
+            status=STATUS_BUILT if outcome.verdict is not None else None,
+            verdict=outcome.verdict,
+        )
+        if not written:
             self._repriced_exists(row.id)
             return False
-        logger.log(level, "%s: %s", PRODUCT, message)
-        await self._publish(REPRICE_ALERT_KIND, row.id, row.scenario_id, ts, message)
+        logger.log(outcome.level, "%s: %s", PRODUCT, outcome.message)
+        await self._publish(REPRICE_ALERT_KIND, row.id, row.scenario_id, ts, outcome.message)
         return True
 
-    async def _repricing(
-        self, row: OptionPlanRow, snapshot: PlanChainSnapshot
-    ) -> tuple[dict[str, Any], str, int]:
-        """(JSON `plan.repricing`, zpráva, úroveň logu) pro jeden plán seance."""
+    async def _repricing(self, row: OptionPlanRow, snapshot: PlanChainSnapshot) -> _Outcome:
+        """Přecenění jednoho plánu seance podle stavu z 9:15."""
         if row.status == STATUS_BUILT:
             return self._reprice_built(row, snapshot)
         if row.status == STATUS_NO_OPTION:
             return await self._build_at_reprice(row, snapshot)
         raise ValueError(f"plán #{row.id} má stav {row.status!r}, přecenění ho nezná")
 
-    def _reprice_built(
-        self, row: OptionPlanRow, snapshot: PlanChainSnapshot
-    ) -> tuple[dict[str, Any], str, int]:
+    def _reprice_built(self, row: OptionPlanRow, snapshot: PlanChainSnapshot) -> _Outcome:
         """Úplný plán: kontrakty z 9:15 se přecení, stav se nemění (K4 C bod 2, bod 6)."""
         chain = chain_json(snapshot)
         reasons = _snapshot_gaps(snapshot)
@@ -576,16 +586,15 @@ class OptionPlanMaker:
         if gaps:
             return self._gap(row, list(dict.fromkeys(gaps)), chain)
         repricing = {**_repricing_json([], chain), "prices": prices}
-        return repricing, _repriced_message(row, prices["main"]), logging.INFO
+        return _Outcome(repricing, _repriced_message(row, prices["main"]), logging.INFO)
 
-    async def _build_at_reprice(
-        self, row: OptionPlanRow, snapshot: PlanChainSnapshot
-    ) -> tuple[dict[str, Any], str, int]:
+    async def _build_at_reprice(self, row: OptionPlanRow, snapshot: PlanChainSnapshot) -> _Outcome:
         """Plán bez opce z 9:15: celý plán z 9:31, nic z 9:15 se nemíchá (K4 bod 5).
 
         Úrovně jsou z 9:31 jako u K4 A a goldenu K9 A: flip, zdi a těžiště z minuty 9:31
         pipeline NQ, ONH/ONL od začátku seance do openu a PDH/PDL/PDC z barů (ADR-0062
-        Odvozeno). Plán z restartu (`recover`) se tak sestaví stejně.
+        Odvozeno). Plán z restartu (`recover`) se tak sestaví stejně. Sloupce řádku pak
+        popíšou plán z 9:31 (`sestaven`, verdikt hlavního plánu), stav z 9:15 zůstane v JSON.
         """
         chain = chain_json(snapshot)
         session = snapshot.session
@@ -627,11 +636,13 @@ class OptionPlanMaker:
             "shadows": {key: plan_to_json(shadow) for key, shadow in shadows.items()},
         }
         repricing = {**_repricing_json([], chain), "plan": plan}
-        return repricing, _rebuilt_message(row, main), logging.INFO
+        return _Outcome(
+            repricing, _rebuilt_message(row, main), logging.INFO, verdict=main.verdict_kind
+        )
 
     def _gap(
         self, row: OptionPlanRow, reasons: list[str], chain: dict[str, Any] | None
-    ) -> tuple[dict[str, Any], str, int]:
+    ) -> _Outcome:
         """Přecenění bez cen: úplný plán drží ceny z 9:15, plán bez opce zůstane bez opce."""
         if row.status == STATUS_BUILT:
             message = (
@@ -644,7 +655,7 @@ class OptionPlanMaker:
                 f"Plán QQQ #{row.id} ke scénáři dne #{row.scenario_id} zůstává bez opce "
                 f"({REPRICE_SLOT.label} ET): " + "; ".join(reasons)
             )
-        return _repricing_json(reasons, chain), message, missing_data_level(self.clock())
+        return _Outcome(_repricing_json(reasons, chain), message, missing_data_level(self.clock()))
 
     def _repriced_exists(self, plan_id: int) -> None:
         logger.info("Přecenění plánu opce QQQ #%d už je zapsané — nic se nemění", plan_id)

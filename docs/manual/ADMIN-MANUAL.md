@@ -772,7 +772,9 @@ parametry účtu, sobota a pátek s 1DTE v pondělí), `test_scenario_auto.py` (
 a bod 10). Snímek 9:31 ET z `plan_chain_loop` spustí úlohu přecenění plánů seance
 (`plans_of_day`) a minutový cyklus na ni nečeká. Každý plán dostane klíč `plan.repricing`
 jednou. Zápis `record_repricing` běží v transakci se zámkem řádku, takže restart enginu druhé
-přecenění nevytvoří. Část JSON z 9:15 ET ani sloupce se nemění.
+přecenění nevytvoří. Část JSON z 9:15 ET se nemění. Sloupce `status` a `verdict` popisují
+aktuální stav plánu (vlastník 11. 11., #1738), mění se proto jen u plánu bez opce, který
+se v 9:31 sestaví celý.
 
 - **Úplný plán (`sestaven`):** čistá funkce `compute/option_plan.reprice_variants` přecení
   kontrakty variant z 9:15, hlavní plán i oba stíny. Do `repricing.prices` (`main`,
@@ -796,7 +798,8 @@ přecenění nevytvoří. Část JSON z 9:15 ET ani sloupce se nemění.
   - ONH/ONL (dnešní bary do openu) a PDH/PDL/PDC z API funkcí
     `scenario_auto.gather_day_levels`, tou, kterou čte i scénář (strop 20 s);
   - poměr, spot a řetěz ze snímku 9:31 a parametry účtu ze `settings` v 9:31.
-  Zpráva začíná „ZMĚNA“, když hlavní plán přejde na `čeká`. Plán bez nastaveného rozpočtu
+  Řádek pak má `status` `sestaven` a `verdict` hlavního plánu z 9:31, stav z 9:15 zůstane
+  v `plan.reasons`. Zpráva začíná „ZMĚNA“, když hlavní plán přejde na `čeká`. Plán bez nastaveného rozpočtu
   zůstane `neobchodovat` (jen s jiným důvodem), takže zpráva „ZMĚNA“ nenese (K4 bod 4).
 - **Plán zůstane bez opce s důvodem**, když:
   - je neúplný i snímek 9:31;
@@ -827,7 +830,7 @@ Log enginu:
   (pád čtení PG, s tracebackem).
 
 Ověření v PG (jen čtení):
-`SELECT id, status, plan->'repricing'->'reasons' AS duvody, plan->'repricing'->'prices'->'main' AS ceny_9_31, plan->'repricing'->'plan'->'main'->>'verdict' AS stav_9_31 FROM option_plans ORDER BY id DESC LIMIT 3;`.
+`SELECT id, status, verdict, plan->'repricing'->'reasons' AS duvody, plan->'repricing'->'prices'->'main' AS ceny_9_31, plan->'repricing'->'plan'->'main'->>'verdict' AS stav_9_31 FROM option_plans ORDER BY id DESC LIMIT 3;`.
 Testy: `test_option_plan_reprice.py` (čistá funkce), `test_option_plan_job.py` (golden 2. 11.
 se „ZMĚNA“, bez rozpočtu bez „ZMĚNA“, úplný plán, neúplný snímek, chybějící kontrakt, pohled
 dopředu, úrovně NQ, výpadek API, plán z restartu, hlídač, start po 9:31, víkend, svátek
@@ -882,7 +885,7 @@ Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane č
 | `paper_accounts`, `paper_events`, `paper_orders`, `paper_order_changes` | Paper účet (#1187 fáze 1, ADR-0040): účet 1 (start 50 000 $ v jednotkách plného kontraktu, `halted` = kill switch), události (vklad/výběr/poznámka), ordery (side, qty, typ, entry/stop/cíl, status `working/open/closed/cancelled`, fill/exit ceny a čas, `exit_reason` stop/target/manual/settle/kill, `pnl_usd`, `fees_usd`, `r_multiple`, `risk_usd`, `context` JSON, `journal_entry_id`). Fily dělá engine per symbol po cyklu pipeline (`gexlens_engine.paper.PaperBroker`) proti 1min barům; `fees_usd` = kontrakty × poplatek podle instrumentu orderu (ES a NQ `fee_per_contract_usd`, MES a MNQ `fee_per_micro_contract_usd`) z platné verze parametrů setupů — novou verzi převezme za běhu spolu se `SetupEngine` (#1402; dřív jen při startu enginu); uzavřený obchod zapíše do `journal_entries`/`journal_trades` (typ `obchod`, tag `paper`). |
 | `setup_params` | Verzované prahy šablon setupů (#794 fáze 2, ADR-0033): append-only, poslední řádek platí; `created_by` (`engine` seed / `ui` / `script`), povinná `note`, `mechanics_version`, `params` JSON. Engine při prvním startu založí seed z `.env` + defaultů (od té chvíle **store přebíjí `.env`** klíče `GEXLENS_SETUP_*`), novou verzi přečte po NOTIFY nebo v k-tém cyklu. Setupy nesou `params_version` (NULL = před store). |
 | `adhoc_view` | Most UI → engine pro ad-hoc pohled (#521 C), viz kap. 12 |
-| `option_plans` | Plán opce QQQ ke scénáři dne NQ (ADR-0062 K2 A, #1742, kap. 5 „Plán opce QQQ ze scénáře dne“). Řádek vznikne jednou v 9:15 ET a zpětně se nepřepisuje: `scenario_id` (unikátní, bez cizího klíče, protože scénář smí uživatel smazat), `day`, `created_at` (štítek minuty scénáře, u restartu čas startu), `rules_version`. `status` je `sestaven` (z ranního snímku), nebo `bez opce`. `verdict` je hlavní slovo verdiktu hlavního plánu (`čeká` / `neobchodovat`, K12 A), u plánu bez opce NULL. JSON `plan` nese `slot`, `reasons`, `levels_nq` (úrovně scénáře), `chain` (zdroj, čas, spot, poměr a pokrytí obou expirací; `zero_dte.quoted_share` patří k P1 stínu B, Rozhodnuto 10. 11.), `main` (celý plán, `compute/option_plan.plan_to_json`) a `shadows` (`entry_b`, `wick_test`). Přecenění v 9:31 ET (#1769) přidá jednou klíč `repricing`: `slot`, `reasons` (proč se ceny nezapsaly, nebo proč plán zůstal bez opce), `chain` (snímek 9:31), `prices` (sady cen úplného plánu podle klíčů `main`, `entry_b`, `wick_test`: bid, ask, IV, delta, `quote_ts`, `at_targets`) a `plan` (celý plán z 9:31 u plánu bez opce z 9:15: `levels_nq`, `main`, `shadows`). `evaluated_at` a `result` doplní F3 #1748, `image_path` F4b #1744. Tabulku zakládá engine při startu (`ensure_schema`), před prvním nasazením záloha PG |
+| `option_plans` | Plán opce QQQ ke scénáři dne NQ (ADR-0062 K2 A, #1742, kap. 5 „Plán opce QQQ ze scénáře dne“). Řádek vznikne jednou v 9:15 ET a JSON z 9:15 se zpětně nepřepisuje: `scenario_id` (unikátní, bez cizího klíče, protože scénář smí uživatel smazat), `day`, `created_at` (štítek minuty scénáře, u restartu čas startu), `rules_version`. `status` je `sestaven` (z ranního snímku, nebo celý z 9:31 — pak nese `plan.repricing.plan`), nebo `bez opce`. `verdict` je hlavní slovo verdiktu hlavního plánu (`čeká` / `neobchodovat`, K12 A), u plánu bez opce NULL. Sloupce popisují aktuální stav plánu (vlastník 11. 11., #1738), stav z 9:15 zůstává v JSON. JSON `plan` nese `slot`, `reasons`, `levels_nq` (úrovně scénáře), `chain` (zdroj, čas, spot, poměr a pokrytí obou expirací; `zero_dte.quoted_share` patří k P1 stínu B, Rozhodnuto 10. 11.), `main` (celý plán, `compute/option_plan.plan_to_json`) a `shadows` (`entry_b`, `wick_test`). Přecenění v 9:31 ET (#1769) přidá jednou klíč `repricing`: `slot`, `reasons` (proč se ceny nezapsaly, nebo proč plán zůstal bez opce), `chain` (snímek 9:31), `prices` (sady cen úplného plánu podle klíčů `main`, `entry_b`, `wick_test`: bid, ask, IV, delta, `quote_ts`, `at_targets`) a `plan` (celý plán z 9:31 u plánu bez opce z 9:15: `levels_nq`, `main`, `shadows`). `evaluated_at` a `result` doplní F3 #1748, `image_path` F4b #1744. Tabulku zakládá engine při startu (`ensure_schema`), před prvním nasazením záloha PG |
 | `watchlist`, `alerts`, `annotations`, `settings` | CRUD přes API |
 
 ## 7. API reference

@@ -15,7 +15,8 @@
   nad pásmem (K4 bod 7, vlastník „B+E“). **Revize 10. 11.:** P1 stínu B z ranního řetězu
   s podílem kotací pásma 0DTE (K4 bod 7, vlastník „A“), začátek track recordu (bod 7, vlastník
   „A“) a spojení vstupů při vzniku plánu (K4 bod 9, odvozeno v F2b #1742). **11. 11.:**
-  přecenění v 9:31 ET (K4 bod 10, odvozeno v F2c #1769).
+  přecenění v 9:31 ET (K4 bod 10, odvozeno v F2c #1769) a sloupce plánu sestaveného
+  v 9:31 (K4 bod 10, vlastník „A“).
 - **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09, P1, track record a K4 bod 9
   2026-11-10, K4 bod 10 2026-11-11)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
@@ -398,9 +399,14 @@ Odvozeno pro F2c (zapsal agent 11. 11., #1769):
 10. **Přecenění v 9:31 ET** (`OptionPlanMaker.reprice`, `compute/option_plan.reprice_variants`):
     - Spouští ho snímek 9:31 a běží v samostatné úloze, minutový cyklus nečeká. Výsledek jde
       jednou do klíče `plan.repricing` (`slot`, `reasons`, `chain`, `prices`, `plan`). Část
-      z 9:15 se nemění (K2 A). Zda se u plánu sestaveného v 9:31 přepíšou sloupce `status`
-      a `verdict`, rozhodne vlastník (#1738, Otevřené otázky). Restart druhé přecenění
-      nevytvoří.
+      z 9:15 se nemění (K2 A). Restart druhé přecenění nevytvoří.
+    - **Sloupce `status` a `verdict`** popisují aktuální stav plánu (rozhodl vlastník
+      11. 11., varianta A, #1738). Plán bez opce, který se v 9:31 sestaví celý, dostane
+      `sestaven` a hlavní slovo verdiktu plánu z 9:31. Stav z 9:15 zůstane v JSON
+      (`plan.reasons`, `plan.main` je null), `created_at` zůstane z 9:15 a plán sestavený
+      v 9:31 se pozná podle `plan.repricing.plan`. Track record (K2 A: „vystačí se `status`
+      a `result`“), seznam plánů F4a a statistiky F3 tak plán najdou bez čtení JSON.
+      Přecenění úplného plánu ani plán, který zůstal bez opce, sloupce nemění.
     - **Snímek 9:31 nedorazil** (chyba snímku, tasty mimo provoz, start enginu po 9:31):
       hlídač, kterého spustí první minuta úrovní NQ od 9:31 do exitu, zapíše po limitu snímku
       (9:32:40 ET) důvod. Mezera je v plánu, ne jen v logu (bod 6, AGENTS.md).

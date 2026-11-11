@@ -482,9 +482,9 @@ def test_golden_2_11_plan_bez_opce_v_9_31_cely_z_9_31_se_zmenou(tmp_path: Path) 
     morning = _row(plans, scenario_id).plan
     assert _reprice(maker, _snapshot_931(), NQ_931) == [_row(plans, scenario_id).id]
     row = _row(plans, scenario_id)
-    # Část z 9:15 zůstává (K2 A); sloupce čekají na rozhodnutí vlastníka (#1738)
+    # Část z 9:15 zůstává (K2 A); sloupce popisují plán z 9:31 (vlastník 11. 11., #1738)
     assert {key: row.plan[key] for key in morning} == morning
-    assert (row.status, row.verdict, row.created_at) == (STATUS_NO_OPTION, None, BOUNDARY)
+    assert (row.status, row.verdict, row.created_at) == (STATUS_BUILT, "čeká", BOUNDARY)
     repricing = row.plan["repricing"]
     assert (repricing["slot"], repricing["reasons"], repricing["prices"]) == ("9:31", [], None)
     assert repricing["chain"]["slot"] == "9:31" and repricing["chain"]["complete"]
@@ -554,7 +554,9 @@ def test_sestaveni_bez_rozpoctu_neni_zmena(tmp_path: Path) -> None:
     unset = AccountParams(None, None)
     maker, plans, publisher, scenario_id = _plan_without_option(tmp_path, unset)
     _reprice(maker, _snapshot_931(), NQ_931)
-    main = _row(plans, scenario_id).plan["repricing"]["plan"]["main"]
+    row = _row(plans, scenario_id)
+    assert (row.status, row.verdict) == (STATUS_BUILT, "neobchodovat")
+    main = row.plan["repricing"]["plan"]["main"]
     assert main["verdict"].startswith("neobchodovat — rozpočet nenastaven")
     message = publisher.alerts[-1]["message"]
     assert message.startswith("Plán QQQ #") and CHANGE not in message
@@ -644,7 +646,7 @@ def test_oba_snimky_neuplne_plan_zustane_bez_opce(tmp_path: Path) -> None:
     reason = "0DTE 20261102: ATM straddle 695 bez zaplacené kotace put"
     _reprice(maker, _snapshot_931(reasons=(reason,)), NQ_931)
     row = _row(plans, scenario_id)
-    assert (row.status, row.plan["main"]) == (STATUS_NO_OPTION, None)
+    assert (row.status, row.verdict, row.plan["main"]) == (STATUS_NO_OPTION, None, None)
     repricing = row.plan["repricing"]
     assert repricing["reasons"] == [f"snímek 9:31 ET neúplný: {reason}"]
     assert repricing["plan"] is None
@@ -694,9 +696,10 @@ def test_plan_z_restartu_se_sestavi_smazany_scenar_ne(tmp_path: Path) -> None:
         "14:31:00+00:00"
     )
     assert [v["strike"] for v in rebuilt["plan"]["main"]["variants"]] == [687.0, 686.0]
-    assert _row(plans, deleted).plan["repricing"]["reasons"] == [
-        f"scénář dne #{deleted} v PG už není"
-    ]
+    assert _row(plans, restarted).status == STATUS_BUILT
+    gone = _row(plans, deleted)
+    assert gone.plan["repricing"]["reasons"] == [f"scénář dne #{deleted} v PG už není"]
+    assert (gone.status, gone.verdict) == (STATUS_NO_OPTION, None)
 
 
 def test_restart_mezi_9_31_a_close_jedno_preceneni(tmp_path: Path) -> None:

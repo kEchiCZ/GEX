@@ -1,11 +1,13 @@
 """Tabulka `option_plans` (ADR-0062 K2 A, F2b #1742) — plán opce QQQ ke scénáři dne NQ.
 
 Jeden plán na auto-scénář (`scenario_id` je unikátní). Plán je point-in-time: řádek vznikne
-jednou v 9:15 ET (K4 C) a zpětně se nepřepisuje. Přecenění v 9:31 ET (F2c #1769) přidá
-do JSON `plan` jen klíč `repricing`, jednou. `evaluated_at` a `result` doplní vyhodnocení
-(F3 #1748), `image_path` PNG plánu (F4b #1744). Detail plánu nese JSON `plan`
-(`compute/option_plan.plan_to_json`), sloupce slouží jen dotazům a vazbám:
-- `status` při vzniku: `sestaven` (z ranního snímku), nebo `bez opce` (důvody v `plan`);
+jednou v 9:15 ET (K4 C) a JSON z 9:15 se zpětně nepřepisuje. Přecenění v 9:31 ET (F2c #1769)
+přidá do JSON `plan` jen klíč `repricing`, jednou. `evaluated_at` a `result` doplní
+vyhodnocení (F3 #1748), `image_path` PNG plánu (F4b #1744). Detail plánu nese JSON `plan`
+(`compute/option_plan.plan_to_json`), sloupce slouží jen dotazům a vazbám a popisují aktuální
+stav plánu (vlastník 11. 11., #1738):
+- `status`: `sestaven` (z ranního snímku, nebo celý z 9:31 — pak `plan.repricing.plan`),
+  jinak `bez opce` (důvody v `plan` a `plan.repricing`);
 - `verdict`: hlavní slovo verdiktu hlavního plánu (`čeká`, `neobchodovat`, `obchodovat`),
   u plánu bez opce NULL.
 
@@ -160,11 +162,20 @@ class OptionPlansRepository:
             rows = conn.execute(stmt).mappings().all()
         return [_row(row) for row in rows]
 
-    def record_repricing(self, plan_id: int, repricing: dict[str, Any]) -> bool:
+    def record_repricing(
+        self,
+        plan_id: int,
+        repricing: dict[str, Any],
+        *,
+        status: str | None = None,
+        verdict: str | None = None,
+    ) -> bool:
         """Přecenění v 9:31 ET (F2c #1769) jako klíč `plan.repricing`; False = už zapsané.
 
-        Jednou za plán (restart nevytvoří druhé). Část JSON z 9:15 ET a sloupce se nemění
-        (K2 A). Řádek se v transakci zamkne (PG `FOR UPDATE`), kontrola a zápis jsou atomické.
+        Jednou za plán (restart nevytvoří druhé). Část JSON z 9:15 ET se nemění (K2 A).
+        `status` a `verdict` přepíšou sloupce jen u plánu sestaveného celého v 9:31: sloupce
+        popisují aktuální stav plánu (vlastník 11. 11., #1738); bez `status` zůstanou z 9:15.
+        Řádek se v transakci zamkne (PG `FOR UPDATE`), kontrola a zápis jsou atomické.
         """
         with self._engine.begin() as conn:
             row = (
@@ -182,10 +193,13 @@ class OptionPlansRepository:
             if REPRICING_KEY in plan:
                 return False
             plan[REPRICING_KEY] = repricing
+            values: dict[str, Any] = {"plan": plan}
+            if status is not None:
+                values |= {"status": status, "verdict": verdict}
             conn.execute(
                 update(option_plans_table)
                 .where(option_plans_table.c.id == plan_id)
-                .values(plan=plan)
+                .values(**values)
             )
         return True
 
