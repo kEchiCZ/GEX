@@ -407,6 +407,10 @@ Odvozeno pro F2c (zapsal agent 11. 11., #1769):
       v 9:31 se pozná podle `plan.repricing.plan`. Track record (K2 A: „vystačí se `status`
       a `result`“), seznam plánů F4a a statistiky F3 tak plán najdou bez čtení JSON.
       Přecenění úplného plánu ani plán, který zůstal bez opce, sloupce nemění.
+    - **Platný plán řádku** pro čtenáře (F3 vyhodnocení, F4a seznam, F4b obrázek):
+      `plan.repricing.plan`, když existuje (plán z 9:31, `plan.main` je tam null), jinak
+      `plan.main` a `plan.shadows`. Ceny z 9:31 úplného plánu jsou v
+      `plan.repricing.prices`, ceny z 9:15 ve variantách `plan.main`.
     - **Snímek 9:31 nedorazil** (chyba snímku, tasty mimo provoz, start enginu po 9:31):
       hlídač, kterého spustí první minuta úrovní NQ od 9:31 do exitu, zapíše po limitu snímku
       (9:32:40 ET) důvod. Mezera je v plánu, ne jen v logu (bod 6, AGENTS.md).
