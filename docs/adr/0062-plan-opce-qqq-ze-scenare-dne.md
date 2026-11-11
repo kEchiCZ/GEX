@@ -392,6 +392,29 @@ Odvozeno pro F2b (zapsal agent 10. 11., #1742):
      zdroj, čas a pokrytí snímku a důvody. Parametry účtu se čtou v okamžiku plánu a do logu
      ani do zprávy nejdou.
 
+Odvozeno pro F2c (zapsal agent 11. 11., #1769):
+
+10. **Přecenění v 9:31 ET** (`OptionPlanMaker.reprice`, `compute/option_plan.reprice_variants`):
+    - Spouští ho snímek 9:31 a běží v samostatné úloze, minutový cyklus nečeká. Výsledek jde
+      jednou do klíče `plan.repricing` (`slot`, `reasons`, `chain`, `prices`, `plan`). Část
+      z 9:15 ani sloupce se nemění (K2 A). Restart druhé přecenění nevytvoří. Start enginu
+      po 9:31 do exitu zapíše důvod, protože snímek se nedohání.
+    - **Úplný plán:** přecení se kontrakty z 9:15 hlavního plánu i obou stínů. Stíny počítá
+      táž funkce a kontrakty mají stejné (K10 B). Ceny se nezapíšou, když je snímek neúplný
+      (bod 6), nebo když řádky 9:31 nemají kotaci, IV a deltu právě kontraktů plánu. Výběr
+      v 9:31 se totiž může lišit (#1768). Stav se nemění, protože nestojí na kotacích, ale na
+      vstupu A, EM a parametrech účtu z 9:15 (K12 A). Parametry účtu se v 9:31 znovu nečtou.
+    - **Plán bez opce** se sestaví celý z 9:31. Scénář je z řádku `scenarios`, protože
+      `CreatedScenario` žije jen v paměti běhu. ONH/ONL a PDH/PDL/PDC jsou z úrovní scénáře
+      v 9:15 (`plan.levels_nq`), protože ONH/ONL spočítané až v 9:31 by se od scénáře lišily.
+      Flip, zdi a těžiště jsou z úrovní NQ minuty 9:31, které předá pipeline NQ. Partice
+      `levels` jde přes buffer zapisovače a čtení z disku by je nemuselo vidět. Úrovně jiné
+      minuty se neberou, 9:32 by byl pohled dopředu. Když nedorazí do 9:32:40 ET, plán
+      zůstane bez opce s důvodem. Plán z restartu (`recover`) úrovně scénáře nemá a zůstane
+      bez opce.
+    - **„ZMĚNA“** vzniká jen při přechodu z plánu bez opce na sestavený, přecenění úplného
+      plánu stav nemění.
+
 **Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
 nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test
 přecenění s pevným strikem přinese F2c (#1769), naměřený golden první seance F6 (#1750).
