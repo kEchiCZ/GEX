@@ -79,6 +79,7 @@ from gexlens_engine.storage.oi_archive import (
     OIEodRepository,
     OIRecord,
 )
+from gexlens_engine.storage.parquet_store import LevelsRow
 from gexlens_engine.t6 import T6Collector
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.verdict_writer import DayVerdictWriter
@@ -410,6 +411,8 @@ class InstrumentPipeline:
     verdict_writer: DayVerdictWriter | None = None
     # Automatický scénář z verdiktu dne (#1173 A) — jednou před US openem
     scenario_generator: ScenarioGenerator | None = None
+    # Úrovně minuty pro přecenění plánu opce QQQ v 9:31 ET (F2c #1769) — jen NQ, jen předá
+    on_minute_levels: Callable[[LevelsRow], object] | None = None
     # Volatilitní režim z barů (ADR-0028, #713) — None = vypnuto
     vol_regime: VolRegimeCollector | None = None
     # Respektování pásma EM (#872, D3) — None = vypnuto
@@ -1616,6 +1619,12 @@ class InstrumentPipeline:
                 await self.scenario_generator.on_minute(now, pre_open, self.runtime)
             except Exception:
                 logger.exception("Automatický scénář %s selhal — pokračuji", self.symbol)
+        # Úrovně téže minuty plánu opce QQQ (F2c #1769): jen předá, cyklus nečeká (#1337)
+        if self.on_minute_levels is not None and self.runtime.last_levels is not None:
+            try:
+                self.on_minute_levels(self.runtime.last_levels)
+            except Exception:
+                logger.exception("Úrovně %s pro plán opce QQQ selhaly — pokračuji", self.symbol)
         # Paper účet (#1187): fily proti barům minuty — pád nesmí shodit sběr dat
         if self.paper_broker is not None:
             try:

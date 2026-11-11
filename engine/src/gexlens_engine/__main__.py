@@ -142,7 +142,12 @@ from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.option_plans_store import OptionPlansRepository
 from gexlens_engine.storage.paper_store import PaperRepository
-from gexlens_engine.storage.parquet_store import SnapshotWriter, bar_partition_day, read_bars
+from gexlens_engine.storage.parquet_store import (
+    LevelsRow,
+    SnapshotWriter,
+    bar_partition_day,
+    read_bars,
+)
 from gexlens_engine.storage.probes_store import ProbeRepository
 from gexlens_engine.storage.retention import RetentionJob, RetentionReport, purge_day_due
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -936,6 +941,7 @@ async def create_pipeline(
     discovery_cache: DiscoveryCache | None = None,
     handover: EngineRuntime | None = None,
     on_scenario_created: Callable[[CreatedScenario], object] | None = None,
+    on_minute_levels: Callable[[LevelsRow], object] | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async.
 
@@ -1640,6 +1646,7 @@ async def create_pipeline(
             and scenario_auto_minutes > 0
             else None
         ),
+        on_minute_levels=on_minute_levels,
         vol_regime=(
             VolRegimeCollector(
                 symbol=symbol,
@@ -1898,18 +1905,22 @@ async def main() -> None:
     # Scénáře dne (#1173): tabulku zakládá i API, tady jen pro jistotu při startu
     scenarios_repository = ScenariosRepository(db)
     await asyncio.to_thread(scenarios_repository.ensure_schema)
-    # Plán opce QQQ ke scénáři dne NQ v 9:15 ET (ADR-0062 K2 A a K4 C, #1742): scénář předá
-    # generátor NQ, ranní snímek `plan_chain_loop`; spojení běží v úloze mimo minutový cyklus
+    # Plán opce QQQ ke scénáři dne NQ v 9:15 ET a přecenění v 9:31 ET (ADR-0062 K2 A a K4 C,
+    # #1742, #1769): scénář a úrovně minuty předá pipeline NQ, snímky `plan_chain_loop`;
+    # spojení i přecenění běží v úlohách mimo minutový cyklus
     option_plans_repository = OptionPlansRepository(db)
     await asyncio.to_thread(option_plans_repository.ensure_schema)
     option_plan_maker = OptionPlanMaker(
         repository=option_plans_repository,
         account=lambda: account_params(watchlist_reader.settings_map(OPTION_PLAN_ACCOUNT_KEYS)),
+        scenarios=scenarios_repository,
         publisher=publisher,
     )
     try:
-        # Restart po vzniku scénáře dne: plán bez opce s důvodem, jen do exitu seance
+        # Restart po vzniku scénáře dne: plán bez opce s důvodem, jen do exitu seance; po 9:31 ET
+        # důvod, proč přecenění v tomto běhu nebude (snímek se nedohání)
         await option_plan_maker.recover()
+        await option_plan_maker.recover_repricing()
     except Exception:
         logger.exception("Plán opce QQQ: kontrola scénáře dne bez plánu po startu selhala")
     # Paper účet (#1187 fáze 1): účet + ordery; fily dělá PaperBroker per symbol
@@ -3256,7 +3267,7 @@ async def main() -> None:
                             else missing_data_level(dt.datetime.now(dt.UTC))
                         )
                         logger.log(level, "%s", snapshot.describe())
-                        # Ranní snímek pro vznik plánu opce QQQ (#1742); 9:31 plán nečte
+                        # 9:15 ET vznik plánu opce QQQ (#1742), 9:31 ET přecenění v úloze (#1769)
                         option_plan_maker.on_snapshot(snapshot)
                 except Exception:
                     logger.exception(
@@ -3503,6 +3514,9 @@ async def main() -> None:
                     # Plán opce QQQ vzniká jen ze scénáře NQ (ADR-0062 bod 2)
                     on_scenario_created=(
                         option_plan_maker.on_scenario if symbol == PLAN_CHAIN_REFERENCE else None
+                    ),
+                    on_minute_levels=(
+                        option_plan_maker.on_levels if symbol == PLAN_CHAIN_REFERENCE else None
                     ),
                 )
                 # Předání drží subskripci a trasy D+1 až do založení (#1460)
