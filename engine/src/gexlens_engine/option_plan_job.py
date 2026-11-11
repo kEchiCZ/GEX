@@ -22,10 +22,12 @@ se zapíše jednou do klíče `plan.repricing` (`OptionPlansRepository.record_re
 - **úplný plán** (`sestaven`): kontrakty z 9:15 se přecení (`reprice_variants`), hlavní
   plán i oba stíny. Strike, úrovně, poměr, vstup A, EM ani stav se nemění (K4 C bod 2);
 - **plán bez opce:** sestaví se celý z 9:31 (K4 bod 5). Scénář je z řádku `scenarios`,
-  ONH/ONL a PDH/PDL/PDC z `plan.levels_nq`, flip, zdi a těžiště z úrovní NQ minuty 9:31
-  (`on_levels`). Zpráva začíná „ZMĚNA“;
+  flip, zdi a těžiště z úrovní NQ minuty 9:31 (`on_levels`), ONH/ONL a PDH/PDL/PDC z barů
+  v 9:31 (`day_levels`, táž funkce jako scénář). Zpráva začíná „ZMĚNA“, když stav přejde na
+  `čeká` (K4 bod 4);
 - **neúplný snímek 9:31** nebo kontrakt plánu bez kotace: ceny se nezapíšou a do plánu jde
-  důvod (K4 bod 6). Restart po 9:31 snímek nedohání (`recover_repricing` zapíše důvod).
+  důvod (K4 bod 6). Když snímek 9:31 v běhu enginu nedorazí (chyba, tasty, start po 9:31),
+  zapíše důvod hlídač (`_watch_repricing`, spouští ho první minuta úrovní NQ od 9:31).
 Alert `option_plan_repriced`. R:R, P3, P4 a rozpočet se ani v 9:31 nepočítají (K12 A).
 
 Parametry účtu (`option_plan_account_usd`, `option_plan_max_loss_usd` v `settings`, K2 A) se
@@ -37,7 +39,7 @@ import contextlib
 import datetime as dt
 import logging
 import math
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,7 +62,7 @@ from gexlens_engine.compute.option_plan import (
     reprice_variants,
 )
 from gexlens_engine.compute.settle import ET_TZ, is_trading_session, settle_ts, trading_session_date
-from gexlens_engine.scenario_auto import CreatedScenario
+from gexlens_engine.scenario_auto import CreatedScenario, VerdictContext
 from gexlens_engine.storage.option_plans_store import (
     REPRICING_KEY,
     OptionPlanRow,
@@ -98,15 +100,26 @@ REPRICE_ALERT_KIND = "option_plan_repriced"
 CHANGE = "ZMĚNA"
 #: Stíny track recordu (K10 B) v `plan.shadows`; klíč = parametr pravidel
 SHADOWS: Mapping[str, PlanRules] = {"entry_b": SHADOW_B, "wick_test": SHADOW_WICK}
-#: Úrovně NQ minuty, které plán z 9:31 bere z pipeline; ONH/ONL a PD zůstávají z 9:15
+#: Úrovně NQ minuty, které plán z 9:31 bere z pipeline; ONH/ONL a PD čte z barů (API)
 NQ_MINUTE_LEVELS = ("flip", "call_wall", "put_wall", "centroid")
+#: Na úrovně NQ minuty 9:31 plán čeká do 9:34 ET: cyklus minuty 9:31 je předá až po scénáři
+#: (10. 11. scénář 68 s po štítku), přetažená minuta i později. První 5min close je v 9:35 ET,
+#: takže plán z 9:31 přijde před první možnou spouští vstupu A
+LEVELS_WAIT = dt.timedelta(minutes=3)
+#: Strop čtení ONH/ONL a PDH/PDL/PDC z API (verdikt dne čte celý kontext ~2,4 s)
+LEVELS_READ_TIMEOUT_S = 20.0
 
 
 def snapshot_deadline(session: dt.date, slot: SnapshotSlot = PLAN_SLOT) -> dt.datetime:
-    """Do kdy plán čeká na snímek (a v 9:31 na úrovně NQ): hranice + limit 40 s + rezerva."""
+    """Do kdy plán čeká na snímek: hranice + limit snímku 40 s + rezerva."""
     return snapshot_boundary(session, slot) + dt.timedelta(
         seconds=QUOTE_TIMEOUT_S + SNAPSHOT_RESERVE_S
     )
+
+
+def levels_deadline(session: dt.date) -> dt.datetime:
+    """Do kdy plán bez opce čeká v 9:31 na úrovně NQ minuty 9:31 (`LEVELS_WAIT`)."""
+    return snapshot_boundary(session, REPRICE_SLOT) + LEVELS_WAIT
 
 
 def account_params(values: Mapping[str, object]) -> AccountParams:
@@ -199,6 +212,8 @@ class OptionPlanMaker:
     account: Callable[[], AccountParams]
     #: Scénář dne pro plán bez opce sestavený v 9:31 ET (F2c); `CreatedScenario` je jen v paměti
     scenarios: ScenariosRepository
+    #: ONH/ONL a PDH/PDL/PDC seance v okamžiku volání (`scenario_auto.gather_day_levels`)
+    day_levels: Callable[[dt.date], Awaitable[VerdictContext]]
     publisher: Any = None
     clock: Callable[[], dt.datetime] = _utcnow
 
@@ -207,7 +222,14 @@ class OptionPlanMaker:
     #: Úrovně NQ minuty 9:31 ET podle seance (F2c) a jejich příchod
     _levels: dict[dt.date, LevelsRow] = field(default_factory=dict, init=False)
     _levels_arrived: dict[dt.date, asyncio.Event] = field(default_factory=dict, init=False)
+    #: Snímek 9:31 ET dorazil do přecenění (hlídač mezery, F2c)
+    _repriced: dict[dt.date, asyncio.Event] = field(default_factory=dict, init=False)
+    _watched: set[dt.date] = field(default_factory=set, init=False)
+    _started_at: dt.datetime = field(init=False)
     _tasks: set[asyncio.Task[Any]] = field(default_factory=set, init=False)
+
+    def __post_init__(self) -> None:
+        self._started_at = self.clock()
 
     def on_snapshot(self, snapshot: PlanChainSnapshot) -> asyncio.Task[list[int]] | None:
         """Snímek z `plan_chain_loop`: 9:15 ET pro vznik, 9:31 ET spustí přecenění (F2c).
@@ -225,20 +247,27 @@ class OptionPlanMaker:
         return None
 
     def on_levels(self, levels: LevelsRow) -> None:
-        """Úrovně NQ minuty z minutového cyklu pipeline NQ; plán bere jen minutu 9:31 ET.
+        """Úrovně NQ minuty z minutového cyklu pipeline NQ (F2c); jen uloží a nečeká (#1337).
 
-        Volá se každou minutu, jen uloží řádek a nečeká (#1337). Úrovně jiné minuty by plán
-        z 9:31 posunuly v čase (9:32 = pohled dopředu).
+        Plán bere jen minutu 9:31 ET, jiná minuta by ho posunula v čase (9:32 = pohled
+        dopředu). První minuta od 9:31 do exitu spustí hlídač přecenění: když snímek 9:31
+        v tomto běhu nedorazí (chyba snímku, tasty neběží, start enginu po 9:31), dostane
+        plán důvod, ne mlčení (K4 bod 6).
         """
         session = trading_session_date(levels.ts_min)
         if not is_trading_session(session):
             return
-        if levels.ts_min != snapshot_boundary(session, REPRICE_SLOT):
+        boundary = snapshot_boundary(session, REPRICE_SLOT)
+        if not boundary <= levels.ts_min < settle_ts(session) - EXIT_BEFORE_SETTLE:
             return
-        _keep_only(self._levels, session)
-        _keep_only(self._levels_arrived, session)
-        self._levels[session] = levels
-        _event(self._levels_arrived, session).set()
+        if levels.ts_min == boundary:
+            _keep_only(self._levels, session)
+            _keep_only(self._levels_arrived, session)
+            self._levels[session] = levels
+            _event(self._levels_arrived, session).set()
+        if session not in self._watched:
+            self._watched = {session}
+            self._spawn(self._watch_repricing(session))
 
     def on_scenario(self, created: CreatedScenario) -> asyncio.Task[int | None]:
         """Scénář NQ po zápisu; nečeká, spojení vstupů běží v samostatné úloze (#1337)."""
@@ -426,6 +455,9 @@ class OptionPlanMaker:
         session = snapshot.session
         if snapshot.slot != REPRICE_SLOT:
             raise ValueError(f"přecenění čte snímek {REPRICE_SLOT.label} ET, ne {snapshot.slot}")
+        # Hlídač mezery (`_watch_repricing`): snímek dorazil, důvod za něj nepíše
+        _keep_only(self._repriced, session)
+        _event(self._repriced, session).set()
         if not is_trading_session(session):
             # Snímek v takový den nevzniká (`next_snapshot`); obrana proti chybě volajícího
             logger.warning("Plán opce QQQ: seance %s není obchodní — přecenění nebude", session)
@@ -439,6 +471,7 @@ class OptionPlanMaker:
             )
             return []
         written: list[int] = []
+        boundary = snapshot_boundary(session, REPRICE_SLOT)
         for row in rows:
             if REPRICING_KEY in row.plan:
                 self._repriced_exists(row.id)
@@ -447,50 +480,62 @@ class OptionPlanMaker:
                 repricing, message, level = await self._repricing(row, snapshot)
             except Exception as error:
                 logger.exception("Přecenění plánu opce QQQ #%d selhalo", row.id)
-                repricing = _repricing_json(
-                    [f"přecenění se nesestavilo ({type(error).__name__}: {error})"], None
-                )
-                message = _not_written_message(row.id, repricing["reasons"])
-                level = missing_data_level(self.clock())
-            if not await asyncio.to_thread(self.repository.record_repricing, row.id, repricing):
-                self._repriced_exists(row.id)
-                continue
-            logger.log(level, "%s: %s", PRODUCT, message)
-            boundary = snapshot_boundary(session, REPRICE_SLOT)
-            await self._publish(REPRICE_ALERT_KIND, row.id, row.scenario_id, boundary, message)
-            written.append(row.id)
+                reasons = [f"přecenění se nesestavilo ({type(error).__name__}: {error})"]
+                repricing, message, level = self._gap(row, reasons, None)
+            if await self._record(row, repricing, message, level, boundary):
+                written.append(row.id)
         return written
 
-    async def recover_repricing(self, now: dt.datetime | None = None) -> list[int]:
-        """Start enginu po 9:31 ET: plán seance bez přecenění dostane důvod, ne mlčení.
+    async def _watch_repricing(self, session: dt.date) -> list[int]:
+        """Snímek 9:31 v tomto běhu nedorazil do limitu: plánům seance důvod, ne mlčení.
 
-        Snímek 9:31 se po hranici nedohání (`plan_chain.next_snapshot`), takže v tomto běhu
-        přecenění nebude. Jen do exitu seance, jako `recover`.
+        Pokrývá chybu snímku (`plan_chain_loop` ji jen zaloguje), tasty větev mimo provoz
+        i start enginu po 9:31 (snímek se nedohání, `plan_chain.next_snapshot`). Zápis je
+        idempotentní, plán s přeceněním se nemění.
         """
-        now = now or self.clock()
-        session = trading_session_date(now)
-        if not is_trading_session(session):
+        try:
+            boundary = snapshot_boundary(session, REPRICE_SLOT)
+            deadline = snapshot_deadline(session, REPRICE_SLOT)
+            started_late = self._started_at >= boundary
+            if not started_late:
+                await self._wait(self._repriced, session, deadline)
+            if _event(self._repriced, session).is_set():
+                return []
+            reason = (
+                f"engine startoval po {REPRICE_SLOT.label} ET — snímek přecenění se v tomto běhu "
+                "nedohání"
+                if started_late
+                else f"snímek {REPRICE_SLOT.label} ET nedorazil do {deadline:%H:%M:%S} UTC"
+            )
+            rows = await asyncio.to_thread(self.repository.plans_of_day, session)
+            now = self.clock()
+            written: list[int] = []
+            for row in rows:
+                if REPRICING_KEY in row.plan:
+                    continue
+                repricing, message, level = self._gap(row, [reason], None)
+                if await self._record(row, repricing, message, level, now):
+                    written.append(row.id)
+            return written
+        except Exception:
+            logger.exception("Plán opce QQQ: hlídač přecenění seance %s selhal", session)
             return []
-        boundary = snapshot_boundary(session, REPRICE_SLOT)
-        if now < boundary or now >= settle_ts(session) - EXIT_BEFORE_SETTLE:
-            return []
-        rows = await asyncio.to_thread(self.repository.plans_of_day, session)
-        reason = (
-            f"engine restartoval po {REPRICE_SLOT.label} ET — snímek přecenění se v tomto běhu "
-            f"nedohání, platí ceny z {PLAN_SLOT.label} ET"
-        )
-        written: list[int] = []
-        for row in rows:
-            if REPRICING_KEY in row.plan:
-                continue
-            repricing = _repricing_json([reason], None)
-            if not await asyncio.to_thread(self.repository.record_repricing, row.id, repricing):
-                continue
-            message = _not_written_message(row.id, [reason])
-            logger.log(missing_data_level(now), "%s: %s", PRODUCT, message)
-            await self._publish(REPRICE_ALERT_KIND, row.id, row.scenario_id, now, message)
-            written.append(row.id)
-        return written
+
+    async def _record(
+        self,
+        row: OptionPlanRow,
+        repricing: dict[str, Any],
+        message: str,
+        level: int,
+        ts: dt.datetime,
+    ) -> bool:
+        """Zápis `plan.repricing` jednou, log a alert; False = už zapsané (restart, hlídač)."""
+        if not await asyncio.to_thread(self.repository.record_repricing, row.id, repricing):
+            self._repriced_exists(row.id)
+            return False
+        logger.log(level, "%s: %s", PRODUCT, message)
+        await self._publish(REPRICE_ALERT_KIND, row.id, row.scenario_id, ts, message)
+        return True
 
     async def _repricing(
         self, row: OptionPlanRow, snapshot: PlanChainSnapshot
@@ -510,8 +555,7 @@ class OptionPlanMaker:
         reasons = _snapshot_gaps(snapshot)
         one = snapshot.one_dte
         if reasons or one is None:
-            reasons = reasons or [f"snímek {REPRICE_SLOT.label} ET bez řetězu 1DTE"]
-            return self._not_written(row.id, reasons, chain)
+            return self._gap(row, reasons or [f"snímek {REPRICE_SLOT.label} ET bez 1DTE"], chain)
         boundary = snapshot_boundary(snapshot.session, REPRICE_SLOT)
         expiry = dt.datetime.strptime(one.expiry, "%Y%m%d").date()
         plans = {"main": row.plan["main"], **row.plan["shadows"]}
@@ -530,37 +574,48 @@ class OptionPlanMaker:
             gaps.extend(missing)
             prices[key] = jsonable(list(repriced), f"plán.repricing.prices.{key}")
         if gaps:
-            return self._not_written(row.id, list(dict.fromkeys(gaps)), chain)
+            return self._gap(row, list(dict.fromkeys(gaps)), chain)
         repricing = {**_repricing_json([], chain), "prices": prices}
         return repricing, _repriced_message(row, prices["main"]), logging.INFO
 
     async def _build_at_reprice(
         self, row: OptionPlanRow, snapshot: PlanChainSnapshot
     ) -> tuple[dict[str, Any], str, int]:
-        """Plán bez opce z 9:15: celý plán z 9:31, nic z 9:15 se nemíchá (K4 bod 5)."""
+        """Plán bez opce z 9:15: celý plán z 9:31, nic z 9:15 se nemíchá (K4 bod 5).
+
+        Úrovně jsou z 9:31 jako u K4 A a goldenu K9 A: flip, zdi a těžiště z minuty 9:31
+        pipeline NQ, ONH/ONL od začátku seance do openu a PDH/PDL/PDC z barů (ADR-0062
+        Odvozeno). Plán z restartu (`recover`) se tak sestaví stejně.
+        """
         chain = chain_json(snapshot)
         session = snapshot.session
         reasons = _snapshot_gaps(snapshot)
-        levels_nq = row.plan.get("levels_nq")
-        if levels_nq is None:
-            reasons.append(
-                f"úrovně scénáře z {PLAN_SLOT.label} ET (ONH/ONL, PDH/PDL/PDC) plán nemá "
-                "— vznikl po restartu enginu"
-            )
         scenario_row = await asyncio.to_thread(self.scenarios.get, row.scenario_id)
         if scenario_row is None:
             reasons.append(f"scénář dne #{row.scenario_id} v PG už není")
-        if reasons or levels_nq is None or scenario_row is None:
-            return self._stays_without_option(row, reasons, chain)
-        deadline = snapshot_deadline(session, REPRICE_SLOT)
+        if reasons or scenario_row is None:
+            return self._gap(row, reasons, chain)
+        deadline = levels_deadline(session)
         minute = await self._wait_levels(session, deadline)
         if minute is None:
             reasons.append(
                 f"úrovně NQ minuty {REPRICE_SLOT.label} ET nedorazily do {deadline:%H:%M:%S} UTC"
             )
-            return self._stays_without_option(row, reasons, chain)
+            return self._gap(row, reasons, chain)
+        try:
+            day = await asyncio.wait_for(self.day_levels(session), LEVELS_READ_TIMEOUT_S)
+        except TimeoutError:
+            day = VerdictContext(failures=[f"čtení nedoběhlo do {LEVELS_READ_TIMEOUT_S:g} s"])
+        if day.failures:
+            reasons.append("ONH/ONL a PDH/PDL/PDC z API: " + "; ".join(day.failures))
+            return self._gap(row, reasons, chain)
         levels = LevelInputs(
-            **{**levels_nq, **{name: getattr(minute, name) for name in NQ_MINUTE_LEVELS}}
+            **{name: getattr(minute, name) for name in NQ_MINUTE_LEVELS},
+            prev_high=day.prev_high,
+            prev_low=day.prev_low,
+            prev_close=day.prev_close,
+            on_high=day.on_high,
+            on_low=day.on_low,
         )
         account = await asyncio.to_thread(self.account)
         boundary = snapshot_boundary(session, REPRICE_SLOT)
@@ -574,19 +629,21 @@ class OptionPlanMaker:
         repricing = {**_repricing_json([], chain), "plan": plan}
         return repricing, _rebuilt_message(row, main), logging.INFO
 
-    def _not_written(
-        self, plan_id: int, reasons: list[str], chain: dict[str, Any] | None
-    ) -> tuple[dict[str, Any], str, int]:
-        message = _not_written_message(plan_id, reasons)
-        return _repricing_json(reasons, chain), message, missing_data_level(self.clock())
-
-    def _stays_without_option(
+    def _gap(
         self, row: OptionPlanRow, reasons: list[str], chain: dict[str, Any] | None
     ) -> tuple[dict[str, Any], str, int]:
-        message = (
-            f"Plán QQQ #{row.id} ke scénáři dne #{row.scenario_id} zůstává bez opce "
-            f"({REPRICE_SLOT.label} ET): " + "; ".join(reasons)
-        )
+        """Přecenění bez cen: úplný plán drží ceny z 9:15, plán bez opce zůstane bez opce."""
+        if row.status == STATUS_BUILT:
+            message = (
+                f"Plán QQQ #{row.id}: přecenění {REPRICE_SLOT.label} ET se nezapsalo — "
+                + "; ".join(reasons)
+                + f". Platí ceny z {PLAN_SLOT.label} ET"
+            )
+        else:
+            message = (
+                f"Plán QQQ #{row.id} ke scénáři dne #{row.scenario_id} zůstává bez opce "
+                f"({REPRICE_SLOT.label} ET): " + "; ".join(reasons)
+            )
         return _repricing_json(reasons, chain), message, missing_data_level(self.clock())
 
     def _repriced_exists(self, plan_id: int) -> None:
@@ -615,26 +672,23 @@ class OptionPlanMaker:
     async def _wait_snapshot(
         self, session: dt.date, deadline: dt.datetime
     ) -> PlanChainSnapshot | None:
-        await self._wait(self._arrived, session, session in self._snapshots, deadline)
+        await self._wait(self._arrived, session, deadline)
         return self._snapshots.get(session)
 
     async def _wait_levels(self, session: dt.date, deadline: dt.datetime) -> LevelsRow | None:
-        await self._wait(self._levels_arrived, session, session in self._levels, deadline)
+        await self._wait(self._levels_arrived, session, deadline)
         return self._levels.get(session)
 
     async def _wait(
-        self,
-        events: dict[dt.date, asyncio.Event],
-        session: dt.date,
-        ready: bool,
-        deadline: dt.datetime,
+        self, events: dict[dt.date, asyncio.Event], session: dt.date, deadline: dt.datetime
     ) -> None:
-        if ready:
+        event = _event(events, session)
+        if event.is_set():
             return
         timeout = (deadline - self.clock()).total_seconds()
         if timeout > 0:
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(_event(events, session).wait(), timeout)
+                await asyncio.wait_for(event.wait(), timeout)
 
 
 def _keep_only[V](items: dict[dt.date, V], session: dt.date) -> None:
@@ -703,14 +757,6 @@ def _kind(right: str) -> str:
     return "call" if right == "C" else "put"
 
 
-def _not_written_message(plan_id: int, reasons: list[str]) -> str:
-    return (
-        f"Plán QQQ #{plan_id}: přecenění {REPRICE_SLOT.label} ET se nezapsalo — "
-        + "; ".join(reasons)
-        + f". Platí ceny z {PLAN_SLOT.label} ET"
-    )
-
-
 def _repriced_message(row: OptionPlanRow, prices: list[dict[str, Any]]) -> str:
     """Přecenění úplného plánu: nové kotace vedle kotací z 9:15, stav beze změny."""
     morning = {(v["role"], v["strike"]): v for v in row.plan["main"]["variants"]}
@@ -731,15 +777,18 @@ def _repriced_message(row: OptionPlanRow, prices: list[dict[str, Any]]) -> str:
 
 
 def _rebuilt_message(row: OptionPlanRow, plan: OptionPlan) -> str:
-    """Plán bez opce z 9:15 sestavený v 9:31: stav se změnil, zpráva začíná „ZMĚNA“."""
+    """Plán bez opce z 9:15 sestavený v 9:31; „ZMĚNA“, když hlavní plán není neobchodovat."""
     options = ", ".join(
         f"{v.role} {_kind(v.right)} {v.strike:g} ({v.expiry.day}. {v.expiry.month}.)"
         f" {_cz(v.bid)}/{_cz(v.ask)}"
         for v in plan.variants
     )
     before = "; ".join(row.plan.get("reasons") or ()) or "bez opce"
+    # Plán bez opce = neobchodovat; „ZMĚNA“ jen při změně čeká × neobchodovat (K4 bod 4)
+    changed = plan.verdict_kind != "neobchodovat"
     return (
-        f"{CHANGE}: Plán QQQ #{row.id} ke scénáři dne #{row.scenario_id} sestaven z "
+        (f"{CHANGE}: " if changed else "")
+        + f"Plán QQQ #{row.id} ke scénáři dne #{row.scenario_id} sestaven z "
         f"{REPRICE_SLOT.label} ET ({'CALL' if plan.right == 'C' else 'PUT'})"
         + (f": {options}" if options else "")
         + f". Stav: neobchodovat — bez opce ({before}) → {plan.verdict}"

@@ -124,7 +124,12 @@ from gexlens_engine.runtime_settings import (
     seed_reconnects,
     should_poll_settings,
 )
-from gexlens_engine.scenario_auto import ApiReader, CreatedScenario, ScenarioGenerator
+from gexlens_engine.scenario_auto import (
+    ApiReader,
+    CreatedScenario,
+    ScenarioGenerator,
+    gather_day_levels,
+)
 from gexlens_engine.scenarios import ScenarioCollector
 from gexlens_engine.setups import SetupEngine, setup_params_from_settings
 from gexlens_engine.spot_stream import SpotStreamer
@@ -1908,26 +1913,26 @@ async def main() -> None:
     # Plán opce QQQ ke scénáři dne NQ v 9:15 ET a přecenění v 9:31 ET (ADR-0062 K2 A a K4 C,
     # #1742, #1769): scénář a úrovně minuty předá pipeline NQ, snímky `plan_chain_loop`;
     # spojení i přecenění běží v úlohách mimo minutový cyklus
+    # Vstupy verdiktu dne z API (svíčky, bary, ΔOI, sentiment, kalendář) — #1173 A; plán opce
+    # QQQ z něj v 9:31 ET čte ONH/ONL a PDH/PDL/PDC (#1769)
+    scenario_api = ApiReader(api_base)
     option_plans_repository = OptionPlansRepository(db)
     await asyncio.to_thread(option_plans_repository.ensure_schema)
     option_plan_maker = OptionPlanMaker(
         repository=option_plans_repository,
         account=lambda: account_params(watchlist_reader.settings_map(OPTION_PLAN_ACCOUNT_KEYS)),
         scenarios=scenarios_repository,
+        day_levels=lambda session: gather_day_levels(scenario_api, PLAN_CHAIN_REFERENCE, session),
         publisher=publisher,
     )
     try:
-        # Restart po vzniku scénáře dne: plán bez opce s důvodem, jen do exitu seance; po 9:31 ET
-        # důvod, proč přecenění v tomto běhu nebude (snímek se nedohání)
+        # Restart po vzniku scénáře dne: plán bez opce s důvodem, jen do exitu seance
         await option_plan_maker.recover()
-        await option_plan_maker.recover_repricing()
     except Exception:
         logger.exception("Plán opce QQQ: kontrola scénáře dne bez plánu po startu selhala")
     # Paper účet (#1187 fáze 1): účet + ordery; fily dělá PaperBroker per symbol
     paper_repository = PaperRepository(db)
     await asyncio.to_thread(paper_repository.ensure_schema)
-    # Vstupy verdiktu dne z API (svíčky, bary, ΔOI, sentiment, kalendář) — #1173 A
-    scenario_api = ApiReader(api_base)
 
     # Volatilitní režim (ADR-0028): čte jen bary, žádná IBKR linka navíc
     vol_regime_repository = VolRegimeRepository(db)

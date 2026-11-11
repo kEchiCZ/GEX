@@ -665,12 +665,12 @@ Hned při startu zaloguje „seance … v tomto běhu bez snímku 9:15 ET (a 9:3
 otevřeném trhu. Nasazení v pauze Globexu tak dá INFO. Naměřené řádky se zapíšou i z neúplného
 snímku. Výsledek `PlanChainSnapshot` nese snímek (`slot`), řádky, ceny, poměr, čas, podíl kotací
 a OI a chybějící kontrakty podle důvodu. Snímek 9:15 jde do vzniku plánu (níže, F2b #1742),
-snímek 9:31 napojí přecenění F2c #1769, zatím se jen loguje. Ověření: partice
+snímek 9:31 do přecenění (níže, F2c #1769). Ověření: partice
 1DTE dne nese minuty 9:15 a 9:31 a `/status.tasty_symbol_breakdown.plan_chain` je po snímku 0.
 
 Čistá funkce `compute/option_plan.build_option_plan` (#1741) převede auto-scénář NQ na plán
-opce QQQ 1DTE. Volá ji vznik plánu v 9:15 ET (níže, F2b #1742). Přecenění v 9:31 ET napojí
-F2c #1769, vyhodnocení F3 #1748. Pravidla verze 1 (`RULES_VERSION`, ADR-0062 K3 A, K6 B, K11 A):
+opce QQQ 1DTE. Volá ji vznik plánu v 9:15 ET (níže, F2b #1742) a sestavení plánu bez opce
+v 9:31 ET (F2c #1769). Vyhodnocení přinese F3 #1748. Pravidla verze 1 (`RULES_VERSION`, ADR-0062 K3 A, K6 B, K11 A):
 
 - **Vstupy:** scénář (`dayverdict.AutoScenario`) a úrovně NQ v minutě vzniku
   (`dayverdict.LevelInputs`: flip, call/put wall, těžiště, ONH/ONL, PDH/PDL, PDC). Dál poměr
@@ -786,27 +786,31 @@ přecenění nevytvoří. Část JSON z 9:15 ET ani sloupce se nemění.
     a delta“). Výběr v 9:31 může vzít jiný strike (#1768);
   - výpočet spadl („přecenění se nesestavilo (…)“), například kvůli kotaci po 9:31, tedy
     pohledu dopředu.
-- **Plán bez opce z 9:15** se v 9:31 sestaví celý z 9:31 (K4 bod 5) do `repricing.plan`
-  (`levels_nq`, `main`, `shadows`). Zpráva začíná „ZMĚNA“. Vstupy:
+- **Plán bez opce z 9:15** (i plán z restartu) se v 9:31 sestaví celý z 9:31 (K4 bod 5,
+  stejně jako golden K9 A) do `repricing.plan` (`levels_nq`, `main`, `shadows`). Z 9:15 se
+  nebere nic. Vstupy:
   - scénář z řádku `scenarios` (směr v `rationale.verdict`);
-  - ONH/ONL a PDH/PDL/PDC z `plan.levels_nq` z 9:15;
   - flip, zdi a těžiště z úrovní NQ minuty 9:31. Pipeline NQ je předá po scénáři
-    (`on_levels`) a plán na ně čeká nejdéle do 9:32:40 ET;
+    (`on_levels`) a plán na ně čeká nejdéle do 9:34 ET (`levels_deadline`), tedy před prvním
+    5min close v 9:35;
+  - ONH/ONL (dnešní bary do openu) a PDH/PDL/PDC z API funkcí
+    `scenario_auto.gather_day_levels`, tou, kterou čte i scénář (strop 20 s);
   - poměr, spot a řetěz ze snímku 9:31 a parametry účtu ze `settings` v 9:31.
+  Zpráva začíná „ZMĚNA“, když hlavní plán přejde na `čeká`. Plán bez nastaveného rozpočtu
+  zůstane `neobchodovat` (jen s jiným důvodem), takže zpráva „ZMĚNA“ nenese (K4 bod 4).
 - **Plán zůstane bez opce s důvodem**, když:
   - je neúplný i snímek 9:31;
-  - úrovně NQ minuty 9:31 nedorazily, například při přetažené minutě. Úrovně z 9:32 by byly
-    pohled dopředu;
-  - scénář dne byl smazán;
-  - plán vznikl při restartu (`recover`) a úrovně scénáře z 9:15 nemá.
-- **Start enginu po 9:31 ET** (do exitu): snímek se nedohání (`next_snapshot`). Kontrola
-  `recover_repricing` při startu proto zapíše plánu seance bez přecenění důvod „engine
-  restartoval po 9:31 ET — snímek přecenění se v tomto běhu nedohání …“.
+  - úrovně NQ minuty 9:31 nedorazily do 9:34 ET. Úrovně z 9:32 by byly pohled dopředu;
+  - čtení ONH/ONL a PD z API selhalo („ONH/ONL a PDH/PDL/PDC z API: bars dnes: HTTP 503“);
+  - scénář dne byl smazán.
+- **Snímek 9:31 v tomto běhu nedorazil:** hlídač `_watch_repricing` zapíše důvod, ne mlčení.
+  Spustí ho první minuta úrovní NQ od 9:31 do exitu. Při chybě snímku nebo bez tasty zapíše
+  po limitu snímku (9:32:40 ET) „snímek 9:31 ET nedorazil do … UTC“. Při startu enginu po
+  9:31 hned zapíše „engine startoval po 9:31 ET — snímek přecenění se v tomto běhu
+  nedohání“. Plán s už zapsaným přeceněním nemění.
 - **Alert** `option_plan_repriced` jde do zvonku (symbol QQQ, `plan_id`, `scenario_id`, `ts`
   9:31 ET, po restartu čas startu). Telegram ho registruje až F4c #1745. API do té doby
   zaloguje jednou WARNING „Push: druh 'option_plan_repriced' nemá přepínač v PUSH_TOPICS“.
-- Snímek 9:31, který skončí výjimkou, přecenění nespustí. Mezera je v logu `plan_chain_loop`
-  a plán nese jen ceny z 9:15 bez klíče `repricing`.
 
 Log enginu:
 
@@ -818,15 +822,18 @@ Log enginu:
 - „QQQ: Plán QQQ #N: přecenění 9:31 ET se nezapsalo — důvod. Platí ceny z 9:15 ET“
   a „… zůstává bez opce (9:31 ET): důvod“ jako WARNING při otevřeném trhu, při zavřeném INFO;
 - „Přecenění plánu opce QQQ #N už je zapsané — nic se nemění“, „Přecenění plánu opce QQQ
-  #N selhalo“ (s tracebackem, důvod jde do plánu) a „Přecenění plánu opce QQQ 9:31 ET seance …
-  selhalo — plán nese ceny z 9:15 ET“ (pád čtení PG, s tracebackem).
+  #N selhalo“ (s tracebackem, důvod jde do plánu), „Přecenění plánu opce QQQ 9:31 ET seance …
+  selhalo — plán nese ceny z 9:15 ET“ a „Plán opce QQQ: hlídač přecenění seance … selhal“
+  (pád čtení PG, s tracebackem).
 
 Ověření v PG (jen čtení):
 `SELECT id, status, plan->'repricing'->'reasons' AS duvody, plan->'repricing'->'prices'->'main' AS ceny_9_31, plan->'repricing'->'plan'->'main'->>'verdict' AS stav_9_31 FROM option_plans ORDER BY id DESC LIMIT 3;`.
 Testy: `test_option_plan_reprice.py` (čistá funkce), `test_option_plan_job.py` (golden 2. 11.
-se „ZMĚNA“, úplný plán, neúplný snímek, chybějící kontrakt, pohled dopředu, úrovně NQ, restart,
-víkend, svátek a pondělí proti pátku, minutový cyklus nečeká), `test_option_plans_store.py`
-a `test_instruments.py` (předání úrovní minuty).
+se „ZMĚNA“, bez rozpočtu bez „ZMĚNA“, úplný plán, neúplný snímek, chybějící kontrakt, pohled
+dopředu, úrovně NQ, výpadek API, plán z restartu, hlídač, start po 9:31, víkend, svátek
+a pondělí proti pátku, minutový cyklus nečeká), `test_option_plans_store.py`,
+`test_instruments.py` (předání úrovní minuty) a `test_scenario_auto.py` (`gather_day_levels`
+v `gather_context` beze změny chování).
 
 ## 6. Datové formáty a persistence
 

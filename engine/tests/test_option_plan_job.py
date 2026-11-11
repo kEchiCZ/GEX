@@ -24,15 +24,15 @@ from gexlens_engine.option_plan_job import (
     ALERT_KIND,
     CHANGE,
     MAX_LOSS_KEY,
-    NQ_MINUTE_LEVELS,
     REPRICE_ALERT_KIND,
     STATUS_BUILT,
     STATUS_NO_OPTION,
     OptionPlanMaker,
     account_params,
+    levels_deadline,
     snapshot_deadline,
 )
-from gexlens_engine.scenario_auto import CreatedScenario
+from gexlens_engine.scenario_auto import CreatedScenario, VerdictContext
 from gexlens_engine.storage.option_plans_store import OptionPlanRow, OptionPlansRepository
 from gexlens_engine.storage.parquet_store import LevelsRow, SnapshotRow
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -167,10 +167,23 @@ def _maker(
         repository=plans,
         account=lambda: account,
         scenarios=scenarios,
+        day_levels=_day_levels,
         publisher=publisher,
         clock=_Clock(now),
     )
     return maker, plans, scenarios, publisher
+
+
+async def _day_levels(session: dt.date) -> VerdictContext:
+    """ONH/ONL a PDH/PDL/PDC dne v 9:31 (`gather_day_levels`): golden 2. 11."""
+    raw = DATA["levels_nq"]
+    return VerdictContext(
+        prev_high=raw["prev_high"],
+        prev_low=raw["prev_low"],
+        prev_close=raw["prev_close"],
+        on_high=raw["on_high"],
+        on_low=raw["on_low"],
+    )
 
 
 def _row(plans: OptionPlansRepository, scenario_id: int = 35) -> OptionPlanRow:
@@ -376,7 +389,7 @@ def test_chyba_sestaveni_da_plan_bez_opce_s_duvodem(tmp_path: Path) -> None:
     assert "bez opce" in publisher.alerts[0]["message"]
 
 
-# ── přecenění v 9:31 ET (F2c #1769, ADR-0062 K4 C body 2, 4–6) ─────────────
+# ── přecenění v 9:31 ET (F2c #1769, ADR-0062 K4 C body 2, 4–6 a bod 10) ─────
 
 AT_931 = snapshot_boundary(MONDAY, REPRICE_SLOT)
 NQ_931 = LevelsRow(
@@ -419,18 +432,22 @@ def _built_plan(tmp_path: Path) -> tuple[OptionPlanMaker, OptionPlansRepository,
 
 
 def _plan_without_option(
-    tmp_path: Path,
+    tmp_path: Path, account: AccountParams = ACCOUNT
 ) -> tuple[OptionPlanMaker, OptionPlansRepository, _Publisher, int]:
     """2. 11.: ranní řetěz uložený není → plán v 9:15 bez opce (K4 bod 5).
 
-    Flip, zdi a těžiště minuty 9:15 se liší od 9:31 (`NQ_931`), ať test pozná jejich zdroj.
+    Všechny úrovně minuty 9:15 se liší od 9:31, ať test pozná, že plán z 9:31 je nebere.
     """
     maker, plans, scenarios, publisher = _maker(
-        tmp_path, snapshot_deadline(MONDAY) + dt.timedelta(seconds=1)
+        tmp_path, snapshot_deadline(MONDAY) + dt.timedelta(seconds=1), account
     )
     scenario_id = _scenario(scenarios)
     created = _created(scenario_id=scenario_id)
-    shifted = {name: getattr(created.levels, name) + 40.0 for name in NQ_MINUTE_LEVELS}
+    shifted = {
+        name: value + 40.0
+        for name, value in dataclasses.asdict(created.levels).items()
+        if value is not None
+    }
     created = dataclasses.replace(created, levels=dataclasses.replace(created.levels, **shifted))
     assert asyncio.run(maker.make(created)) is not None
     maker.clock = _Clock(AT_931 + dt.timedelta(seconds=5))
@@ -441,9 +458,22 @@ def _reprice(maker: OptionPlanMaker, snapshot: PlanChainSnapshot, *levels: Level
     async def run() -> list[int]:
         for row in levels:
             maker.on_levels(row)
-        return await maker.reprice(snapshot)
+        written = await maker.reprice(snapshot)
+        await asyncio.gather(*maker._tasks)  # hlídač vidí snímek a nic nepíše
+        return written
 
     return asyncio.run(run())
+
+
+def _watch(maker: OptionPlanMaker, *levels: LevelsRow) -> None:
+    """Minuty pipeline NQ bez snímku 9:31: hlídač doběhne (limit je za hodinami testu)."""
+
+    async def run() -> None:
+        for row in levels:
+            maker.on_levels(row)
+        await asyncio.gather(*maker._tasks)
+
+    asyncio.run(run())
 
 
 def test_golden_2_11_plan_bez_opce_v_9_31_cely_z_9_31_se_zmenou(tmp_path: Path) -> None:
@@ -452,15 +482,17 @@ def test_golden_2_11_plan_bez_opce_v_9_31_cely_z_9_31_se_zmenou(tmp_path: Path) 
     morning = _row(plans, scenario_id).plan
     assert _reprice(maker, _snapshot_931(), NQ_931) == [_row(plans, scenario_id).id]
     row = _row(plans, scenario_id)
-    # Část z 9:15 i sloupce zůstávají (K2 A, otázka sloupců čeká na vlastníka)
+    # Část z 9:15 zůstává (K2 A); sloupce čekají na rozhodnutí vlastníka (#1738)
     assert {key: row.plan[key] for key in morning} == morning
     assert (row.status, row.verdict, row.created_at) == (STATUS_NO_OPTION, None, BOUNDARY)
     repricing = row.plan["repricing"]
     assert (repricing["slot"], repricing["reasons"], repricing["prices"]) == ("9:31", [], None)
     assert repricing["chain"]["slot"] == "9:31" and repricing["chain"]["complete"]
     rebuilt = repricing["plan"]
+    # Všechny úrovně z 9:31 (minuta NQ a bary), žádná z 9:15 (K4 bod 5, golden K9 A)
     levels = rebuilt["levels_nq"]
     assert levels == {**DATA["levels_nq"], "em_anchor": None, "em_points": None}
+    assert morning["levels_nq"]["on_high"] == DATA["levels_nq"]["on_high"] + 40.0
     main = rebuilt["main"]
     assert main["created_at"] == "2026-11-02T14:31:00+00:00"
     assert main["level_a"][0] == "flip" and round(main["level_a"][1], 2) == 698.21
@@ -517,6 +549,18 @@ def test_golden_2_11_plan_bez_opce_v_9_31_cely_z_9_31_se_zmenou(tmp_path: Path) 
     assert "hlavní put 687 (3. 11.)" in message
 
 
+def test_sestaveni_bez_rozpoctu_neni_zmena(tmp_path: Path) -> None:
+    """K4 bod 4: „ZMĚNA“ jen při změně čeká × neobchodovat; bez opce → rozpočet nenastaven ne."""
+    unset = AccountParams(None, None)
+    maker, plans, publisher, scenario_id = _plan_without_option(tmp_path, unset)
+    _reprice(maker, _snapshot_931(), NQ_931)
+    main = _row(plans, scenario_id).plan["repricing"]["plan"]["main"]
+    assert main["verdict"].startswith("neobchodovat — rozpočet nenastaven")
+    message = publisher.alerts[-1]["message"]
+    assert message.startswith("Plán QQQ #") and CHANGE not in message
+    assert "→ neobchodovat — rozpočet nenastaven" in message
+
+
 def test_uplny_plan_preceni_kontrakty_z_9_15_stav_beze_zmeny(tmp_path: Path) -> None:
     """AC 2: strike, úrovně, vstup A a EM zůstanou, mění se jen kotace, IV a model."""
     maker, plans, publisher, scenario_id = _built_plan(tmp_path)
@@ -526,7 +570,7 @@ def test_uplny_plan_preceni_kontrakty_z_9_15_stav_beze_zmeny(tmp_path: Path) -> 
         assert row.bid is not None and row.ask is not None
         return dataclasses.replace(row, bid=row.bid + 0.1, ask=row.ask + 0.12, iv=0.33)
 
-    assert _reprice(maker, _snapshot_931(later)) == [before.id]
+    assert _reprice(maker, _snapshot_931(later), NQ_931) == [before.id]
     row = _row(plans, scenario_id)
     assert {key: row.plan[key] for key in before.plan} == before.plan
     assert (row.status, row.verdict) == (before.status, before.verdict) == (STATUS_BUILT, "čeká")
@@ -548,8 +592,8 @@ def test_uplny_plan_preceni_kontrakty_z_9_15_stav_beze_zmeny(tmp_path: Path) -> 
         assert was["quote_ts"] == "2026-11-02T14:15:00+00:00"
         assert len(price["at_targets"]) == 2 and price["at_targets"] != was["at_targets"]
         assert price["expiry"] == "2026-11-03" and price["source"] == "tastytrade"
-    message = publisher.alerts[-1]["message"]
-    assert publisher.alerts[-1]["kind"] == REPRICE_ALERT_KIND
+    (alert,) = [a for a in publisher.alerts if a["kind"] == REPRICE_ALERT_KIND]
+    message = alert["message"]
     assert not message.startswith(CHANGE)
     assert "přeceněn v 9:31 ET: hlavní put 687" in message and "(v 9:15 " in message
     assert message.endswith("Stav beze změny: " + before.plan["main"]["verdict"])
@@ -609,64 +653,95 @@ def test_oba_snimky_neuplne_plan_zustane_bez_opce(tmp_path: Path) -> None:
 
 
 def test_bez_urovni_nq_9_31_plan_zustane_bez_opce(tmp_path: Path) -> None:
-    """Přetažená minuta 9:31 cyklu NQ: úrovně 9:32 by byly pohled dopředu, plán čeká do limitu."""
+    """Přetažená minuta 9:31 cyklu NQ: úrovně 9:32 by byly pohled dopředu, plán čeká do 9:34."""
     maker, plans, _, scenario_id = _plan_without_option(tmp_path)
-    maker.clock = _Clock(snapshot_deadline(MONDAY, REPRICE_SLOT) + dt.timedelta(seconds=1))
+    assert levels_deadline(MONDAY) == AT_931 + dt.timedelta(minutes=3)
+    maker.clock = _Clock(levels_deadline(MONDAY) + dt.timedelta(seconds=1))
     later = dataclasses.replace(NQ_931, ts_min=AT_931 + dt.timedelta(minutes=1))
     _reprice(maker, _snapshot_931(), later)
     assert _row(plans, scenario_id).plan["repricing"]["reasons"] == [
-        "úrovně NQ minuty 9:31 ET nedorazily do 14:32:40 UTC"
+        "úrovně NQ minuty 9:31 ET nedorazily do 14:34:00 UTC"
     ]
 
 
-def test_plan_z_restartu_a_smazany_scenar_zustanou_bez_opce(tmp_path: Path) -> None:
-    """Plán z `recover` nemá úrovně scénáře z 9:15; smazaný scénář nejde sestavit."""
+def test_selhane_cteni_onh_a_pd_z_api_necha_plan_bez_opce(tmp_path: Path) -> None:
+    """Výpadek API: úrovně z poloviny by daly jinou úroveň A, plán zůstane bez opce s důvodem."""
+    maker, plans, _, scenario_id = _plan_without_option(tmp_path)
+
+    async def broken(session: dt.date) -> VerdictContext:
+        return VerdictContext(failures=["bars dnes: HTTP 503"])
+
+    maker.day_levels = broken
+    _reprice(maker, _snapshot_931(), NQ_931)
+    assert _row(plans, scenario_id).plan["repricing"]["reasons"] == [
+        "ONH/ONL a PDH/PDL/PDC z API: bars dnes: HTTP 503"
+    ]
+
+
+def test_plan_z_restartu_se_sestavi_smazany_scenar_ne(tmp_path: Path) -> None:
+    """Plán z `recover` (bez úrovní z 9:15) se v 9:31 sestaví celý; smazaný scénář ne."""
     maker, plans, scenarios, _ = _maker(tmp_path, BOUNDARY + dt.timedelta(minutes=5))
     restarted = _scenario(scenarios)
     assert asyncio.run(maker.recover()) is not None
+    assert _row(plans, restarted).plan["levels_nq"] is None
     deleted = _scenario(scenarios)
     asyncio.run(maker.make(_created(scenario_id=deleted, late=dt.timedelta(minutes=2))))
     scenarios.delete(deleted)
     maker.clock = _Clock(AT_931 + dt.timedelta(seconds=5))
     _reprice(maker, _snapshot_931(), NQ_931)
-    assert _row(plans, restarted).plan["repricing"]["reasons"] == [
-        "úrovně scénáře z 9:15 ET (ONH/ONL, PDH/PDL/PDC) plán nemá — vznikl po restartu enginu"
-    ]
+    rebuilt = _row(plans, restarted).plan["repricing"]
+    assert rebuilt["reasons"] == [] and rebuilt["plan"]["main"]["created_at"].endswith(
+        "14:31:00+00:00"
+    )
+    assert [v["strike"] for v in rebuilt["plan"]["main"]["variants"]] == [687.0, 686.0]
     assert _row(plans, deleted).plan["repricing"]["reasons"] == [
         f"scénář dne #{deleted} v PG už není"
     ]
 
 
 def test_restart_mezi_9_31_a_close_jedno_preceneni(tmp_path: Path) -> None:
-    """Druhá instance enginu nad toutéž DB: přecenění ani důvod restartu se nepřidají."""
+    """Druhá instance enginu nad toutéž DB: přecenění ani důvod hlídače se nepřidají."""
     maker, plans, publisher, scenario_id = _built_plan(tmp_path)
     assert len(_reprice(maker, _snapshot_931())) == 1
     first = _row(plans, scenario_id).plan["repricing"]
-    again, _, _, publisher_2 = _maker(tmp_path, AT_931 + dt.timedelta(minutes=30))
+    later = AT_931 + dt.timedelta(minutes=30)
+    again, _, _, publisher_2 = _maker(tmp_path, later)
+    _watch(again, dataclasses.replace(NQ_931, ts_min=later))  # start po 9:31, plán přeceněný
     assert _reprice(again, _snapshot_931()) == []
-    assert asyncio.run(again.recover_repricing()) == []
     assert _row(plans, scenario_id).plan["repricing"] == first
     assert publisher_2.alerts == [] and len(publisher.alerts) == 2
 
 
-def test_start_po_9_31_bez_preceneni_zapise_duvod_jen_do_exitu(tmp_path: Path) -> None:
-    """Snímek 9:31 se nedohání: plán seance dostane důvod, ne mlčení (jen 9:31–exit)."""
+def test_snimek_9_31_nedorazil_hlidac_zapise_duvod(tmp_path: Path) -> None:
+    """Chyba snímku nebo tasty mimo provoz: plán dostane důvod po limitu, ne mlčení (B3)."""
     maker, plans, publisher, scenario_id = _built_plan(tmp_path)
+    late = snapshot_deadline(MONDAY, REPRICE_SLOT) + dt.timedelta(seconds=1)
+    maker.clock = _Clock(late)
+    _watch(maker, NQ_931)
+    repricing = _row(plans, scenario_id).plan["repricing"]
+    assert repricing["reasons"] == ["snímek 9:31 ET nedorazil do 14:32:40 UTC"]
+    assert (repricing["prices"], repricing["plan"], repricing["chain"]) == (None, None, None)
+    assert publisher.alerts[-1]["ts"] == late.timestamp()
+    assert "přecenění 9:31 ET se nezapsalo" in publisher.alerts[-1]["message"]
+
+
+def test_start_po_9_31_hlidac_zapise_duvod_jen_do_exitu(tmp_path: Path) -> None:
+    """Start enginu po 9:31: snímek se nedohání. Před 9:31, po exitu a o víkendu nic."""
+    _, _, _, scenario_id = _built_plan(tmp_path)
     exit_ts = dt.datetime(2026, 11, 2, 20, 45, tzinfo=dt.UTC)
     saturday = dt.datetime(2026, 11, 7, 15, tzinfo=dt.UTC)
-    for early in (AT_931 - dt.timedelta(minutes=1), exit_ts, saturday):
-        assert asyncio.run(maker.recover_repricing(early)) == []
-    assert "repricing" not in _row(plans, scenario_id).plan
+    for now in (AT_931 - dt.timedelta(minutes=1), exit_ts, saturday):
+        quiet, plans, _, _ = _maker(tmp_path, now)
+        _watch(quiet, dataclasses.replace(NQ_931, ts_min=now))
+        assert quiet._watched == set() and "repricing" not in _row(plans, scenario_id).plan
     restart = AT_931 + dt.timedelta(minutes=9)
-    assert len(asyncio.run(maker.recover_repricing(restart))) == 1
-    repricing = _row(plans, scenario_id).plan["repricing"]
-    assert repricing["reasons"] == [
-        "engine restartoval po 9:31 ET — snímek přecenění se v tomto běhu nedohání, platí ceny"
-        " z 9:15 ET"
+    late, plans, _, publisher = _maker(tmp_path, restart)
+    _watch(late, dataclasses.replace(NQ_931, ts_min=restart))
+    assert _row(plans, scenario_id).plan["repricing"]["reasons"] == [
+        "engine startoval po 9:31 ET — snímek přecenění se v tomto běhu nedohání"
     ]
-    assert (repricing["prices"], repricing["plan"], repricing["chain"]) == (None, None, None)
-    assert publisher.alerts[-1]["ts"] == restart.timestamp()
-    assert asyncio.run(maker.recover_repricing(restart + dt.timedelta(minutes=1))) == []
+    (alert,) = publisher.alerts
+    assert alert["ts"] == restart.timestamp()
 
 
 def test_vikend_svatek_a_pondeli_proti_patku(tmp_path: Path) -> None:
@@ -682,12 +757,10 @@ def test_vikend_svatek_a_pondeli_proti_patku(tmp_path: Path) -> None:
         snap = dataclasses.replace(
             _snapshot(session=day, slot=REPRICE_SLOT), spot_ts=boundary, ts=boundary
         )
-        maker.on_levels(dataclasses.replace(NQ_931, ts_min=boundary))
-        assert _reprice(maker, snap) == []
-        noon = dt.datetime.combine(day, dt.time(16), tzinfo=dt.UTC)
-        assert asyncio.run(maker.recover_repricing(noon)) == []
+        assert _reprice(maker, snap, dataclasses.replace(NQ_931, ts_min=boundary)) == []
     assert "repricing" not in _row(plans, 36).plan
-    assert list(maker._levels) == [monday]  # víkend a svátek úrovně neukládá
+    # Víkend a svátek úrovně ani hlídače nemají, pondělí ano
+    assert list(maker._levels) == [monday] and maker._watched == {monday}
 
 
 def test_preceneni_minutovy_cyklus_neceka(tmp_path: Path) -> None:
@@ -701,7 +774,9 @@ def test_preceneni_minutovy_cyklus_neceka(tmp_path: Path) -> None:
             await asyncio.sleep(0.01)
         assert not task.done()  # čeká na úrovně minuty 9:31
         maker.on_levels(NQ_931)
-        return await asyncio.wait_for(task, 5)
+        written = await asyncio.wait_for(task, 5)
+        await asyncio.wait_for(asyncio.gather(*maker._tasks), 5)  # hlídač vidí snímek
+        return written
 
     assert asyncio.run(run()) == [_row(plans, scenario_id).id]
     assert _row(plans, scenario_id).plan["repricing"]["plan"]["main"] is not None
