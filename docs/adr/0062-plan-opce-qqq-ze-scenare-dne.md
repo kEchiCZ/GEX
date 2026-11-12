@@ -174,7 +174,9 @@ K variantě A dál patří:
 - **Parametry účtu** budou dva klíče v tabulce `settings`. `option_plan_account_usd` slouží jen
   pro „% účtu“. `option_plan_max_loss_usd` je rozpočet P4 na obchod v $ (vlastník uvažuje
   v $ na kontrakt, „−100 $“). Když nejsou vyplněné, plán vznikne a obě varianty dostanou
-  `neobchodovat — rozpočet nenastaven`. Tichý default není.
+  `neobchodovat — rozpočet nenastaven`. Tichý default není. *(F4a #1743: zápis přes
+  `PUT /settings`; platná hodnota je kladné konečné číslo, `null` nebo prázdná = nenastaveno.
+  API i engine ji posuzují jednou funkcí `compute/option_plan.account_value`.)*
 
 **Rozhodnuto 2. 11.: A** včetně dílčích voleb výše (vlastník).
 
@@ -410,7 +412,9 @@ Odvozeno pro F2c (zapsal agent 11. 11., #1769):
     - **Platný plán řádku** pro čtenáře (F3 vyhodnocení, F4a seznam, F4b obrázek):
       `plan.repricing.plan`, když existuje (plán z 9:31, `plan.main` je tam null), jinak
       `plan.main` a `plan.shadows`. Ceny z 9:31 úplného plánu jsou v
-      `plan.repricing.prices`, ceny z 9:15 ve variantách `plan.main`.
+      `plan.repricing.prices`, ceny z 9:15 ve variantách `plan.main`. Pravidlo drží jediná
+      funkce `storage/option_plans_store.effective_plan` (F4a #1743), kopii nemá API ani
+      frontend.
     - **Snímek 9:31 nedorazil** (chyba snímku, tasty mimo provoz, start enginu po 9:31):
       hlídač, kterého spustí první minuta úrovní NQ od 9:31 do exitu, zapíše po limitu snímku
       (9:32:40 ET) důvod. Mezera je v plánu, ne jen v logu (bod 6, AGENTS.md).
