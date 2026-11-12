@@ -105,12 +105,15 @@ class ImageDiskWatch:
         self._over = False
 
     def stores(self) -> list[ImageStore]:
+        """Všechna úložiště, nebo výjimka: částečný seznam by tiše vynechal jejich snímky."""
         with self._lock:
             if not self._ready:
+                ready: list[ImageStore] = []
                 for factory in self._factories:
                     store = factory()
                     store.ensure_schema()
-                    self._ready.append(store)
+                    ready.append(store)
+                self._ready = ready
             return list(self._ready)
 
     def usage(self) -> dict[str, int]:

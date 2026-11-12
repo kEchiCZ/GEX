@@ -146,13 +146,16 @@ class OptionPlansRepository:
 
     def ensure_schema(self) -> None:
         option_plans_metadata.create_all(self._engine)
-        # Dopředná migrace (F4b #1744): velikost PNG k řádkům z F2b (vzor `scenarios`, #1173)
+        # Dopředná migrace (F4b #1744): velikost PNG k řádkům z F2b. Start enginu a první
+        # dotaz API ji můžou spustit souběžně, proto na PG `IF NOT EXISTS` (vzor fa_calibration)
         columns = {column["name"] for column in inspect(self._engine).get_columns("option_plans")}
         if "image_bytes" not in columns:
+            guard = " IF NOT EXISTS" if self._engine.dialect.name == "postgresql" else ""
             with self._engine.begin() as conn:
                 conn.execute(
                     text(
-                        "ALTER TABLE option_plans ADD COLUMN image_bytes INTEGER NOT NULL DEFAULT 0"
+                        f"ALTER TABLE option_plans ADD COLUMN{guard} image_bytes INTEGER "
+                        "NOT NULL DEFAULT 0"
                     )
                 )
 

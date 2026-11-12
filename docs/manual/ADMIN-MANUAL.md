@@ -904,7 +904,7 @@ na plán z 9:31, mezera se stářím, pozdní vzorek, hlídač o víkendu, v den
 nedělním otevření, sobota, neděle a pondělí proti pátku, rozpočet).
 
 **PNG plánu a záložní graf NQ** (`api/plan_chart.py`, `api/chart_render.py`, F4b #1744,
-ADR-0062 K1 A). Obrázek kreslí API, engine se nemění. Závislost `matplotlib` má jen balík API
+ADR-0062 K1 A). Obrázek kreslí API; engine jen při startu migruje sloupec `option_plans.image_bytes` (`ensure_schema`, kap. 6). Závislost `matplotlib` má jen balík API
 (`api/pyproject.toml`), ve sdíleném image `gex-python` je i pro engine a news-engine, ty ji
 ale neimportují. Proces API ji neimportuje taky.
 

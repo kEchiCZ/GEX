@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
-from gexlens_api import chart_render, option_plan_routes
+from gexlens_api import chart_render, option_plan_routes, plan_chart
 from gexlens_api.main import create_app
 from gexlens_api.plan_chart import (
     PLAN_SYMBOL,
@@ -219,6 +219,59 @@ def test_plan_sestaveny_v_9_31_kresli_repricing_plan_a_ceny_9_31_k_planu_9_15() 
     }
     notes = plan_chart_spec(_row(repriced), [])["notes"]
     assert any(n.startswith("Přecenění 15:31: hlavní put 687 · bid/ask 1,50/1,54") for n in notes)
+
+
+def test_zivy_stav_z_9_15_bez_spouste_nema_sl_ani_pnl() -> None:
+    """Plán v PG před spouští (12. 11.): `entry` a `pricing` jsou null, SL je jen v textu P5."""
+    main = GOLDEN_PLAN["main"]
+    waiting = {
+        **main,
+        "trigger_a": None,
+        "trigger_b": None,
+        "entry": None,
+        "variants": [
+            {**v, "pricing": None, "verdict": "čeká", "reasons": ["čeká na vstup A (flip 698,21)"]}
+            for v in main["variants"]
+        ],
+        "p5": "SL se určí při spoušti vstupu A (5min close za extrémem od testu + 0,38), pak …",
+        "verdict": "čeká — čeká na vstup A (flip 698,21)",
+    }
+    spec = plan_chart_spec(_row({**GOLDEN_PLAN, "slot": "9:15", "main": waiting}), [])
+    assert _line(spec, "stop") == [] and _line(spec, "entry") == [
+        (698.21, "vstup A od flip 698,21")
+    ]
+    assert not any(m["label"].startswith("vstup") for m in spec["markers"])
+    notes = "\n".join(spec["notes"])
+    assert "P&L na kontrakt" not in notes and "čeká — čeká na vstup A (flip 698,21)" in notes
+    assert "P5: SL se určí při spoušti vstupu A" in notes
+    assert spec["vlines"][0]["label"] == "plán 9:15 ET"
+
+
+def test_zalozni_graf_nq_cte_bary_jen_do_okamziku_kresleni(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point-in-time: bary po `now` se do grafu nedostanou; úrovně jsou z plánu ke scénáři."""
+    derived = Settings(data_dir=tmp_path).derived_dir
+    created = dt.datetime(2026, 11, 2, 14, 15, tzinfo=dt.UTC)
+    bars = [
+        UnderlyingBar(
+            ts=created + dt.timedelta(minutes=m), open=1.0, high=2.0, low=0.5, close=1.5, volume=1.0
+        )
+        for m in range(-3, 4)
+    ]
+    SnapshotWriter(Settings(data_dir=tmp_path)).write_bars_by_day("NQ", bars)
+    specs: list[dict[str, Any]] = []
+
+    def capture(spec: dict[str, Any]) -> bytes:
+        specs.append(spec)
+        return PNG_MAGIC
+
+    monkeypatch.setattr(plan_chart, "render_png", capture)
+    plan = _row(GOLDEN_PLAN)
+    assert plan_chart.scenario_chart_png(_scenario_row(), plan, derived, created) == PNG_MAGIC
+    times = [point[0] for point in specs[0]["price"]["points"]]
+    assert times[-1] == created.isoformat() and len(times) == 4
+    assert any(label.startswith("flip") for _, label in _line(specs[0], "level"))
 
 
 def test_stav_png_9_15_9_31_vyhodnoceno() -> None:
@@ -431,6 +484,18 @@ def test_chyba_kresleni_500_s_duvodem_a_v_logu(
     assert client.get("/option-plans/999/image").status_code == 404
 
 
+def test_vadny_json_planu_je_500_s_duvodem(
+    settings: Settings, plans: OptionPlansRepository, fake_render: _FakeRender
+) -> None:
+    """Chyba mimo podproces (popis z nečekaného JSON) má důvod v odpovědi, ne holé 500."""
+    broken = {**GOLDEN_PLAN, "main": {**GOLDEN_PLAN["main"], "exit_ts": None}}
+    plan_id = _create(plans, broken)
+    response = TestClient(create_app(settings)).get(f"/option-plans/{plan_id}/image")
+    assert response.status_code == 500
+    assert response.json()["detail"].startswith(f"Kreslení PNG plánu {plan_id} selhalo: TypeError")
+    assert fake_render.specs == []
+
+
 def test_rucni_uklid_smaze_i_png_planu_a_dalsi_dotaz_ho_nakresli(
     settings: Settings, plans: OptionPlansRepository, fake_render: _FakeRender
 ) -> None:
@@ -475,3 +540,20 @@ def test_spolecny_limit_scenaru_a_planu_alert_jednou(monkeypatch: pytest.MonkeyP
     watch.reset()
     watch.check()
     assert len(alerts) == 2
+
+
+def test_selhani_zalozeni_uloziste_neda_castecny_seznam() -> None:
+    """Druhé úložiště při startu bez DB selže: výjimka, příští volání založí obě znovu."""
+    calls = {"n": 0}
+    scenarios = _Store(10)
+
+    def flaky() -> _Store:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("PG nedostupné")
+        return _Store(20)
+
+    watch = ImageDiskWatch([lambda: scenarios, flaky])
+    with pytest.raises(RuntimeError, match="PG nedostupné"):
+        watch.usage()
+    assert watch.usage() == {"bytes": 30, "images": 2}

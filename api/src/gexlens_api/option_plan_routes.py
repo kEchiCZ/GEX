@@ -115,14 +115,20 @@ def build_option_plan_router(
 
     def _draw(row: OptionPlanRow) -> Path:
         relative = image_relative_path(row)
-        bars = read_plan_bars(row, derived_dir, clock())
         try:
+            bars = read_plan_bars(row, derived_dir, clock())
             png = render_png(plan_chart_spec(row, bars))
         except ChartRenderError as exc:
             logger.error(
                 "PNG plánu QQQ #%s (stav %s) se nenakreslil: %s", row.id, image_state(row), exc
             )
             raise HTTPException(500, f"Kreslení PNG plánu {row.id} selhalo: {exc}") from exc
+        except Exception as exc:
+            # Čtení barů nebo popis z JSON plánu (vadná partice, nečekaný tvar): důvod
+            # do odpovědi i do logu s tracebackem, ne holé 500
+            logger.exception("PNG plánu QQQ #%s: popis grafu selhal", row.id)
+            reason = f"{type(exc).__name__}: {exc}"
+            raise HTTPException(500, f"Kreslení PNG plánu {row.id} selhalo: {reason}") from exc
         target = data_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_suffix(".tmp")

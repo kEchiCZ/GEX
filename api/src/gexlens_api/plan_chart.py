@@ -290,7 +290,7 @@ def plan_chart_spec(row: OptionPlanRow, bars: Sequence[StoredBar]) -> dict[str, 
             spec["path"] = {"label": "cesta scénáře NQ v cenách QQQ", "points": path}
         exit_ts = dt.datetime.fromisoformat(main["exit_ts"])
         spec["vlines"] = [
-            {"x": main["created_at"], "label": f"plán {effective['slot']}"},
+            {"x": main["created_at"], "label": f"plán {effective['slot']} ET"},
             {"x": main["exit_ts"], "label": "exit"},
         ]
         for ts in main.get("target_ts") or ():
