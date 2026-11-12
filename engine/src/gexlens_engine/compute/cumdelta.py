@@ -823,6 +823,9 @@ class CumDeltaTracker:
                 self._coverage = CumDeltaCoverage(**vars(last))
                 self._minute_flow = 0.0
                 self._minute_net.clear()
+                # Tisky od baru, které pokrytí právě vyřadilo, další bar spárovat
+                # nesmí: jeho rozklad je NULL a do pokrytí nejde (#1735)
+                self._gapped |= self._printed_since_bar.keys() | self._unknown_since_bar.keys()
         self._sealed_flow = 0.0
         self._sealed_net.clear()
         self._sealed = False

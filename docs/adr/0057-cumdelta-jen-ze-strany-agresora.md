@@ -622,6 +622,10 @@ díru a bod 3 (verdikt minuty) o interval mezi vzorky. Platí jen pod v6.
     místo 62 583, protože by vypadl řádek 20:52 (+38 168).
   - Limit je stejný jako u pravidla „mlčící stream je do prahu běžící“: zamrznutí kratší než
     práh CumΔ nezneplatní. Pád streamu pak pozná počítadlo reconnectů v dalším vzorku.
+- **Minuta s mezerou bez řezu** (selhaný vzorek, #1735): kontrakty s tisky od posledního baru
+  jdou do `_gapped`. Uzávěrka bez řezu ty tisky z pokrytí vyřadí, takže rozklad jejich dalšího
+  baru je NULL a do pokrytí nejde (model mezery z doplňku 18. 10.). Dřív je další měřený bar
+  spároval a podíl tisků vyšel s tiskem, který pokrytí nenese.
 - **Kotace po zamrznutí** tento doplněk neřeší (`stale_age` 0–14 s u kotací z 08:55, nález #1784).
 - **Verze:** bump ani přepočet historie není potřeba. `cycle` volají jen v6 větve a monitor
   verdikt pod midpointem nemění (`minute_measured`). Replay v6 nad historickými particemi
