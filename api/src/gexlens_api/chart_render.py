@@ -173,8 +173,9 @@ def render(spec: dict[str, Any]) -> bytes:
     from matplotlib.figure import Figure
     from matplotlib.ticker import FuncFormatter
 
+    # matplotlib.dates nemá typové stuby (3.11: dates.pyi chybí), odtud ignore u tří volání
     def num(value: dt.datetime) -> float:
-        return float(mdates.date2num(value))
+        return float(mdates.date2num(value))  # type: ignore[no-untyped-call]
 
     note_lines: list[str] = []
     for note in spec.get("notes", []):
@@ -293,8 +294,10 @@ def render(spec: dict[str, Any]) -> bytes:
             borderaxespad=0.2,
         )
 
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator(tz=parsed.zone, minticks=5, maxticks=12))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=parsed.zone))
+    locator = mdates.AutoDateLocator(tz=parsed.zone, minticks=5, maxticks=12)  # type: ignore[no-untyped-call]
+    formatter = mdates.DateFormatter("%H:%M", tz=parsed.zone)  # type: ignore[no-untyped-call]
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
     ax.yaxis.set_major_formatter(FuncFormatter(_price_format))
     ax.set_xlabel(str(spec.get("time_label", "")), fontsize=9, color=MUTED)
 

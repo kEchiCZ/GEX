@@ -71,7 +71,8 @@ def render_png(spec: Mapping[str, Any], *, timeout_s: float = RENDER_TIMEOUT_S) 
     """PNG z popisu grafu v krátkém podprocesu (ADR-0062 K1 A); selhání = `ChartRenderError`."""
     payload = json.dumps(spec, ensure_ascii=False).encode("utf-8")
     command = [sys.executable, "-m", "gexlens_api.chart_render"]
-    env = {**os.environ, "MPLBACKEND": "Agg"}
+    # Důvod ze stderr se čte jako UTF-8 i tam, kde konzole má jiné kódování (Windows cp1250)
+    env = {**os.environ, "MPLBACKEND": "Agg", "PYTHONIOENCODING": "utf-8"}
     with _render_lock:
         try:
             done = subprocess.run(
