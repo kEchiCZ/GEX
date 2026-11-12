@@ -604,6 +604,16 @@ class FakeScheduler:
         return {}
 
 
+class ScriptedScheduler(FakeScheduler):
+    """Sweep cache s kotacemi, které test mění po minutách."""
+
+    def __init__(self) -> None:
+        self.current: dict[object, object] = {}
+
+    def quotes(self) -> dict[object, object]:
+        return self.current
+
+
 class FakeFlow:
     def __init__(self, cum_delta: float | None) -> None:
         self.ts_min = TS
@@ -2004,3 +2014,36 @@ def test_setups_flows_nova_seance_a_chybejici_kotace_jen_zalozi_stav(tmp_path: P
     next_day = day + dt.timedelta(days=1)
     assert flows({call: quote(1405.0, 0.5), put: quote(3.0, -0.2)}, next_day) == 0.0
     assert flows({call: quote(1410.0, 0.5), put: quote(4.0, -0.2)}, next_day) == 6.0
+
+
+@pytest.mark.parametrize(
+    ("wake_bar", "expected"),
+    [
+        # Probuzení s barem: 15:00 nese objem z cache, 15:01 čerstvý jen založí stav
+        (True, [0.0, 11.0, 0.0, 0.0, 3.0, 11.0]),
+        # Probuzení bez baru (#1346): štítek díru dá i tak, kotvou je první cyklus s bary
+        (False, [0.0, 11.0, 0.0, 0.0, 11.0]),
+    ],
+)
+async def test_setup_engine_casova_dira_opt_vol_az_po_zmene_objemu(
+    tmp_path: Path, wake_bar: bool, expected: list[float]
+) -> None:
+    """#1774 (A+): spánek 6. 11. — objem z doby před spánkem ani první čerstvý se nezapočte.
+
+    Dřív 15:12 nesla Σ 47 981 (`features.opt_vol` 84 450) místo stovek.
+    """
+    engine, _, fake = _bare_engine(tmp_path, cumdelta_prints=True)
+    scheduler = ScriptedScheduler()
+    fake.scheduler = scheduler
+    runtime = cast(EngineRuntime, fake)
+    call = next(iter(VOLUME_PLAN))
+    plan = [(0, 240.0), (1, 251.0), (60, 251.0), (61, 4717.0), (62, 4720.0), (63, 4731.0)]
+    for offset, volume in plan:
+        now = TS + dt.timedelta(minutes=offset)
+        scheduler.current = {call: quote(volume, 0.5)}
+        bar = Bar(
+            ts=now - dt.timedelta(minutes=1), open=7505, high=7506, low=7504, close=7505, volume=1.0
+        )
+        bars = [] if offset == 60 and not wake_bar else [bar]
+        await engine.on_minute(now, 7505, bars, runtime)
+    assert [row.opt_vol for row in engine._history] == expected

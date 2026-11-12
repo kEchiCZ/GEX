@@ -1381,9 +1381,22 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   const provisionalIso = new Set(inputs.bars.filter((bar) => bar.final === false).map((bar) => bar.tsIso)) // prettier-ignore
   const isPending = (minuteIdx: number): boolean =>
     !hasSnapshot(minuteIdx) && provisionalIso.has(minuteKeys[minuteIdx])
+  // Časová díra (#1774, A+): minuta se snapshotem, které nepředchází snapshot
+  // minuty − 1 (zamrzlý proces, ztracená minuta). Před prvním snapshotem dne
+  // stav není a restart (catch-up) začíná prázdný — díru nedávají
+  const firstSnapshot = minuteKeys.findIndex((_, minuteIdx) => hasSnapshot(minuteIdx))
+  const isTimeGap = (minuteIdx: number): boolean =>
+    firstSnapshot >= 0 &&
+    minuteIdx > firstSnapshot &&
+    hasSnapshot(minuteIdx) &&
+    !isCatchUp(minuteIdx) &&
+    !(
+      hasSnapshot(minuteIdx - 1) &&
+      Date.parse(minuteKeys[minuteIdx]) - Date.parse(minuteKeys[minuteIdx - 1]) === 60_000
+    )
   // Odvozené řady per minuta (#515): dopočítají se jen sloupce od poslední
   // změny (append/přepis živé minuty = 1 sloupec) a memoizují se na inputs
-  const series = ensureDerived(inputs, hasSnapshot, isCatchUp, isPending)
+  const series = ensureDerived(inputs, hasSnapshot, isCatchUp, isPending, isTimeGap)
   const maxPain = series.maxPain.slice(0, minutes)
 
   // Flip na řídké OI páteři (#664): minuty s nadpoloviční dírou v OI se kreslí
@@ -1697,30 +1710,52 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   return assembleReplayDay(decodeBundle(bundle))
 }
 
-/** Průběžné maximum kumulativního volume per strike přes sloupce `0..upTo-1`
- * (#1602); NaN = strike zatím objem nenesl. Buňka bez objemu (maska 0: řádek
- * chybí, NULL z tasty fallbacku, minuta bez snapshotu) referenci nemění.
- * Catch-up minuta (#518) i minuta po mezeře v objemu (#1632) ji posouvají
- * stejně jako ostatní buňky s objemem — přírůstek jen nekreslí. */
-function volumeReference(
+/** Stav přírůstků strany přes sloupce `0..upTo-1`: průběžné maximum kumulativního
+ * volume per strike (#1602) a kotva časové díry (#1774, A+); NaN = strike zatím
+ * objem nenesl, resp. nečeká. Buňka bez objemu (maska 0: řádek chybí, NULL
+ * z tasty fallbacku, minuta bez snapshotu) stav nemění. Catch-up minuta (#518)
+ * i minuta po mezeře v objemu (#1632) maximum posouvají stejně jako ostatní
+ * buňky s objemem — přírůstek jen nekreslí; catch-up kotvy smaže (nový proces
+ * začíná prázdný). */
+function volumeState(
   volume: Float32Array,
   known: Float32Array,
   strikeCount: number,
   stride: number,
   upTo: number,
-): Float64Array {
+  timeGap: readonly boolean[],
+  catchUp: readonly boolean[],
+): { reference: Float64Array; anchors: Float64Array } {
   const reference = new Float64Array(strikeCount).fill(Number.NaN)
+  const anchors = new Float64Array(strikeCount).fill(Number.NaN)
   for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
     const row = strikeIdx * stride
-    let max = Number.NaN
     for (let minuteIdx = 0; minuteIdx < upTo; minuteIdx += 1) {
+      if (catchUp[minuteIdx]) anchors[strikeIdx] = Number.NaN
       if (known[row + minuteIdx] === 0) continue
       const value = volume[row + minuteIdx]
-      if (Number.isNaN(max) || value > max) max = value
+      volumeIncrement(reference, strikeIdx, value)
+      gapBlocks(anchors, strikeIdx, value, timeGap[minuteIdx])
     }
-    reference[strikeIdx] = max
   }
-  return reference
+  return { reference, anchors }
+}
+
+/** Kotva časové díry buňky s objemem (#1774, A+); true = přírůstek se nekreslí.
+ * Sloupec po díře kotvu založí (první sweep po probuzení nese objem z cache),
+ * další sloupce čekají, dokud objem kotvu nepřeroste — první změna jen posune
+ * referenci. Totéž pravidlo má engine `SessionVolumes.add` a replay
+ * `option_flows`; engine kotví až v prvním cyklu s bary (#1346), panel
+ * v prvním snímku po díře. */
+function gapBlocks(anchors: Float64Array, strikeIdx: number, value: number, gap: boolean): boolean {
+  if (gap) {
+    anchors[strikeIdx] = value
+    return true
+  }
+  const anchor = anchors[strikeIdx]
+  if (Number.isNaN(anchor)) return false
+  if (value > anchor) anchors[strikeIdx] = Number.NaN
+  return true
 }
 
 /** Přírůstek kumulativního volume buňky proti průběžnému maximu strike a jeho
@@ -1755,7 +1790,14 @@ Sémantika sloupců je shodná s původními celodenními průchody:
   přírůstek celé mezery, ne minuty obchodů. Kreslí se jako 0 a referenci jen
   posune, stejně jako catch-up; řada [100, NULL, 130, 150] dá 0, null, 0, 20.
   Daily (API `daily_totals`) objem mezery dál počítá, součet dne se nemění.
-  Sloupec závisí jen na sobě a na předchozím, takže memo `upTo` platí dál.
+* Časová díra (#1774, Rozhodnuto 12. 11.: A+) — minuta se snapshotem, které
+  nepředchází snapshot minuty − 1 (zamrzlý proces, ztracená minuta; sloupce
+  díry jsou jen bary z backfillu). První sweep po probuzení nese objem z cache,
+  čerstvý přijde až dalším sweepem ATM a křídel (ES 6. 11. 15:12 Σ 47 981,
+  15:14 Σ 14 467). Sloupec díry nekreslí nic a per strike a strana založí
+  kotvu; strike pak nekreslí, dokud objem kotvu nepřeroste, první změna jen
+  posune referenci. Catch-up (restart) díru nedává a kotvy maže. Stav kotev se
+  stejně jako maximum přepočte z platného prefixu, takže memo `upTo` platí dál.
 * Minuta bez měřeného objemu (#1635) — žádný strike strany objem nenese (tasty
   fallback, díra ve sběru #459): strana minuty je null, ne 0. Panel ji kreslí
   jako mezeru s „—“, tichá minuta bez obchodů zůstává 0 (SPEC 3.7). Rozdělaná
@@ -1769,6 +1811,7 @@ function ensureDerived(
   hasSnapshot: (minuteIdx: number) => boolean,
   isCatchUp: (minuteIdx: number) => boolean,
   isPending: (minuteIdx: number) => boolean,
+  isTimeGap: (minuteIdx: number) => boolean,
 ): DerivedSeriesCache {
   const minutes = inputs.minutes.length
   const stride = inputs.minuteCapacity
@@ -1784,21 +1827,27 @@ function ensureDerived(
     evoOiPut: [],
   }
   if (cache.upTo >= minutes) return cache // platná cache: bez průchodu prefixem
-  // Reference přírůstků do prvního počítaného sloupce: průchod platným
-  // prefixem stojí O(striky × minuty), řádově jako skládání gridu
-  const callReference = volumeReference(
+  const timeGap = Array.from({ length: minutes }, (_, minuteIdx) => isTimeGap(minuteIdx))
+  const catchUp = Array.from({ length: minutes }, (_, minuteIdx) => isCatchUp(minuteIdx))
+  // Reference přírůstků a kotvy časové díry do prvního počítaného sloupce:
+  // průchod platným prefixem stojí O(striky × minuty), řádově jako skládání gridu
+  const { reference: callReference, anchors: callAnchors } = volumeState(
     inputs.callVolume,
     inputs.callVolumeKnown,
     strikeCount,
     stride,
     cache.upTo,
+    timeGap,
+    catchUp,
   )
-  const putReference = volumeReference(
+  const { reference: putReference, anchors: putAnchors } = volumeState(
     inputs.putVolume,
     inputs.putVolumeKnown,
     strikeCount,
     stride,
     cache.upTo,
+    timeGap,
+    catchUp,
   )
   for (let minuteIdx = cache.upTo; minuteIdx < minutes; minuteIdx += 1) {
     const snapshot = hasSnapshot(minuteIdx)
@@ -1823,7 +1872,12 @@ function ensureDerived(
       cache.evoOiCall[minuteIdx] = minuteIdx > 0 ? cache.evoOiCall[minuteIdx - 1] : 0
       cache.evoOiPut[minuteIdx] = minuteIdx > 0 ? cache.evoOiPut[minuteIdx - 1] : 0
     }
-    const counted = !isCatchUp(minuteIdx)
+    const counted = !catchUp[minuteIdx]
+    if (catchUp[minuteIdx]) {
+      callAnchors.fill(Number.NaN)
+      putAnchors.fill(Number.NaN)
+    }
+    const gap = timeGap[minuteIdx]
     let optVolCall = 0
     let optVolPut = 0
     let deltaFlowCall = 0
@@ -1839,7 +1893,8 @@ function ensureDerived(
         callMeasured = true
         const callIncrement = volumeIncrement(callReference, strikeIdx, inputs.callVolume[index])
         const callAfterGap = minuteIdx > 0 && inputs.callVolumeKnown[index - 1] === 0
-        if (counted && !callAfterGap && callIncrement > 0) {
+        const callWaiting = gapBlocks(callAnchors, strikeIdx, inputs.callVolume[index], gap)
+        if (counted && !callAfterGap && !callWaiting && callIncrement > 0) {
           optVolCall += callIncrement
           deltaFlowCall += callIncrement * Math.abs(inputs.callDelta[index])
         }
@@ -1848,7 +1903,8 @@ function ensureDerived(
         putMeasured = true
         const putIncrement = volumeIncrement(putReference, strikeIdx, inputs.putVolume[index])
         const putAfterGap = minuteIdx > 0 && inputs.putVolumeKnown[index - 1] === 0
-        if (counted && !putAfterGap && putIncrement > 0) {
+        const putWaiting = gapBlocks(putAnchors, strikeIdx, inputs.putVolume[index], gap)
+        if (counted && !putAfterGap && !putWaiting && putIncrement > 0) {
           optVolPut += putIncrement
           deltaFlowPut += putIncrement * Math.abs(inputs.putDelta[index])
         }

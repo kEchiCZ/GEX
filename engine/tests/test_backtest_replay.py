@@ -9,7 +9,7 @@ import datetime as dt
 import importlib.util
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, cast
 
@@ -481,22 +481,41 @@ def _snapshot_partitions(
 
 
 def _live_flows(
-    tmp_path: Path, cycles: list[tuple[dt.datetime, dict[Any, CachedQuote]]]
+    tmp_path: Path,
+    cycles: list[tuple[dt.datetime, dict[Any, CachedQuote]]],
+    labels: Iterable[dt.datetime] = (),
+    restarts: Iterable[dt.datetime] = (),
 ) -> list[tuple[float, float, float]]:
-    """Živý `SetupEngine._flows` pod v6 nad týmiž kotacemi, cyklus = minuta s bary."""
+    """Živý `SetupEngine._flows` pod v6 nad týmiž kotacemi, cyklus = minuta s bary.
+
+    Štítek `on_minute` (`SessionVolumes.cycle`, #1774) dostane každý cyklus
+    a minuty bez baru v `labels`; v minutě z `restarts` začne nový proces
+    (nový engine s prázdným stavem, catch-up #518).
+    """
     repository = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 's.db'}"))
     repository.ensure_schema()
-    engine = SetupEngine(
-        symbol="ES",
-        repository=repository,
-        oi_repository=OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'o.db'}")),
-        publisher=RecordingPublisher(),
-        cumdelta_prints=True,
-    )
+
+    def new_engine() -> SetupEngine:
+        return SetupEngine(
+            symbol="ES",
+            repository=repository,
+            oi_repository=OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'o.db'}")),
+            publisher=RecordingPublisher(),
+            cumdelta_prints=True,
+        )
+
+    engine = new_engine()
+    by_ts = dict(cycles)
+    restart_set = set(restarts)
     runtime = QuotesRuntime()
     flows: list[tuple[float, float, float]] = []
-    for ts, quotes in cycles:
-        runtime.quotes = quotes
+    for ts in sorted({*by_ts, *labels}):
+        if ts in restart_set:
+            engine = new_engine()
+        engine._volumes.cycle(ts)
+        if ts not in by_ts:
+            continue
+        runtime.quotes = by_ts[ts]
         flows.append(engine._flows(cast(EngineRuntime, runtime), trading_session_date(ts)))
     return flows
 
@@ -561,7 +580,8 @@ def test_option_flows_v6_parita_se_zivym_enginem_seance_mezera_a_okno(tmp_path: 
     _snapshot_partitions(tmp_path, "20261021", written)
     replayed = _replay_flows(module, cycles)
     assert [row[2] for row in replayed] == [0.0, 5.0, 0.0, 0.0, 5.0, 0.0, 3.0, 17.0, 0.0, 0.0]
-    assert replayed == [pytest.approx(row) for row in _live_flows(tmp_path, cycles)]
+    live = _live_flows(tmp_path, cycles, labels=[no_bar[0]])
+    assert replayed == [pytest.approx(row) for row in live]
 
 
 def test_option_flows_v6_vikend_zacina_novou_seanci(tmp_path: Path) -> None:
@@ -580,9 +600,113 @@ def test_option_flows_v6_vikend_zacina_novou_seanci(tmp_path: Path) -> None:
     ]
     _snapshot_partitions(tmp_path, "20261021", cycles)
     replayed = _replay_flows(module, cycles)
-    # Neděle: call 15 jen založí stav (v5 by dal 15 − 12); pondělí: call po mezeře 0
-    assert [row[2] for row in replayed] == [0.0, 2.0, 0.0, 2.0, 21.0]
+    # Neděle: call 15 jen založí stav (v5 by dal 15 − 12); pondělí: call po mezeře 0,
+    # put po časové díře 22:01 → 13:30 téže seance také (#1774, A+)
+    assert [row[2] for row in replayed] == [0.0, 2.0, 0.0, 2.0, 0.0]
     assert replayed == [pytest.approx(row) for row in _live_flows(tmp_path, cycles)]
+
+
+def test_option_flows_v6_casova_dira_spanek_a_ztracena_minuta_parita(tmp_path: Path) -> None:
+    """#1774 (A+), vzor spánku 6. 11.: první cyklus po díře nese objem z cache, ATM přinese
+    čerstvý objem hned, křídlo až dalším sweepem křídel; obojí jen založí stav. Ztracená
+    minuta za běhu stojí i první změnu. Čekání křídla jde přes půlnoc UTC (seance pátku)."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    atm, wing = list(VOLUME_PLAN)[:2]
+
+    def both(a: float, w: float) -> dict[Any, CachedQuote]:
+        return {atm: quote(a, 0.5), wing: quote(w, -0.2)}
+
+    cycles = [
+        (_at(5, 8, 54, 11), both(240.0, 100.0)),
+        (_at(5, 8, 55, 11), both(251.0, 100.0)),
+        (_at(5, 15, 11, 11), both(251.0, 100.0)),  # probuzení: cache
+        (_at(5, 15, 12, 11), both(4717.0, 100.0)),  # ATM čerstvý
+        (_at(5, 15, 13, 11), both(4720.0, 100.0)),
+        (_at(5, 15, 14, 11), both(4731.0, 180.0)),  # křídlo čerstvé
+        (_at(5, 15, 15, 11), both(4735.0, 185.0)),
+        (_at(5, 15, 17, 11), both(4800.0, 190.0)),  # 15:16 ztracená
+        (_at(5, 15, 18, 11), both(4810.0, 191.0)),
+        (_at(5, 15, 19, 11), both(4815.0, 192.0)),
+        (_at(5, 23, 56, 11), both(50.0, 20.0)),  # seance pátku 6. 11. od 23:00 UTC
+        (_at(5, 23, 58, 11), both(60.0, 22.0)),  # 23:57 ztracená: kotva
+        (_at(5, 23, 59, 11), both(60.0, 22.0)),
+        (_at(6, 0, 0, 11), both(70.0, 22.0)),  # ATM změna, křídlo čeká přes půlnoc
+        (_at(6, 0, 1, 11), both(72.0, 25.0)),
+        (_at(6, 0, 2, 11), both(73.0, 26.0)),
+    ]
+    _snapshot_partitions(tmp_path, "20261021", cycles)
+    replayed = _replay_flows(module, cycles)
+    assert [row[2] for row in replayed] == [
+        0.0, 11.0, 0.0, 0.0, 3.0, 11.0, 9.0, 0.0, 0.0, 6.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0,
+    ]  # fmt: skip
+    assert replayed == [pytest.approx(row) for row in _live_flows(tmp_path, cycles)]
+
+
+def test_option_flows_v6_restart_s_catch_up_jen_zalozi_stav_parita(tmp_path: Path) -> None:
+    """Restart procesu (catch-up #518): živý engine začíná prázdný — cyklus po restartu
+    nic neměří, další už ano (bez kotvy A+). Dřív replay započetl objem výpadku."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    call = next(iter(VOLUME_PLAN))
+    cycles = [
+        (_at(10, 14, 37, 11), {call: quote(100.0, 0.5)}),
+        (_at(10, 14, 38, 11), {call: quote(110.0, 0.5)}),
+        (_at(10, 14, 45, 11), {call: quote(400.0, 0.5)}),  # restart po výpadku WSL
+        (_at(10, 14, 46, 11), {call: quote(410.0, 0.5)}),
+    ]
+    _snapshot_partitions(tmp_path, "20261021", cycles)
+    _write(
+        tmp_path / "derived" / "ES" / "20261021" / "catchup" / "2026-11-10.parquet",
+        pd.DataFrame({"ts_min": [_at(10, 14, 45, 11)]}),
+    )
+    replayed = _replay_flows(module, cycles)
+    assert [row[2] for row in replayed] == [0.0, 10.0, 0.0, 10.0]
+    live = _live_flows(tmp_path, cycles, restarts=[_at(10, 14, 45, 11)])
+    assert replayed == [pytest.approx(row) for row in live]
+
+
+def test_option_flows_v6_prenesena_kotva_pod_maximem_parita(tmp_path: Path) -> None:
+    """Kotva pod maximem seance (propad IBKR 101 → 100) čeká přes půlnoc UTC: přenesený
+    řádek nese maximum 101, ne surový objem, takže první změna 105 jen založí stav."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    call = next(iter(VOLUME_PLAN))
+    values = [((5, 23, 54), 101.0), ((5, 23, 55), 100.0), ((5, 23, 57), 100.0)]
+    values += [((5, 23, 58), 100.0), ((5, 23, 59), 100.0), ((6, 0, 0), 105.0), ((6, 0, 1), 106.0)]
+    cycles = [(_at(*at, 11), {call: quote(volume, 0.5)}) for at, volume in values]
+    _snapshot_partitions(tmp_path, "20261021", cycles)
+    replayed = _replay_flows(module, cycles)
+    assert [row[2] for row in replayed] == [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    assert replayed == [pytest.approx(row) for row in _live_flows(tmp_path, cycles)]
+
+
+def test_option_flows_v6_restart_pak_ztracena_minuta_a_propad_parita(tmp_path: Path) -> None:
+    """Nový proces začíná prázdný: bez maxima, kotev i rozpracované díry.
+
+    Catch-up 17:30 bez baru, 17:31 ztracená: 17:32 je první cyklus procesu a jen založí
+    stav (první `roll` díru smaže), 17:33 se měří. Maximum před restartem (500) neplatí."""
+    module = _load()
+    module.set_data_root(str(tmp_path))
+    call = next(iter(VOLUME_PLAN))
+    restart = _at(10, 17, 30, 11)
+    cycles = [
+        (_at(10, 17, 28, 11), {call: quote(100.0, 0.5)}),
+        (_at(10, 17, 29, 11), {call: quote(500.0, 0.5)}),
+        (_at(10, 17, 32, 11), {call: quote(400.0, 0.5)}),
+        (_at(10, 17, 33, 11), {call: quote(405.0, 0.5)}),
+        (_at(10, 17, 34, 11), {call: quote(410.0, 0.5)}),
+    ]
+    written = sorted([*cycles, (restart, {call: quote(395.0, 0.5)})], key=lambda item: item[0])
+    _snapshot_partitions(tmp_path, "20261021", written)
+    _write(
+        tmp_path / "derived" / "ES" / "20261021" / "catchup" / "2026-11-10.parquet",
+        pd.DataFrame({"ts_min": [restart]}),
+    )
+    replayed = _replay_flows(module, cycles)
+    assert [row[2] for row in replayed] == [0.0, 400.0, 0.0, 5.0, 5.0]
+    live = _live_flows(tmp_path, cycles, labels=[restart], restarts=[restart])
+    assert replayed == [pytest.approx(row) for row in live]
 
 
 def test_walkforward_vynecha_expiraci_bez_settle_podle_okamziku_ne_data(

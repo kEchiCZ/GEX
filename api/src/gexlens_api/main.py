@@ -126,8 +126,9 @@ def volume_increments(volume: pd.DataFrame) -> pd.DataFrame:
     dají 0, započte se jen objem nad maximem. NaN referenci nemění a první
     výskyt kontraktu jen založí stav (přírůstek 0). Tentýž vzorec počítá
     frontend `ensureDerived` (`frontend/src/replay/loader.ts`) — jen první
-    minutu po mezeře v objemu (kontrakt bez objemu v předchozí minutě) panel
-    kreslí jako 0, Daily ji počítá (#1632, rozhodnutí B 21. 10.).
+    minutu po mezeře v objemu (kontrakt bez objemu v předchozí minutě) a minuty
+    po časové díře do první změny objemu (#1774) panel kreslí jako 0, Daily je
+    počítá (#1632, rozhodnutí B 21. 10.). `/flow` pravidlo mezery nezná (#1785).
     """
     reference = volume.ffill(axis=1).cummax(axis=1)
     return reference.diff(axis=1).clip(lower=0.0).fillna(0.0)

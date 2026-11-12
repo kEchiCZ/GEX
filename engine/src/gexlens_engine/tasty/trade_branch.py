@@ -210,10 +210,20 @@ class TradeBranchMonitor:
     vzorek „neběží" a teprve pak stav v okamžiku vzorku. Řez leží v témž
     okamžiku jako vzorek, takže mezerou je jen řádek s výpadkem, ne i ten
     následující. Globální počítadlo stačí: všechny trackery se řežou najednou.
+
+    Stejně jako pád spojení se bere interval od minulého vzorku delší než práh
+    ticha univerza (`universe_silence`: 180 s v US RTH, 600 s v Globexu, nejdřív
+    od openu seance) — zamrzlý proces (spánek notebooku 6. 11. 08:55–15:11)
+    tisky z té doby nedostal, i když stream po probuzení hned hlásí eventy
+    a reconnect přijde až po vzorku (#1774, Rozhodnuto 12. 11.: 3b). Ztracená
+    minuta živého procesu (vzorky 120–180 s od sebe) pod práh nespadne: stream
+    tisky dočte a řádek po ní nese dva intervaly celé. Zavřený trh interval
+    omluví, jen když byl zavřený i na jeho začátku.
     """
 
     def __init__(self) -> None:
         self._reconnects: int | None = None
+        self._sampled_at: dt.datetime | None = None
 
     def sample(
         self,
@@ -229,6 +239,15 @@ class TradeBranchMonitor:
         dropped = self._reconnects is not None and reconnects != self._reconnects
         self._reconnects = reconnects
         market_closed = is_market_closed(now)
+        # Interval bez vzorku nad práh ticha (#1774); zavřený trh ho omluví, jen
+        # když byl zavřený i na jeho začátku — probuzení v pauze tisky před
+        # zavřením nevrátí
+        unobserved, unobserved_closed = False, market_closed
+        if self._sampled_at is not None:
+            silence, limit = universe_silence(now, self._sampled_at)
+            unobserved = silence >= limit
+            unobserved_closed = market_closed and is_market_closed(self._sampled_at)
+        self._sampled_at = now
         states: dict[str, str] = {}
         for symbol, pipe in pipes.items():
             symbol_routes = routes.get(symbol)
@@ -245,12 +264,14 @@ class TradeBranchMonitor:
                     last_event_at=last_event_among(universe) if owned else None,
                 )
                 if index == 0:
-                    primary_running = running and not dropped
+                    primary_running = running and not (dropped or unobserved)
                 tracker = runtime.cum_delta
                 if tracker is None:
                     continue
                 if dropped:
                     tracker.observe(running=False, market_closed=market_closed)
+                if unobserved:
+                    tracker.observe(running=False, market_closed=unobserved_closed)
                 tracker.observe(running=running, market_closed=market_closed)
                 tracker.seal()
             if market_closed:

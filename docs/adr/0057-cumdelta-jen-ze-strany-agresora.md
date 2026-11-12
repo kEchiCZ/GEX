@@ -565,3 +565,64 @@ z doplňku 23. 10. o stav mapy a T6. Platí jen pod v6: pod v5 vrací `_live_spo
   kandidáta nad cenou zavřeného trhu. V `t6_occurrences` k 26. 10. 2026 takový řádek není.
 - **Beze změny:** setupy, paper a sondy T9 spot nečtou (rozhodují z barů minuty, #1346, #1320).
   GEX výpočet a obálka striků dál běží s nejčerstvější známou cenou.
+
+## Doplněk (12. 11. 2026, #1774)
+Rozhodnuto 12. 11. 2026 v #1385 (vlastník: 1 A+, 2 a, 3 b). Doplňuje doplněk 22. 10. o časovou
+díru a bod 3 (verdikt minuty) o interval mezi vzorky. Platí jen pod v6.
+
+- **Časová díra** = přeskočená minuta cyklu (štítek − předchozí > 1 min). Vzniká při zamrzlém
+  procesu (spánek notebooku 6. 11. 08:55–15:11 UTC) a při ztracené minutě přetaženého kola.
+  Restart procesu časovou dírou není: engine začíná prázdný a minuta je catch-up (#518).
+- **Objem po časové díře (A+)**, `SessionVolumes.cycle`:
+  - Proč: první sweep po probuzení nesl u 208 z 318 kontraktů ES objem z doby před spánkem
+    (z cache), a to se `stale_age` 0–14 s. Čerstvý objem přinesl u ATM až další sweep (15:12,
+    Σ 47 981) a u křídel další sweep křídel (15:14, Σ 14 467, `wings_sweep_every` = 3). Mezera
+    po kontraktu z doplňku 22. 10. to nechytí, protože kontrakty v minulém cyklu objem nesly.
+    Pravidlo A (jen první minuta po díře) by 15:12 i 15:14 nechalo.
+  - Po časové díře je v mezeře každý kontrakt. Kontrakt s objemem v prvním cyklu po díře si tu
+    hodnotu uloží jako kotvu a zůstává v mezeře, dokud objem kotvu nepřeroste. První změna jen
+    založí stav. Kontrakt bez objemu v tom cyklu jde jako po mezeře.
+  - Cena: po ztracené minutě za živého procesu přijde o přírůstek i první změna (10. 11. 20:43
+    151 → 0, 20:53 887 → 0, 20:58 404 → 0). Karanténa 1 + `wings_sweep_every` minut by stála
+    4 minuty objemu po každé ztracené minutě.
+  - Nová seance díru nepřenáší, roll stav maže.
+  - Kde pravidlo platí:
+    - `SetupEngine` a `TendencyEngine` volají `cycle(now)` na začátku každé minuty, i bez
+      barů a za zavřeného trhu;
+    - replay `option_flows` bere díru ze zapsaných minut partice (přeskočená minuta mezi cykly
+      téže seance) a restart z partice `catchup`;
+    - restart dělí v replayi stav kontraktu jako nový proces: zahodí se maximum i kotvy.
+      Díra se nepočítá do prvního cyklu nového procesu, protože jeho první `roll` stav
+      i rozpracovanou díru smaže. Limit replaye z doplňku 22. 10. tím pro restart s catch-up
+      minutou padá. Restart bez catch-up minuty (start na začátku dne UTC) replay dál nepozná;
+    - limit replaye: cyklus je minuta s barem v partici, včetně baru z backfillu. Živý engine
+      bar dávky po probuzení ještě mít nemusel (minuta bez baru, #1346). Kotvu pak založí až
+      další minuta s bary a engine přijde o minutu objemu navíc proti replayi;
+    - panel (frontend `ensureDerived`): díra je minuta se snímkem, které nepředchází snímek
+      minuty − 1, kromě catch-up. Sloupce díry jsou jen bary z backfillu. Panel kotví
+      v prvním snímku po díře, engine v prvním cyklu s bary. Panel stav přes restart drží
+      (catch-up maximum jen posune, kotvy smaže), takže ztracená minuta hned po restartu je
+      v panelu díra, v enginu ne.
+  - Tracker (`printvol`) časovou díru nemá. Rozklad po spánku zneplatní verdikt (bod níže)
+    spolu s `_gapped`. Ztracená minuta živého procesu nese tisky i přírůstek přes týž interval,
+    takže rozklad sedí.
+  - Daily se nemění, objem díry je objem dne. `/flow` nezná ani mezeru po kontraktu (nález #1785).
+- **Verdikt CumΔ (3b)**, `TradeBranchMonitor.sample`:
+  - Proč: 6. 11. 15:11 byla minuta „měřená“ (tok −52 ze 4 tisků) přes interval 08:55–15:11.
+    Stream po probuzení hned hlásil eventy a reconnect přišel až po vzorku (NULL až 15:12).
+  - Interval od minulého vzorku delší než práh ticha (`universe_silence`: 180 s v US RTH, 600 s
+    v Globexu, nejdřív od openu seance) se bere jako pád spojení: vzorek „neběží“ a minuta je
+    NULL.
+  - Ztracená minuta živého procesu zůstává měřená, protože vzorky jsou od sebe 120–180 s
+    (10. 11. asi 130 s). Stream tisky dočte a řádek po ní nese oba intervaly celé. Dvě
+    a víc ztracených minut v RTH už práh 180 s přesáhnou a dávají mezeru.
+  - Zavřený trh interval omluví, jen když byl zavřený i na jeho začátku. Probuzení v denní
+    pauze po zamrznutí v RTH je mezera: tisky před zavřením chybí. Varianta 3a (NULL po každé přeskočené
+    minutě) by zahodila tisky, které engine přijal: ES 10. 11. by RTH skončila na CumΔ 26 130
+    místo 62 583, protože by vypadl řádek 20:52 (+38 168).
+  - Limit je stejný jako u pravidla „mlčící stream je do prahu běžící“: zamrznutí kratší než
+    práh CumΔ nezneplatní. Pád streamu pak pozná počítadlo reconnectů v dalším vzorku.
+- **Kotace po zamrznutí** tento doplněk neřeší (`stale_age` 0–14 s u kotací z 08:55, nález #1784).
+- **Verze:** bump ani přepočet historie není potřeba. `cycle` volají jen v6 větve a monitor
+  verdikt pod midpointem nemění (`minute_measured`). Replay v6 nad historickými particemi
+  pravidlo uplatní sám, uložené `features` a setupy se nepřepisují.

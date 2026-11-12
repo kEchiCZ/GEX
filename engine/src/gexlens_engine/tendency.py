@@ -130,8 +130,9 @@ class TendencyEngine:
         navzájem nulovali přírůstky. Pravidla v5 (zlom mechaniky v6): přírůstek
         proti maximu seance (`compute/volume.py`, #1602) — pokles i návrat
         k maximu dají 0, kontrakt po cyklu bez objemu jen založí stav, nová
-        seance (`session`) stav maže. Pravidla v4 beze změny proti poslední
-        známé hodnotě (ADR-0057 bod 11).
+        seance (`session`) stav maže; po časové díře (přeskočený štítek
+        `on_minute`) zůstane kontrakt v mezeře do první změny objemu (#1774, A+).
+        Pravidla v4 beze změny proti poslední známé hodnotě (ADR-0057 bod 11).
         """
         call_flow = put_flow = 0.0
         seen = False
@@ -331,6 +332,9 @@ class TendencyEngine:
         (#1622): v sobotu se pásmo měnilo bez obchodu (charm rampa podle hodin)
         a řádky míchaly tabulku kalibrace vah. v4 beze změny.
         """
+        if self.cumdelta_prints:
+            # Štítek každé minuty, i za zavřeného trhu: přeskočený = časová díra (#1774)
+            self._volumes.cycle(now)
         if self.version >= TENDENCY_RULES_V5 and is_market_closed(now):
             return
         levels = runtime.last_gex_levels

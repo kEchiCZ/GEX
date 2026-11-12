@@ -372,6 +372,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-11-12 — po probuzení ze spánku vypadal objem z cache jako čerstvý (#1774).** Mezera
+  přírůstku byla definovaná jen po kontraktu: kontrakt, který v minulém cyklu objem nesl, mezeru
+  nemá. Po spánku 6. 11. 08:55–15:11 UTC ale minulý cyklus byl 6 h starý a první sweep vrátil
+  u 208 z 318 kontraktů ES objem z doby před spánkem (`stale_age` 0–14 s). Čerstvý objem přišel
+  až dalším sweepem ATM a křídel, takže 15:12 nesla Σ 47 981 a 15:14 Σ 14 467 (běžně stovky).
+  Hypotéza z issue („objem díry spadne do první minuty“) neplatila, vyvrátila ji až data per
+  kontrakt. Totéž měl verdikt CumΔ: minuta 15:11 byla „měřená“ přes interval 6 h.
+  → „Mezi nimiž nic nechybí“ (18. 10.) platí i pro čas: mezera je i přeskočený štítek cyklu.
+  Hodnota prvního pozorování po zamrznutí není nové pozorování, ověří ji až změna. Interval
+  mezi vzorky trade větve delší než práh ticha je mezera. Rozbor gapu dělat per kontrakt
+  a per minuta nad snímky, ne nad součty.
 - **2026-11-09 — záporné `stale_age` v řádcích druhé expirace (#1768).** Snímek řetězu QQQ
   stavěl řádky expirací v cyklu a mezi nimi čekal na zápis partice (`await asyncio.to_thread`).
   Řádky 1DTE tak vznikly z kotací, které přišly až po okamžiku snímku: 9. 11. v 9:31 nesl řádek

@@ -147,6 +147,16 @@ def option_flows(
       má mezeru a jen založí stav, stejně jako první výskyt v seanci a první
       cyklus okna — živý engine kontrakty expirace před rollem nečte. Cyklus
       bez jediného objemu je tok 0. Partice mimo cykly se nečtou.
+      Časová díra (#1774, A+): přeskočená zapsaná minuta mezi cykly téže
+      seance — živý `on_minute` ji pozná ze štítků. Cyklus po ní nic neměří
+      a kontrakt zůstane v mezeře, dokud objem nepřeroste hodnotu z toho
+      cyklu (kotva); první změna jen založí stav. Restart procesu (catch-up
+      minuta #518) živý engine začíná s prázdným stavem: replay po něm
+      zahodí maximum i kotvy kontraktu a první objem jen založí stav.
+      Limit: cyklus = minuta s barem v partici, včetně baru z backfillu.
+      Živý engine bar dávky po probuzení ještě nemusel mít (minuta bez baru,
+      #1346), kotvu pak založí až další minuta s bary a o minutu objemu
+      přijde navíc.
     - **v5** (ADR-0057 bod 11 beze změny): přírůstek proti předchozímu řádku
       kontraktu (`groupby(strike, right).shift()`), ≤ 0 se zahazuje; kontrakt,
       který se ve sweepu poprvé objeví, přírůstek nemá (NaN → zahodit) —
@@ -154,7 +164,11 @@ def option_flows(
       poslední řádek každého kontraktu.
     """
     files = sorted(glob.glob(f"{ROOT}/snapshots/{symbol}/{expiry}/*.parquet"))
-    parts = _flows_session_max(files, minutes) if prints else _flows_last_value(files)
+    parts = (
+        _flows_session_max(files, minutes, _catch_up_minutes(symbol, expiry))
+        if prints
+        else _flows_last_value(files)
+    )
     if not parts:
         return None
     grouped = pd.concat(parts).groupby(level=["ts_min", "right"], sort=True).sum()
@@ -193,12 +207,59 @@ def _flows_last_value(files: list[str]) -> list[pd.DataFrame]:
     return parts
 
 
-def _flows_session_max(files: list[str], minutes: pd.Series | None) -> list[pd.DataFrame]:
+def _catch_up_minutes(symbol: str, expiry: str) -> set[pd.Timestamp]:
+    """Catch-up minuty expirace (#518, ADR-0024): první sweep po startu procesu uprostřed dne."""
+    files = sorted(glob.glob(f"{DATA}/{symbol}/{expiry}/catchup/*.parquet"))
+    if not files:
+        return set()
+    frame = pd.concat([pd.read_parquet(path, columns=["ts_min"]) for path in files])
+    return set(_utc_ns(frame["ts_min"]))
+
+
+@dataclasses.dataclass
+class _CycleBreaks:
+    """Zapsané minuty mezi cykly replaye: život procesu a časová díra (#1774).
+
+    Živý `on_minute` vidí štítek každé minuty, i bez baru; replay ho bere ze
+    zapsaných minut partice. Catch-up minuta (#518) = nový proces s prázdným
+    stavem: `life` (počet restartů od začátku přehrání) dělí stav kontraktu
+    jako nový `SessionVolumes` a díra před restartem se zahodí. Přeskočená
+    minuta za běhu = časová díra; do prvního cyklu nového procesu ne — jeho
+    první `roll` stav i rozpracovanou díru smaže. Stav jde přes partice dne.
+    """
+
+    last_written: pd.Timestamp | None = None
+    life: int = 0
+    skip: bool = False
+    fresh: bool = True
+
+    def scan(
+        self, written: list[pd.Timestamp], cycles: set[pd.Timestamp], catch_up: set[pd.Timestamp]
+    ) -> dict[pd.Timestamp, tuple[int, bool]]:
+        """Zapsané minuty dne vzestupně → cyklus: (život procesu, díra od minulého cyklu)."""
+        flags: dict[pd.Timestamp, tuple[int, bool]] = {}
+        for stamp in written:
+            if stamp in catch_up:
+                self.life += 1
+                self.skip, self.fresh = False, True
+            elif self.last_written is not None and stamp - self.last_written > _MINUTE:
+                self.skip = True
+            self.last_written = stamp
+            if stamp in cycles:
+                flags[stamp] = (self.life, self.skip and not self.fresh)
+                self.skip, self.fresh = False, False
+        return flags
+
+
+def _flows_session_max(
+    files: list[str], minutes: pd.Series | None, catch_up: set[pd.Timestamp] | None = None
+) -> list[pd.DataFrame]:
     """Přírůstky v6 po dnech: proti maximu seance s mezerou (viz `option_flows`, #1602).
 
     Stav kontraktu nese do dalšího dne řádek s minutou posledního objemu,
-    seancí a maximem seance ve sloupci `volume`; mezeru určuje předchozí cyklus
-    (`last_cycle`).
+    seancí, maximem seance ve sloupci `volume` a kotvou časové díry (`anchor`,
+    NaN = kontrakt nečeká); mezeru určuje předchozí cyklus (`last_cycle`),
+    časovou díru a restart zapsané minuty mezi cykly (`_CycleBreaks`).
     """
     cycles = None if minutes is None else pd.Index(_utc_ns(pd.Series(minutes))).unique()
     if cycles is not None and cycles.empty:
@@ -207,13 +268,17 @@ def _flows_session_max(files: list[str], minutes: pd.Series | None) -> list[pd.D
     span = None if cycles is None else (str(cycles.min().date()), str(cycles.max().date()))
     state: pd.DataFrame | None = None
     last_cycle: pd.Timestamp | None = None
+    breaks = _CycleBreaks()
     parts: list[pd.DataFrame] = []
     for path in files:
         if span is not None and not span[0] <= os.path.basename(path)[:10] <= span[1]:
             continue
         day = pd.read_parquet(path, columns=_SNAPSHOT_COLUMNS)
+        stamps_ns = _utc_ns(day["ts_min"])
+        written = sorted(set(stamps_ns))
         if cycles is not None:
-            day = day[_utc_ns(day["ts_min"]).isin(cycles)]
+            day = day[stamps_ns.isin(cycles)]
+        flags = breaks.scan(written, set(_utc_ns(day["ts_min"])), catch_up or set())
         if day.empty:
             continue
         stamps = day["ts_min"].drop_duplicates().sort_values().reset_index(drop=True)
@@ -221,20 +286,60 @@ def _flows_session_max(files: list[str], minutes: pd.Series | None) -> list[pd.D
         if last_cycle is not None:
             previous.iloc[0] = last_cycle
         last_cycle = stamps.iloc[-1]
+        session = _session_of(stamps)
+        previous_session = previous.map(
+            lambda value: (
+                None
+                if pd.isna(value)
+                else trading_session_date(pd.Timestamp(value).to_pydatetime())
+            )
+        )
+        cycle_flags = _utc_ns(stamps).map(flags)
         frame = pd.DataFrame(
-            {"ts_min": stamps, "session": _session_of(stamps), "previous_cycle": previous}
+            {
+                "ts_min": stamps,
+                "session": session,
+                "previous_cycle": previous,
+                "life": cycle_flags.map(lambda flag: flag[0]).astype(int),
+                # Nová seance díru nepřenáší (`SessionVolumes.roll` stav smaže)
+                "anchor_here": (
+                    cycle_flags.map(lambda flag: flag[1]).astype(bool)
+                    & session.eq(previous_session)
+                ),
+            }
         )
         fed = day[day["volume"].notna()].merge(frame, on="ts_min").assign(carried=False)
         if state is not None:
-            fed = pd.concat([state.assign(carried=True), fed], ignore_index=True)
+            carried = state.assign(carried=True, anchor_here=False)
+            fed = pd.concat([carried, fed], ignore_index=True)
+        if "anchor" not in fed:
+            fed = fed.assign(anchor=float("nan"))
         fed = fed.sort_values([*_CONTRACT, "session", "ts_min"], kind="stable")
-        seance = [*_CONTRACT, "session"]
+        # Stav kontraktu = seance a život procesu (restart začíná prázdný: bez
+        # maxima i kotev, jako nový `SessionVolumes`)
+        seance = [*_CONTRACT, "session", "life"]
         fed = fed.assign(maximum=fed.groupby(seance, sort=False)["volume"].cummax())
         by_seance = fed.groupby(seance, sort=False)
         reference = by_seance["maximum"].shift()
         # Kontrakt bez objemu v předchozím cyklu = mezera; první výskyt v seanci
-        # referenci nemá — oba jen založí stav (`volume_increment`)
-        measured = reference.notna() & by_seance["ts_min"].shift().eq(fed["previous_cycle"])
+        # a po restartu referenci nemá — oba jen založí stav (`volume_increment`).
+        # Cyklus po časové díře nic neměří.
+        anchor_here = fed["anchor_here"].astype(bool)
+        measured = (
+            reference.notna() & by_seance["ts_min"].shift().eq(fed["previous_cycle"]) & ~anchor_here
+        )
+        # A+ (#1774): úsek od cyklu po díře (nebo přenesené kotvy) čeká, dokud
+        # objem kotvu nepřeroste; první změna jen založí stav. Přenesený řádek
+        # nese maximum, ne surový objem — změnu nedává.
+        start = fed["volume"].where(anchor_here, fed["anchor"])
+        boundary = start.notna()
+        fed = fed.assign(segment=boundary.groupby([fed[key] for key in seance]).cumsum())
+        segment = [*seance, "segment"]
+        anchor = start.groupby([fed[key] for key in segment]).transform("first")
+        changed = fed["volume"].gt(anchor) & ~fed["carried"].astype(bool)
+        changes_before = changed.groupby([fed[key] for key in segment]).cumsum() - changed
+        waiting = anchor.notna() & changes_before.eq(0)
+        measured &= ~waiting
         increment = (fed["volume"] - reference).clip(lower=0.0).where(measured)
         fed = fed.assign(inc=increment, weighted=increment * fed["delta"].abs())
         own = fed[~fed["carried"]]
@@ -244,7 +349,10 @@ def _flows_session_max(files: list[str], minutes: pd.Series | None) -> list[pd.D
         sides = day[["ts_min", "right"]].drop_duplicates()
         parts.append(sides.assign(inc=0.0, weighted=0.0).set_index(["ts_min", "right"]))
         last = fed.groupby(_CONTRACT, sort=False).tail(1)
-        state = last[["ts_min", *_CONTRACT, "session", "delta"]].assign(volume=last["maximum"])
+        pending = anchor.where(waiting & ~changed)
+        state = last[["ts_min", *_CONTRACT, "session", "life", "delta"]].assign(
+            volume=last["maximum"], anchor=pending.loc[last.index]
+        )
     return parts
 
 

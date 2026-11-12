@@ -290,6 +290,89 @@ def test_reconnect_mezi_vzorky_je_mezera_jen_jedne_minuty() -> None:
     assert not secondary.minute_measured
 
 
+def test_zamrzly_proces_nad_prah_ticha_je_mezera_i_s_cerstvym_eventem() -> None:
+    """Spánek 6. 11. 08:55–15:11 (#1774, 3b): po probuzení stream hned hlásí eventy
+
+    a reconnect přijde až po vzorku. Interval bez vzorku nad práh ticha je mezera —
+    tisky z doby spánku chybí; další minuta už je měřená.
+    """
+    pipe = pipeline()
+    pipes = {"ES": pipe}
+    routes = {"ES": build_routes(pipe, streamer_of)}
+    branch = Branch()
+    monitor = TradeBranchMonitor()
+    asleep = dt.datetime(2026, 10, 20, 8, 55, tzinfo=dt.UTC)  # Globex, před US open
+    warm_up(monitor, asleep - MIN, pipes, routes, branch)
+    primary, secondary = tracker_of(pipe.runtime), tracker_of(pipe.next_runtime)
+    primary.close_minute(asleep)
+
+    now = asleep + dt.timedelta(hours=6, minutes=16)  # 15:11 UTC, US RTH
+    primary.add_dx_trade(spec(ACTIVE, "C"), size=4.0, aggressor="SELL", delta=0.5)
+    branch.touch(routes["ES"], now)
+    assert sample(monitor, now, pipes, routes, branch) == {"ES": BRANCH_GAP}
+    primary.begin_cycle()
+    assert not primary.minute_measured
+    assert primary.close_minute(now).cum_delta is None
+    secondary.begin_cycle()
+    assert not secondary.minute_measured
+
+    now += MIN
+    branch.touch(routes["ES"], now)
+    assert sample(monitor, now, pipes, routes, branch) == {"ES": BRANCH_RUNNING}
+    primary.begin_cycle()
+    assert primary.minute_measured
+
+
+@pytest.mark.parametrize(
+    ("start", "interval", "measured"),
+    [
+        (RTH, dt.timedelta(minutes=2, seconds=10), True),  # ztracená minuta 10. 11. 20:41
+        (RTH, dt.timedelta(seconds=180), False),
+        (NIGHT, dt.timedelta(minutes=9), True),
+        (NIGHT, dt.timedelta(seconds=600), False),
+    ],
+    ids=["rth-ztracena-minuta", "rth-180s", "globex-9min", "globex-600s"],
+)
+def test_interval_mezi_vzorky_proti_prahu_ticha(
+    start: dt.datetime, interval: dt.timedelta, measured: bool
+) -> None:
+    """Ztracená minuta živého procesu zůstává měřená: stream tisky dočte (#1774, 3b)."""
+    pipe = pipeline()
+    pipes = {"ES": pipe}
+    routes = {"ES": build_routes(pipe, streamer_of)}
+    branch = Branch()
+    monitor = TradeBranchMonitor()
+    warm_up(monitor, start, pipes, routes, branch)
+    now = start + MIN + interval
+    branch.touch(routes["ES"], now)
+    sample(monitor, now, pipes, routes, branch)
+    primary = tracker_of(pipe.runtime)
+    primary.begin_cycle()
+    assert primary.minute_measured is measured
+
+
+def test_zamrznuti_z_otevreneho_do_zavreneho_trhu_je_mezera() -> None:
+    """Proces zamrzl za otevřeného trhu a probudil se v denní pauze: tisky před zavřením
+    chybí, interval bez vzorku je mezera, i když vzorek padne do zavřeného trhu."""
+    pipe = pipeline()
+    pipes = {"ES": pipe}
+    routes = {"ES": build_routes(pipe, streamer_of)}
+    branch = Branch()
+    monitor = TradeBranchMonitor()
+    frozen = PAUSE - dt.timedelta(minutes=40)  # 15:50 CT, RTH
+    warm_up(monitor, frozen - MIN, pipes, routes, branch)
+    primary = tracker_of(pipe.runtime)
+    primary.close_minute(frozen)
+    assert sample(monitor, PAUSE, pipes, routes, branch) == {"ES": BRANCH_CLOSED}
+    primary.begin_cycle()
+    assert not primary.minute_measured
+    # Další vzorek v pauze už navazuje: zavřený trh mezeru nedává
+    primary.close_minute(PAUSE)
+    sample(monitor, PAUSE + MIN, pipes, routes, branch)
+    primary.begin_cycle()
+    assert primary.minute_measured
+
+
 def test_pad_mezi_vzorkem_a_uzaverkou_nese_dalsi_radek() -> None:
     """Uzávěrka minuty běží až po sweepu: pád streamu po vzorku M patří řádku M+1.
 
