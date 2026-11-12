@@ -61,7 +61,7 @@ from gexlens_api.news_explain import ExplainOptions
 from gexlens_api.option_plan_routes import build_option_plan_router
 from gexlens_api.paper_routes import build_paper_router
 from gexlens_api.push_telegram import PushOptions, TelegramPush
-from gexlens_api.scenario_routes import build_scenario_router
+from gexlens_api.scenario_routes import ImageDiskWatch, build_scenario_router
 from gexlens_api.security import (
     build_token_guard,
     load_allowed_origins,
@@ -374,17 +374,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ).start()
     app.include_router(build_router(meta_repository))
     app.include_router(build_briefing_router(meta_repository))
-    # Scénář dne (#1173): tabulka sdílená s enginem (vyhodnocení), snímky na disku
+
+    # Scénář dne (#1173): tabulka sdílená s enginem (vyhodnocení), snímky na disku.
+    # Snímky scénářů a PNG plánů QQQ (F4b #1744) leží v data/scenarios a mají jedno
+    # hlídání místa.
+    def scenarios_repository() -> ScenariosRepository:
+        return ScenariosRepository(meta_repository.engine())
+
+    def option_plans_repository() -> OptionPlansRepository:
+        return OptionPlansRepository(meta_repository.engine())
+
+    def publish_alert(payload: dict[str, Any]) -> None:
+        live_hub.publish("alerts", payload)
+
+    image_disk = ImageDiskWatch([scenarios_repository, option_plans_repository], publish_alert)
     app.include_router(
         build_scenario_router(
-            lambda: ScenariosRepository(meta_repository.engine()),
-            settings.data_dir,
-            lambda payload: live_hub.publish("alerts", payload),
+            scenarios_repository, settings.data_dir, publish_alert, disk_watch=image_disk
         )
     )
-    # Plán opce QQQ ke scénáři dne (ADR-0062, #1743): tabulku plní engine, API jen čte
+    # Plán opce QQQ ke scénáři dne (ADR-0062, #1743): tabulku plní engine, API ji čte
+    # a ukládá jen PNG plánu (F4b #1744)
     app.include_router(
-        build_option_plan_router(lambda: OptionPlansRepository(meta_repository.engine()))
+        build_option_plan_router(
+            option_plans_repository, settings.data_dir, settings.derived_dir, image_disk
+        )
     )
 
     # Paper účet (#1187 fáze 1): ordery + risk vrstva (blokuje), fily dělá engine
