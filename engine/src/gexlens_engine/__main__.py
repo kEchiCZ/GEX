@@ -195,6 +195,8 @@ from gexlens_engine.tasty.plan_chain import (
     next_snapshot,
     snapshot_boundary,
 )
+from gexlens_engine.tasty.plan_quotes import PURPOSE as PLAN_QUOTES_PURPOSE
+from gexlens_engine.tasty.plan_quotes import PlanQuoteRecorder
 from gexlens_engine.tasty.provider import TastyChainCache, _number
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.spot_fallback import SpotFallback
@@ -2233,6 +2235,16 @@ async def main() -> None:
             reference_spot=_plan_reference_spot,
             on_change=plan_wakeup.set,
         )
+        # Odběr kontraktů plánu opce QQQ a podkladu od vzniku plánu do close (ADR-0062 K2 A,
+        # #1747): kontrakty z platného plánu dne v PG, kotace a bary ve vlastní úloze,
+        # z rezervy ad-hoc; probuzení reconcileru jako u ad-hoc
+        plan_quote_recorder = PlanQuoteRecorder(
+            repository=option_plans_repository,
+            symbol_map=symbol_map,
+            cache=tasty_cache,
+            writer=writer,
+            on_change=plan_wakeup.set,
+        )
 
         def _tasty_event(event_type: str, values: list[object]) -> None:
             tasty_cache.on_event(event_type, values)
@@ -2873,6 +2885,10 @@ async def main() -> None:
                         plan_syms = plan_chain_snapshotter.streamers()
                         symbols |= plan_syms
                         purpose.setdefault(PLAN_CHAIN_PURPOSE, set()).update(plan_syms)
+                        # Kontrakty plánu a podklad QQQ do close (#1747): mimo okno prázdné
+                        quote_syms = plan_quote_recorder.streamers()
+                        symbols |= quote_syms
+                        purpose.setdefault(PLAN_QUOTES_PURPOSE, set()).update(quote_syms)
                         symbol_breakdown.clear()
                         symbol_breakdown.update(
                             {name: len(values) for name, values in purpose.items()}
@@ -3289,6 +3305,8 @@ async def main() -> None:
             asyncio.create_task(tasty_stream.run(shadow_stop)),
             asyncio.create_task(adhoc_loop()),
             asyncio.create_task(plan_chain_loop()),
+            # Kotace kontraktů plánu opce QQQ a bary podkladu do close (#1747)
+            asyncio.create_task(plan_quote_recorder.run(shadow_stop)),
             asyncio.create_task(monitor.run(shadow_stop)),
             asyncio.create_task(shadow_symbols_loop()),
             asyncio.create_task(orphan_spot_loop()),

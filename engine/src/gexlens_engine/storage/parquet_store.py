@@ -167,6 +167,28 @@ BARS_SCHEMA = pa.schema(
     ]
 )
 
+# Minutové kotace kontraktů plánu opce QQQ (ADR-0062 K2 A, F1b #1747): vzorek stavu kotace
+# v závěru minuty `ts_min`. `quote_age_s` = stáří kotace k závěru minuty (záporné = kotace
+# přišla až po něm, vzorek se zpozdil; NULL = kotace v tomto běhu nepřišla). Chybějící nebo
+# zastaralá kotace = řádek bez cen se stářím, ne forward-fill. IV a delta jsou jen z dxFeed
+# Greeks, dopočet z mid si udělá čtenář (měřené > odhadnuté).
+OPTION_QUOTES_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("expiry", pa.string()),
+        ("strike", pa.float64()),
+        ("right", pa.string()),
+        ("bid", pa.float64()),
+        ("ask", pa.float64()),
+        ("mid", pa.float64()),
+        ("iv", pa.float64()),
+        ("delta", pa.float64()),
+        ("quote_age_s", pa.float64()),
+    ]
+)
+#: Jeden řádek na minutu × kontrakt; opakovaný zápis minuty (restart) přepíše, neduplikuje
+OPTION_QUOTES_KEY: tuple[str, ...] = ("ts_min", "expiry", "strike", "right")
+
 #: Hodnota `source` u minut doplněných backfillem (#617) — UI je podle ní odliší
 BAR_SOURCE_RECONSTRUCTED = "tasty_candle"
 #: Živá cesta; NULL v starších particích znamená totéž
@@ -487,6 +509,27 @@ class SnapshotRow:
     vega: float | None
     oi: float | None
     stale_age: float
+
+
+@dataclass(frozen=True)
+class OptionQuoteRow:
+    """Kotace kontraktu plánu opce QQQ v závěru minuty `ts_min` (F1b #1747).
+
+    `expiry` ve tvaru YYYYMMDD jako klíč řetězu tasty. Ceny NULL = mezera (kotace chybí,
+    je starší než limit, nebo nedává smysl), `quote_age_s` řekne, jak stará byla v závěru
+    minuty (záporné = přišla až po něm).
+    """
+
+    ts_min: dt.datetime
+    expiry: str
+    strike: float
+    right: str
+    bid: float | None
+    ask: float | None
+    mid: float | None
+    iv: float | None
+    delta: float | None
+    quote_age_s: float | None
 
 
 class BarLike(Protocol):
@@ -1368,6 +1411,21 @@ class SnapshotWriter:
         for day in days:
             minutes |= self.bar_minutes(symbol, day)
         return minutes
+
+    def option_quotes_path(self, symbol: str, day: dt.date) -> Path:
+        """Partice kotací kontraktů plánu opce (F1b #1747): den = seance plánu."""
+        return self._settings.derived_dir / symbol / "option_quotes" / f"{day.isoformat()}.parquet"
+
+    def write_option_quotes(
+        self, symbol: str, day: dt.date, rows: Sequence[OptionQuoteRow]
+    ) -> Path:
+        """Kotace minuty do derived/{sym}/option_quotes/{date}.parquet (ADR-0062 K2 A, #1747).
+
+        Upsert podle `OPTION_QUOTES_KEY`: restart enginu uprostřed minuty ani opakovaný
+        zápis téže minuty řádek nezdvojí. `derived/` je věčný archiv (ADR-0029).
+        """
+        buffer = self._buffer(self.option_quotes_path(symbol, day), OPTION_QUOTES_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows], key=OPTION_QUOTES_KEY)
 
     def dx_flow_path(self, symbol: str, day: dt.date) -> Path:
         """Partice stínové řady CumΔ (#615): den = obchodní seance, ne UTC den."""
