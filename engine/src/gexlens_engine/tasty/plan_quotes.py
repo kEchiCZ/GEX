@@ -24,7 +24,8 @@ Výstup za každou dokončenou minutu (štítek minuty, vzorek v jejím závěru
   `MAX_AGE_S` = řádek bez cen se stářím, ne forward-fill. IV a delta jen z dxFeed Greeks.
 - `derived/QQQ/bars/{den}.parquet`: bar z mid kotace podkladu vzorkovaný à `TICK_S`, zápis
   shodný s ad-hoc pohledem (`AdhocViewer.write_minute`). Objem 0, jsou to kotace, ne obchody.
-  Minuta, ve které odběr začal, se nezapíše: neúplný vzorek by dal falešné high/low.
+  Bar minuty, ve které odběr začal, se nezapíše: neúplný vzorek by dal falešné high/low.
+  Kotace se zapíše i v ní (stav v závěru minuty se stářím).
 
 Minutový cyklus na nic nečeká (AGENTS.md, #1337, #1646): vlastní úloha v tasty větvi, PG
 i Parquet ve vlákně. IBKR lines 0, rozpočet DXLink: účel `plan_quotes` z rezervy ad-hoc
@@ -195,8 +196,8 @@ class PlanQuoteRecorder:
     #: Kontrakty plánu → streamer (None = kontrakt v řetězu tasty není, řádky bez cen)
     _contracts: dict[Contract, str | None] = field(default_factory=dict, init=False)
     _underlying: str | None = field(default=None, init=False)
-    #: První úplná minuta streameru (minuta po začátku jeho odběru)
-    _since: dict[str, dt.datetime] = field(default_factory=dict, init=False)
+    #: První úplná minuta baru podkladu (minuta po začátku jeho odběru)
+    _bar_since: dt.datetime | None = field(default=None, init=False)
     _last_refresh: dt.datetime | None = field(default=None, init=False)
     _last_minute: dt.datetime | None = field(default=None, init=False)
     _bar: _MinuteBar | None = field(default=None, init=False)
@@ -261,14 +262,11 @@ class PlanQuoteRecorder:
         session = self._session
         if session is None or ts_min >= settle_ts(session):
             return 0
-        # Minuta začátku odběru streameru je neúplná a nezapisuje se (`_since`)
-        contracts = [
-            (contract, streamer)
-            for contract, streamer in sorted(self._contracts.items())
-            if streamer is None or self._since.get(streamer, ts_min) <= ts_min
-        ]
-        underlying = self._underlying
-        with_bar = underlying is not None and self._since.get(underlying, ts_min) <= ts_min
+        # Kotace je stav v závěru minuty, platí i v minutě začátku odběru (u plánu z 9:31 je
+        # to minuta před prvním 5min close). Bar té minuty je neúplný a nezapisuje se.
+        contracts = sorted(self._contracts.items())
+        since = self._bar_since
+        with_bar = self._underlying is not None and since is not None and since <= ts_min
         if not contracts and not with_bar:
             return 0
         late = (now - (ts_min + MINUTE)).total_seconds()
@@ -374,18 +372,14 @@ class PlanQuoteRecorder:
     ) -> None:
         before = self.streamers()
         if session != self._session:
-            self._since.clear()
             self._bar = None
             self._gaps = frozenset()
+        if underlying != self._underlying or session != self._session:
+            self._bar_since = _floor_minute(now) + MINUTE
         self._session = session
         self._contracts = {contract: chain.by_contract.get(contract) for contract in contracts}
         self._underlying = underlying
         after = self.streamers()
-        first_full = _floor_minute(now) + dt.timedelta(minutes=1)
-        for streamer in after - before:
-            self._since[streamer] = first_full
-        for streamer in before - after:
-            self._since.pop(streamer, None)
         absent = sorted(_name(c) for c, streamer in self._contracts.items() if streamer is None)
         if absent:
             logger.log(
@@ -420,7 +414,7 @@ class PlanQuoteRecorder:
         self._session = None
         self._contracts = {}
         self._underlying = None
-        self._since.clear()
+        self._bar_since = None
         self._bar = None
         self._gaps = frozenset()
         self._last_refresh = None

@@ -841,6 +841,62 @@ a pondělí proti pátku, minutový cyklus nečeká), `test_option_plans_store.p
 `test_instruments.py` (předání úrovní minuty) a `test_scenario_auto.py` (`gather_day_levels`
 v `gather_context` beze změny chování).
 
+**Odběr kontraktů plánu a podkladu do close** (`tasty/plan_quotes.PlanQuoteRecorder`, F1b
+#1747, ADR-0062 K2 A). Vyhodnocení plánu (F3 #1748) potřebuje naměřené kotace vybraných
+kontraktů v minutě spouště, SL a TP (vstup za ask, výstup za bid, K3 bod 9) a 1m bary QQQ.
+Řetěz QQQ se jinak odebírá jen ve snímcích 9:15 a 9:31 ET, proto tuto část drží celý den
+úloha v tasty větvi vedle `plan_chain_loop`. Minutový cyklus na ni nečeká, PG i Parquet jdou
+ve vlákně.
+
+- **Okno:** od hranice ranního snímku (9:15 ET) do `settle_ts` seance (16:00 ET, ve zkrácené
+  seanci 13:00 ET), jen když seance má plán v `option_plans`. Plány seance (`plans_of_day`)
+  čte každých 30 s. Mimo okno, tedy před 9:15, po close, o víkendu a ve svátek NYSE
+  (`is_trading_session`), PG nečte a nic neodebírá.
+- **Kontrakty** jsou sjednocení variant platného plánu řádku (`effective_plan`) přes hlavní
+  plán a oba stíny. Stíny mají stejné kontrakty (K10 B, výběr varianty pravidla nečte), takže
+  jde o hlavní a záložní variantu. Plán sestavený celý v 9:31 ET přepne odběr na kontrakty
+  z `plan.repricing.plan` do 30 s po zápisu, tedy před prvním 5min close v 9:35. Plán z 9:15
+  bez opce kontrakty nemá a odebírá se jen podklad, protože plán z 9:31 potřebuje bary od openu.
+- **Restart enginu** obnoví odběr z plánu dne v PG při prvním tiku.
+- **Rozpočet:** účel `plan_quotes` (Quote + Greeks) z rezervy ad-hoc (kap. 2,
+  `tasty/budget.py`). 2 kontrakty a podklad dávají 6 položek, pokrytí extended se nemění.
+  `/status.tasty_symbol_breakdown.plan_quotes` je v okně 3, mimo něj 0. IBKR lines 0.
+- **Zápis za dokončenou minutu:** štítek je minuta, vzorek leží těsně po jejím závěru (tik
+  à 5 s a 50 ms po hranici minuty).
+  - `derived/QQQ/option_quotes/{den}.parquet` (kap. 6) má řádek na kontrakt. Ceny jsou jen
+    z kotace nejvýš 90 s staré s ask ≥ bid ≥ 0 a kladným ask, jinak NULL se stářím
+    `quote_age_s` (NULL = kotace v tomto běhu nepřišla). Forward-fill se nedělá. IV a delta
+    jsou jen z dxFeed Greeks nejvýš 90 s starých, dopočet z mid si udělá čtenář.
+  - `derived/QQQ/bars/{den}.parquet` dostane bar z mid podkladu (vzorek à 5 s z kotace nejvýš
+    90 s staré), objem 0, stejným zápisem jako ad-hoc pohled. Otevřený ad-hoc pohled QQQ píše
+    tutéž partici. Minutu pak nese pozdější zápis, oba měří mid téže kotace.
+  - Kotace se zapíše i v minutě, ve které odběr kontraktu začal, protože je to stav v závěru
+    minuty se stářím. U plánu z 9:31 je to často minuta 9:34, tedy stav v prvním 5min close.
+    Bar minuty, ve které začal odběr podkladu, se nezapíše: neúplný vzorek by dal falešné
+    high a low. Upsert podle klíče zajistí, že opakovaný zápis ani restart řádek nezdvojí.
+  - Vzorek víc než 10 s po závěru minuty by nesl stav z doby po ní (uspaný hostitel, smyčka
+    stála). Minuta se pak nezapíše a mezeru ohlásí hlídač.
+- **Po close** se zapíše poslední minuta (15:59 ET) a odběr se uvolní.
+
+Log enginu:
+
+- INFO „Odběr plánu QQQ (#1747) seance 2026-11-03: kontrakty 686P, 687P, podklad QQQ, do 21:00
+  UTC“ a „Odběr plánu QQQ (#1747) seance … uvolněn“;
+- „Odběr plánu QQQ (#1747): minuta 15:02 UTC bez kotace — 686P (bez kotace), 687P (stáří
+  100 s)“, případně „podklad QQQ (bez kotace)“ nebo „minuta (vzorek 181 s po jejím závěru)“.
+  Hlásí jen změnu množiny mezer, jako WARNING při otevřeném trhu, při zavřeném INFO
+  (`plan_chain.missing_data_level`, brána `is_market_closed`). Návrat hlásí INFO „… od minuty
+  15:04 UTC kotace zase tečou“;
+- se stejnou úrovní „řetěz z tasty selhal (…) — zkusí se za 30 s“ a „kontrakty … v řetězu tasty
+  nejsou — minuty bez cen“ (zapíšou se řádky bez cen);
+- „Odběr plánu QQQ (#1747) selhal — další tik jede dál“ (s tracebackem).
+
+Ověření: v RTH roste `derived/QQQ/option_quotes/{den}.parquet` o 2 řádky za minutu (hlavní
+a záložní varianta) a `derived/QQQ/bars/{den}.parquet` o bar za minutu. Testy:
+`test_tasty_plan_quotes.py` (minuta, idempotence a restart, obnova z PG, close, přepnutí
+na plán z 9:31, mezera se stářím, pozdní vzorek, hlídač o víkendu, v denní pauze a při
+nedělním otevření, sobota, neděle a pondělí proti pátku, rozpočet).
+
 ## 6. Datové formáty a persistence
 
 ### Parquet (`GEXLENS_DATA_DIR`; retence — ADR-0029)
@@ -855,6 +911,7 @@ Od ADR-0029 (v1.2) se **`snapshots/` a `derived/` nemažou nikdy** (`GEXLENS_KEE
 | `derived/{sym}/flow/{date}.parquet` | ts_min, flow_delta, cum_delta, futures_cvd* (CVD podkladu #829: kumulativ od open seance, NULL = instrument bez registrovaného front future; po restartu uprostřed seance, i v pauze Globexu, navazuje z posledního ne-null řádku seance a tisk po openu přijatý před prvním cyklem nové seance patří do její první minuty, #1603), **source** (v1.4, ADR-0032/ADR-0057: `midpoint` do mechaniky v5, `aggressor` od v6 (#1403); NULL = partice před #615 fází 3 = midpoint), od #1071 (v1.6) **pokrytí trade větví za minutu**: `printed_volume`, `unknown_volume`, `structured_volume`, `fallback_volume`, `dropped_no_delta` (NULL = trade větev neběžela nebo partice před #1071; měří se i v režimu midpoint — říká, co by dxFeed pokryl; `/status.cumdelta_coverage` je totéž od startu enginu). Čte `scripts/compare_cumdelta_sources.py` (sloupce „pokrytí tisky“ a „fallback RTH“; jen řádky midpoint, i net hybridu z `netflow`, #1590) a replay backtestu a walk-forwardu (zdroj podle mechaniky, kap. 12) |
 | `derived/{sym}/{expiry}/printvol/{date}.parquet` | **Podíl objemu mimo tisk** (#1007, v1.4): per kontrakt a bar `volume_delta`, `printed` (Σ tisků TimeAndSale od minulého baru), `structured` (zbytek bez tisku — nohy spreadů, bloky). **NULL** = trade větev pro instrument neběžela (tasty odpojené, symbol bez univerza); nula by lhala „100 % struktura“. Jen řádky s přírůstkem. Od v6 je přírůstek objem nad maximem seance (#1602). Bar bez přírůstku tisky nespotřebuje; jde o kotaci z cache mezi sweepy křídel, zamrzlou kotaci, pokles kumulativu nebo návrat k maximu. `printed` je Σ tisků od posledního baru, který počítadla vyprázdnil. To je bar s přírůstkem, nebo bar, který stav objemu zakládá (první bar seance, po restartu, po nekrmeném cyklu, po předání v rollu). Tisky se počítají až do okamžiku baru po sweepu, tedy i tisky po řezu vzorku. Je-li mezerou trade větve minuta baru nebo minuta baru bez přírůstku mezi tím, je řádek NULL; výpadek mezi vzorkem a barem téže minuty ale řádek nezneplatní (`printed` nižší, `structured` vyšší) — metrika kvality dat, ne vstup obchodního rozhodnutí (ADR-0057 doplněk 18. 10.); push `printvol.{sym}.{exp}`, sekce `printvol` v `/replay` |
 | `derived/{sym}/bars/{date}.parquet` | ts_min, open, high, low, close, volume, **source** — **z purge vyňaté, drží se navždy** (`GEXLENS_KEEP_BARS_FOREVER=true`); ES i NQ mají ~2 roky historie od 2024-07-28 (backfill `scripts/backfill_bars.py`). `source` (#617): `NULL` = partice před #617, `ibkr` = živá cesta, `ibkr_hist` = **doplněno z IBKR historical** (#1055, v1.6 — platná cena, ale engine v tu minutu neměřil; do 8. 9. 2026 se zapisovalo jako `ibkr`), `tasty_candle` = **rekonstruováno** z dxFeed; pyarrow čte starší šestisloupcové soubory novým schématem s `NULL` (ověřeno). Frontend z něj staví historii přes hranici dne (#788, `GET /bars?date=` den po dni, 404 = víkend, 5 děr v řadě = konec archivu). **Partice = UTC den baru** (#1002, v1.3): do 3. 9. 2026 engine zapisoval půlnoční bar 23:59 i rekonstruovaný blok 22:00–23:59 dne D−1 do partice sousedního dne → minuta dvakrát, objem dvojnásobný v oknech přes půlnoc; staré partice opraví `scripts/fix_bar_partitions.py --apply` (spouštět při zastaveném enginu; bez `--apply` jen vypíše plán), API a news-engine navíc deduplikují obranně |
+| `derived/QQQ/option_quotes/{date}.parquet` | **Kotace kontraktů plánu opce QQQ** (ADR-0062 K2 A, F1b #1747, kap. 5 „Plán opce QQQ ze scénáře dne“): `ts_min` (štítek minuty, vzorek v jejím závěru), `expiry` (YYYYMMDD), `strike`, `right`, `bid`, `ask`, `mid`, `iv`, `delta` (dxFeed Greeks), `quote_age_s` (stáří kotace ve vzorku). Řádek na minutu × kontrakt (hlavní a záložní varianta platného plánu) od vzniku plánu do close, upsert podle `ts_min`, `expiry`, `strike`, `right`. Ceny NULL = mezera (kotace chybí nebo je starší 90 s), NULL `quote_age_s` = kotace v běhu enginu nepřišla. Den = seance plánu. Bary QQQ k plánu jdou do `derived/QQQ/bars/` (z mid kotace tasty, objem 0, `source` = `ibkr` jako u ad-hoc pohledu, tedy živá cesta) |
 | `derived/{sym}/{expiry}/oiwalls/{date}.parquet` | **OI zdi** (#851): oi_call_wall / oi_put_wall + `share` (podíl na OI strany; frontend pod 0,2 nekreslí) |
 | `derived/{sym}/features/{date}.parquet` | **Minutový feature log** (#796): vstupní vektor setup detektoru + ATR + band metriky — trénovací matice smyčky #794; minuta, jejíž dávka cyklu nemá bar, řádek nemá (#1346; dřív O = H = L = C ze spotu) |
 | `trades/{sym}/{YYYY-MM-DD}.parquet` | **Surové opční TimeAndSale printy z dxFeed** (#795): ts, streamer_symbol, price, size, aggressorSide, spread_leg, eth. Mimo retenci; podklad budoucí klasifikace agresora (#615). Flag `GEXLENS_TASTY_TRADES_RECORD` (default true) |

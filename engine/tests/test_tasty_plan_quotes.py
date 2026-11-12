@@ -184,19 +184,23 @@ def test_minuta_zapise_kotace_obou_kontraktu_a_bar_podkladu(tmp_path: Path) -> N
     assert h.wakes == 1
     h.feed(_ts(14, 16, 30))
     h.tick(_ts(14, 16, 30))
+    # Minuta začátku odběru: kotace (stav v závěru minuty) ano, neúplný bar ne
+    h.tick(_ts(14, 17, 0.05))
+    assert {row["ts_min"] for row in h.quotes()} == {_ts(14, 16)}
+    assert h.bars() == []
     h.feed(_ts(14, 17, 1), spot=700.0)
-    h.tick(_ts(14, 17, 1))  # zapíše minutu 14:16 = minuta začátku odběru → nic
-    assert h.quotes() == [] and h.bars() == []
+    h.tick(_ts(14, 17, 1))
     h.feed(_ts(14, 17, 30), spot=700.5)
     h.tick(_ts(14, 17, 30))
     h.feed(_ts(14, 17, 55), spot=699.5)
     h.tick(_ts(14, 17, 55))
     h.tick(_ts(14, 18, 0.05))
 
-    rows = {(row["strike"], row["right"]): row for row in h.quotes()}
+    rows = {
+        (row["strike"], row["right"]): row for row in h.quotes() if row["ts_min"] == _ts(14, 17)
+    }
     assert set(rows) == {(686.0, "P"), (687.0, "P")}
     main = rows[(687.0, "P")]
-    assert main["ts_min"] == _ts(14, 17)
     assert main["expiry"] == EXPIRY
     assert (main["bid"], main["ask"], main["mid"]) == (1.38, 1.42, pytest.approx(1.40))
     assert (main["iv"], main["delta"]) == (0.30, -0.25)
@@ -211,18 +215,20 @@ def test_opakovany_zapis_minuty_neduplikuje_ani_po_restartu(tmp_path: Path) -> N
     h = _Harness(tmp_path, _ts(15, 0, 10))
     h.add_plan(_plan())
     h.tick(_ts(15, 0, 10))
+    h.feed(_ts(15, 0, 20))
+    h.tick(_ts(15, 1, 0.05))
     h.feed(_ts(15, 1, 30))
     h.tick(_ts(15, 1, 30))
     h.tick(_ts(15, 2, 0.05))
-    assert len(h.quotes()) == 2 and len(h.bars()) == 1
+    assert len(h.quotes()) == 4 and len(h.bars()) == 1
     _run(h.recorder.write_minute(_ts(15, 1), _ts(15, 2, 1)))
-    assert len(h.quotes()) == 2
+    assert len(h.quotes()) == 4 and len(h.bars()) == 1
     # Restart: nová instance i writer, partice se načte a minuta se přepíše, ne zdvojí
     h.recorder = h.new_recorder()
     h.tick(_ts(15, 2, 5))
     _run(h.recorder.write_minute(_ts(15, 1), _ts(15, 2, 6)))
-    assert len(h.quotes()) == 2
-    assert [row["ts_min"] for row in h.quotes()] == [_ts(15, 1)] * 2
+    minutes = sorted(row["ts_min"] for row in h.quotes())
+    assert minutes == [_ts(15, 0), _ts(15, 0), _ts(15, 1), _ts(15, 1)]
 
 
 def test_restart_obnovi_odber_z_planu_dne_v_pg(tmp_path: Path) -> None:
@@ -232,28 +238,35 @@ def test_restart_obnovi_odber_z_planu_dne_v_pg(tmp_path: Path) -> None:
     h.tick(_ts(16, 40, 20))
     assert h.recorder.session == SESSION
     assert h.recorder.streamers() == {P687, P686, "QQQ"}
+    h.feed(_ts(16, 40, 30))
+    h.tick(_ts(16, 41, 0.05))
     h.feed(_ts(16, 41, 10))
     h.tick(_ts(16, 41, 10))
     h.tick(_ts(16, 42, 0.05))
-    assert {row["ts_min"] for row in h.quotes()} == {_ts(16, 41)}
+    assert {row["ts_min"] for row in h.quotes()} == {_ts(16, 40), _ts(16, 41)}
+    assert all(row["bid"] is not None for row in h.quotes())
+    assert [bar["ts_min"] for bar in h.bars()] == [_ts(16, 41)]
 
 
 def test_po_close_se_odber_uvolni_a_minuta_po_settle_se_nezapise(tmp_path: Path) -> None:
     h = _Harness(tmp_path, _ts(20, 58, 10))
     h.add_plan(_plan())
     h.tick(_ts(20, 58, 10))
+    h.feed(_ts(20, 58, 20))
+    h.tick(_ts(20, 59, 0.05))
     h.feed(_ts(20, 59, 20))
     h.tick(_ts(20, 59, 20))
     wakes = h.wakes
     # 21:00 UTC = settle 16:00 ET: poslední minuta 20:59 se zapíše, pak odběr pryč
     h.tick(_ts(21, 0, 0.05))
-    assert {row["ts_min"] for row in h.quotes()} == {_ts(20, 59)}
+    assert {row["ts_min"] for row in h.quotes()} == {_ts(20, 58), _ts(20, 59)}
+    assert [bar["ts_min"] for bar in h.bars()] == [_ts(20, 59)]
     assert h.recorder.streamers() == set() and h.recorder.session is None
     assert h.wakes == wakes + 1
     h.feed(_ts(21, 0, 30))
     h.tick(_ts(21, 0, 30))
     h.tick(_ts(21, 1, 0.05))
-    assert {row["ts_min"] for row in h.quotes()} == {_ts(20, 59)}
+    assert {row["ts_min"] for row in h.quotes()} == {_ts(20, 58), _ts(20, 59)}
     assert h.recorder.streamers() == set()
 
 
@@ -281,19 +294,21 @@ def test_plan_sestaveny_v_9_31_prepne_kontrakty(tmp_path: Path) -> None:
         "plan": rebuilt,
     }
     assert h.plans.record_repricing(plan_id, repricing, status="sestaven", verdict="čeká")
-    h.tick(_ts(14, 32, 0.05))
+    h.tick(_ts(14, 34, 0.05))
     assert h.recorder.streamers() == {C705, C706, "QQQ"}
+    h.at(_ts(14, 34, 10))
     feed_quote(h.cache, C705, 1.5, 1.6)
     feed_quote(h.cache, C706, 1.2, 1.3)
     feed_quote(h.cache, "QQQ", 700.0, 700.02)
-    # Minuta 14:32 je minuta začátku odběru callů → první řádky callů až za 14:33
-    h.tick(_ts(14, 33, 0.05))
-    assert h.quotes() == []
-    h.at(_ts(14, 33, 30))
-    feed_quote(h.cache, C705, 1.5, 1.6)
-    feed_quote(h.cache, C706, 1.2, 1.3)
-    h.tick(_ts(14, 34, 0.05))
-    assert {(row["strike"], row["right"]) for row in h.quotes()} == {(705.0, "C"), (706.0, "C")}
+    h.tick(_ts(14, 34, 10))
+    # Kotace callů už v minutě začátku jejich odběru: stav v 9:35:00 ET = první 5min close
+    h.tick(_ts(14, 35, 0.05))
+    rows = {(row["strike"], row["right"]): row for row in h.quotes()}
+    assert set(rows) == {(705.0, "C"), (706.0, "C")}
+    assert rows[(705.0, "C")]["ts_min"] == _ts(14, 34)
+    assert rows[(705.0, "C")]["ask"] == 1.6
+    # Podklad se odebírá od 9:16 ET, bar minuty 9:34 je úplný
+    assert [bar["ts_min"] for bar in h.bars()] == [_ts(14, 34)]
 
 
 def test_plan_se_cte_jen_po_periode(tmp_path: Path) -> None:
@@ -315,22 +330,23 @@ def test_chybejici_kotace_je_mezera_se_starim_a_hlidac_hlasi_jen_zmenu(
     h.tick(_ts(15, 0, 10))
     h.at(_ts(15, 0, 20))
     feed_quote(h.cache, P687, 1.38, 1.42)  # pak už nic: v 15:02 je kotace 100 s stará
+    h.tick(_ts(15, 1, 0.05))
     h.feed(_ts(15, 1, 40), quotes=False)
     h.tick(_ts(15, 1, 40))
     h.tick(_ts(15, 2, 0.05))
-    rows = {row["strike"]: row for row in h.quotes()}
+    rows = {row["strike"]: row for row in h.quotes() if row["ts_min"] == _ts(15, 1)}
     assert rows[687.0]["bid"] is None and rows[687.0]["mid"] is None
     assert rows[687.0]["quote_age_s"] == pytest.approx(100.05)
     assert rows[686.0]["bid"] is None and rows[686.0]["quote_age_s"] is None
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "686P (bez kotace)" in warnings[0].getMessage()
-    assert "687P (stáří 100 s)" in warnings[0].getMessage()
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
+    assert "686P (bez kotace)" in warnings[0] and "687P" not in warnings[0]
+    assert "686P (bez kotace)" in warnings[1] and "687P (stáří 100 s)" in warnings[1]
     # Táž mezera další minutu: hlídač nic nového nehlásí (stáří se mění, množina ne)
     h.feed(_ts(15, 2, 30), quotes=False)
     h.tick(_ts(15, 2, 30))
     h.tick(_ts(15, 3, 0.05))
-    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 2
     # Kotace zase tečou → INFO
     h.feed(_ts(15, 3, 30))
     h.tick(_ts(15, 3, 30))
@@ -385,12 +401,15 @@ def test_pozdni_vzorek_minuty_se_nezapise(tmp_path: Path, caplog: pytest.LogCapt
     h = _Harness(tmp_path, _ts(15, 0, 10))
     h.add_plan(_plan())
     h.tick(_ts(15, 0, 10))
+    h.feed(_ts(15, 0, 20))
+    h.tick(_ts(15, 1, 0.05))
     h.feed(_ts(15, 1, 20))
     h.tick(_ts(15, 1, 20))
     # Smyčka stála (uspaný hostitel): vzorek 3 min po závěru minuty 15:01 by byl pohled dopředu
     h.feed(_ts(15, 5, 1))
     h.tick(_ts(15, 5, 1))
-    assert h.quotes() == [] and h.bars() == []
+    assert {row["ts_min"] for row in h.quotes()} == {_ts(15, 0)}
+    assert h.bars() == []
     assert any("vzorek 181 s po jejím závěru" in r.getMessage() for r in caplog.records)
 
 
