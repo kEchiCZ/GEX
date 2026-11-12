@@ -760,7 +760,8 @@ Log enginu:
   trhu, při zavřeném INFO;
 - „Plán opce QQQ ke scénáři #M už existuje — nic se nemění“, „… selhal — ukládám plán bez
   opce“ (s tracebackem; „… ani plán bez opce se neuložil — dnes chybí“, když selže i zápis),
-  „Plán opce QQQ: Settings option_plan_max_loss_usd není číslo …“ a „Plán opce QQQ: kontrola
+  „Plán opce QQQ: Settings option_plan_max_loss_usd je neplatné (důvod) — bere se jako
+  nenastavené“ (bez hodnoty, #1743) a „Plán opce QQQ: kontrola
   scénáře dne bez plánu po startu selhala“.
 
 Ověření v PG (jen čtení):

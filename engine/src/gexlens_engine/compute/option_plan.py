@@ -148,6 +148,8 @@ def account_value(raw: object) -> float | None:
         number = float(raw)
     except ValueError:
         raise ValueError("text není číslo") from None
+    except OverflowError:  # celé číslo mimo rozsah float (JSON nemá strop počtu číslic)
+        raise ValueError("číslo musí být kladné a konečné") from None
     if not _positive(number):
         raise ValueError("číslo musí být kladné a konečné")
     return number

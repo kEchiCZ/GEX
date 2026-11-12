@@ -115,7 +115,7 @@ def test_prazdna_hodnota_je_nenastaveno(client: TestClient, empty: object) -> No
 
 
 @pytest.mark.parametrize(
-    "bad", [0, -97.5, "abc", True, [97.5], {"usd": 97.5}, "nan", "inf", "-inf", "1e999"]
+    "bad", [0, -97.5, "abc", True, [97.5], {"usd": 97.5}, "nan", "inf", "-inf", "1e999", 10**400]
 )
 def test_neplatna_hodnota_422_a_nic_se_neulozi(client: TestClient, bad: object) -> None:
     client.put(f"/settings/{MAX_LOSS_KEY}", json={"value": MAX_LOSS_USD})
