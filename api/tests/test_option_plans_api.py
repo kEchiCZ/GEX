@@ -195,7 +195,7 @@ def test_plan_sestaveny_v_9_31_plati_z_9_31(
         "main": _main("short", 686.0, 1.10, "2026-11-02T14:31:00+00:00"),
         "shadows": SHADOWS,
     }
-    stored = {
+    stored: dict[str, Any] = {
         "slot": "9:15",
         "reasons": ["ranní snímek 9:15 ET nedorazil do 14:16:40 UTC"],
         "levels_nq": {"flip": 28_820.0},
@@ -221,7 +221,7 @@ def test_plan_bez_opce_po_obou_snimcich(client: TestClient, plans: OptionPlansRe
     """Bez opce v 9:15 i v 9:31: `main` null, důvody obou okamžiků zvlášť."""
     gap_915 = ["snímek 9:15 ET neúplný: 1DTE bez kotace"]
     gap_931 = ["úrovně NQ minuty 9:31 ET nedorazily do 14:34:00 UTC"]
-    stored = {
+    stored: dict[str, Any] = {
         "slot": "9:15",
         "reasons": gap_915,
         "levels_nq": {"flip": 28_820.0},
