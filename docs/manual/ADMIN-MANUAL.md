@@ -248,7 +248,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_PUSH_QUIET_HOURS` | 23:00-06:00 | Tiché hodiny v Europe/Prague (`HH:MM-HH:MM`, prázdné = žádné); provozní přepínače (kategorie `ops` v `PUSH_TOPICS`) jdou i v nich |
 | `GEXLENS_PUSH_DAILY_CAP` | 200 | Denní strop odeslaných zpráv (0 = bez stropu); dedup per (kind, symbol, začátek textu) 10 min |
 | `GEXLENS_PUSH_SETUP_MIN_CONFIDENCE` | 0 | Minimální confidence vzniklého setupu pro push, **v procentech 0–100** (stejná škála, jakou setup posílá v alertu; do #1285 byl rozsah 0–1 a práh nic nefiltroval) |
-| *(serverová nastavení)* `option_plan_account_usd`, `option_plan_max_loss_usd` | — (bez výchozí hodnoty) | **Parametry účtu plánu opce QQQ** (ADR-0062 K2 A, #1742): velikost účtu v $ (jen pro „% účtu“) a rozpočet P4 v $ na obchod. Engine je čte v okamžiku plánu (9:15 ET), nečíselná hodnota = nenastaveno s WARNING bez hodnoty v logu. Nenastavené = varianty `neobchodovat — rozpočet nenastaven`, tichý default není (Q3 B). `PUT /settings` je zatím nepřijme (`WRITABLE_SETTINGS`), zápis přinese F4a #1743 a karta v Settings F5a #1746. Hodnoty nepatří do repa ani do issues (repo je veřejné) |
+| *(serverová nastavení)* `option_plan_account_usd`, `option_plan_max_loss_usd` | — (bez výchozí hodnoty) | **Parametry účtu plánu opce QQQ** (ADR-0062 K2 A, #1742): velikost účtu v $ (jen pro „% účtu“) a rozpočet P4 v $ na obchod. Zápis `PUT /settings/{key}` (#1743): kladné konečné číslo v $ (smí přijít i jako text), uloží se jako číslo; `null` nebo prázdný řetězec = nenastaveno, uloží se `null` (klíč smazat nejde, jako u ostatních nastavení). Nula, záporné číslo, jiný text, bool a NaN/∞ = 422 a nic se neuloží. Platnost posuzuje jediná funkce `compute/option_plan.account_value` pro API i engine. Engine hodnoty čte v okamžiku plánu (9:15 ET, plán z 9:31 v 9:31), neplatná hodnota = nenastaveno s WARNING bez hodnoty v logu. Nenastavené = varianty `neobchodovat — rozpočet nenastaven`, tichý default není (Q3 B). Hodnota nejde do logu API ani do hlášky chyby; karta v Settings přijde s F5a #1746. Hodnoty nepatří do repa ani do issues (repo je veřejné) |
 | *(serverová nastavení)* `push_telegram_enabled`, `push_telegram_topic_<key>` | true / podle kategorie | **Hlavní vypínač a přepínače per druh upozornění** (#1284, Settings → Notifikace), jen bool — jiná hodnota nebo neznámý klíč v `PUT /settings` = 422. Jediný zdroj pravdy je tabulka `PUSH_TOPICS` v `api/src/gexlens_api/push_telegram.py`: 31 přepínačů ve dvou skupinách (`market` = Setupy a burza, `app` = Chování aplikace), každý slučuje druhy (`kind`) se stejnou dřívější kategorií `setup`/`ops`/`news`/`info`; z ní plyne výchozí hodnota (`info` vypnuto, ostatní zapnuto), výjimka z tichých hodin (`ops`) a emoji zprávy. Z tichých hodin je navíc vyjmutý přepínač s `quiet_exempt` — jen „Zprávy před otevřením po víkendu“ (`news_preopen`, #1291): aktualizace 15 min před nedělním otevřením padá na 23:45. Efektivní hodnota se počítá při čtení (`effective()`): vlastní klíč → dřívější `push_telegram_setup/ops/news/info` (#1175, už jen čtení, zápis 422) → výchozí; nic se nemigruje ani nepřepisuje. Hlavní vypínač vypnutý = na Telegram neodejde nic, hodnoty přepínačů zůstanou. Druh bez záznamu v `PUSH_TOPICS` na Telegram neodejde (WARNING v logu api jednou za druh) — nový alert = doplnit tabulku i `PUBLISHED_KINDS` v `api/tests/test_push_telegram.py`. Zdroj alertů = kanál `alerts` `LiveHub` (posluchač `TelegramPush`), takže engine, news-engine i provozní alerty api jdou jednou cestou; zvonek na přepínačích nezávisí. Odeslání běží v daemon vlákně, 3 pokusy, 4xx = chyba konfigurace bez opakování; stav a přepínače v `GET /push/status` |
 | `GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN` | 15 | **Automatický scénář dne** (#1173 A): kolik minut před US openem (9:30 ET) engine per symbol sestaví scénář z verdiktu dne (`compute/dayverdict`). Verdikt převezme od zapisovače `DayVerdictWriter` z téže minuty (kap. 5 „Verdikty dne", #1595 d1) — API se za minutu čte jednou (`scenario_auto.gather_context`: `/candles`, `/bars`, `/instruments/{sym}/days`, `/gammacliff`, `/oidelta`, `/sentiment/state`, `/news/upcoming`; levels, tendence a tenká mapa z runtime). Jeden scénář per seance v okně [open − N, open), vznikne v **první minutě okna s úplným verdiktem** (neúplný — výpadek čtení API, chybí levels nebo tendence — ho odloží na další minutu; do #1595 jeden pokus v první minutě okna i při výpadku; při N > 15 před open − 15 min jen na pětiminutových značkách, kdy zapisovač počítá), **jen v obchodní den** (`settle.is_trading_session`: po–pá mimo svátky NYSE, ADR-0046, #1309); `source='auto'`, `rationale` = hlasy + chybějící vstupy; verdikt none/wait_news = bez scénáře (log), verdikt se uloží i tak. Snímek doplní frontend přes `PUT /scenarios/{id}/image` (jednou, jinak 409). 0 = vypnutý scénář, **ne** zápis verdiktu dne (zapisovač má vlastní kadenci). Plán opce QQQ (#1742) bere jen scénář NQ se štítkem 9:15 ET: hodnota jiná než 15 dá scénář jiné minuty a plán pak každý den vznikne bez opce („pozdní scénář“, kap. 5 „Plán opce QQQ ze scénáře dne“) |
 | *(scénáře dne, #1173)* | — | PG tabulka `scenarios` (řádek per scénář: symbol, den a čas vzniku, termín + `deadline_ts` = settle termínu, vstup, cíle, cesta, `annotation_id`, `image_path`, `image_bytes`, `evaluated_at`, `result`), snímky `data/scenarios/{sym}/{den}/{id}.png` (max 4 MB, jen PNG). API: `POST /scenarios` (jen dopředu — termín ≥ aktuální seance, do 60 dní a v obchodní den po–pá, jinak 422; `created_at` razítkuje server), `GET /scenarios?symbol=`, `GET /scenarios/{id}/image`, `GET /scenarios/stats` (`preliminary` do n < 30; automatické scénáře jen z aktuální verze pravidel verdiktu `rationale.rules_version`, v odpovědi `rules_version`, ruční vždy — #1588), `GET /scenarios/disk` (součet z DB, ne rglob), `DELETE /scenarios/images?older_than_days=N` (jen PNG, řádky zůstávají), `DELETE /scenarios/{id}`. Engine `ScenarioCollector` per symbol jednou po settle (+15 min) **obchodní seance** (o víkendu neběží, #1309): scénáře po termínu bez výsledku → bary `derived/{sym}/bars/` od `created_at` do `deadline_ts`, EM z `em_respect` seance vzniku → `result` + alert `scenario_result` (přepínač Telegramu „Scénář dne"); scénář s termínem mimo obchodní seanci (víkendové řádky z doby před #1309) se uzavře bez výsledku a bez alertu a `GET /scenarios/stats` ho nezapočítá — bez ručního zásahu do dat. Nad 1 GB snímků alert `scenario_disk` (hranově, přepínač Telegramu „Dochází místo na disku"); žádné automatické mazání |
@@ -665,12 +665,12 @@ Hned při startu zaloguje „seance … v tomto běhu bez snímku 9:15 ET (a 9:3
 otevřeném trhu. Nasazení v pauze Globexu tak dá INFO. Naměřené řádky se zapíšou i z neúplného
 snímku. Výsledek `PlanChainSnapshot` nese snímek (`slot`), řádky, ceny, poměr, čas, podíl kotací
 a OI a chybějící kontrakty podle důvodu. Snímek 9:15 jde do vzniku plánu (níže, F2b #1742),
-snímek 9:31 napojí přecenění F2c #1769, zatím se jen loguje. Ověření: partice
+snímek 9:31 do přecenění (níže, F2c #1769). Ověření: partice
 1DTE dne nese minuty 9:15 a 9:31 a `/status.tasty_symbol_breakdown.plan_chain` je po snímku 0.
 
 Čistá funkce `compute/option_plan.build_option_plan` (#1741) převede auto-scénář NQ na plán
-opce QQQ 1DTE. Volá ji vznik plánu v 9:15 ET (níže, F2b #1742). Přecenění v 9:31 ET napojí
-F2c #1769, vyhodnocení F3 #1748. Pravidla verze 1 (`RULES_VERSION`, ADR-0062 K3 A, K6 B, K11 A):
+opce QQQ 1DTE. Volá ji vznik plánu v 9:15 ET (níže, F2b #1742) a sestavení plánu bez opce
+v 9:31 ET (F2c #1769). Vyhodnocení přinese F3 #1748. Pravidla verze 1 (`RULES_VERSION`, ADR-0062 K3 A, K6 B, K11 A):
 
 - **Vstupy:** scénář (`dayverdict.AutoScenario`) a úrovně NQ v minutě vzniku
   (`dayverdict.LevelInputs`: flip, call/put wall, těžiště, ONH/ONL, PDH/PDL, PDC). Dál poměr
@@ -718,7 +718,7 @@ body 5 a 8) spojí dva vstupy, které přicházejí nezávisle:
 - auto-scénář NQ po zápisu. Generátor NQ (`ScenarioGenerator.on_created`) předá id, scénář,
   úrovně NQ téže minuty a štítek minuty. 10. 11. měl scénář štítek 9:15 ET a zapsal se v 9:16:08 ET;
 - ranní snímek 9:15 ET z `plan_chain_loop`, hotový nejpozději v 9:15:40 ET (10. 11. v 9:15:01 ET).
-  Snímek 9:31 plán nečte.
+  Snímek 9:31 slouží přecenění (níže).
 
 Spojení běží v samostatné úloze, minutový cyklus NQ na něj nečeká (#1337). Úloha čeká na snímek
 nejdéle do **9:16:40 ET** (hranice + 40 s + 60 s rezervy, `snapshot_deadline`).
@@ -740,9 +740,11 @@ nejdéle do **9:16:40 ET** (hranice + 40 s + 60 s rezervy, `snapshot_deadline`).
     `settings` z PG. Mezera je tak v tabulce, ne jen v logu.
 - **Parametry účtu** jsou klíče `option_plan_account_usd` (jen pro „% účtu“)
   a `option_plan_max_loss_usd` (rozpočet P4 v $ na obchod) v tabulce `settings`. Čtou se
-  v okamžiku plánu. Chybějící nebo nečíselná hodnota = nenastaveno, varianty pak mají
-  `neobchodovat — rozpočet nenastaven` a výchozí hodnota v kódu není (Q3 B). Zápis přes API
-  přinese F4a #1743, kartu v Settings F5a #1746. Hodnoty se nelogují.
+  v okamžiku plánu. Chybějící, prázdná nebo neplatná hodnota (ne kladné konečné číslo,
+  `compute/option_plan.account_value`) = nenastaveno, varianty pak mají
+  `neobchodovat — rozpočet nenastaven` a výchozí hodnota v kódu není (Q3 B). Zapisuje je
+  `PUT /settings/{key}` se stejnou validací (#1743, kap. 4), kartu v Settings přinese F5a #1746.
+  Hodnoty se nelogují.
 - **Uložení** jde do tabulky `option_plans` (kap. 6). Jeden plán na scénář, `create` při
   existujícím plánu nic nepřepíše. Pak přijde alert `option_plan_created` (symbol QQQ,
   `plan_id`, `scenario_id`) do zvonku. Telegram plán zatím neposílá (F4c #1745), API proto
@@ -758,7 +760,8 @@ Log enginu:
   trhu, při zavřeném INFO;
 - „Plán opce QQQ ke scénáři #M už existuje — nic se nemění“, „… selhal — ukládám plán bez
   opce“ (s tracebackem; „… ani plán bez opce se neuložil — dnes chybí“, když selže i zápis),
-  „Plán opce QQQ: Settings option_plan_max_loss_usd není číslo …“ a „Plán opce QQQ: kontrola
+  „Plán opce QQQ: Settings option_plan_max_loss_usd je neplatné (důvod) — bere se jako
+  nenastavené“ (bez hodnoty, #1743) a „Plán opce QQQ: kontrola
   scénáře dne bez plánu po startu selhala“.
 
 Ověření v PG (jen čtení):
@@ -767,6 +770,76 @@ a `plan->'chain'->'zero_dte'` (podíl kotací u P1). Testy: `test_option_plans_s
 `test_option_plan_job.py` (obě pořadí vstupů, neúplný a chybějící snímek, pozdní scénář, restart,
 parametry účtu, sobota a pátek s 1DTE v pondělí), `test_scenario_auto.py` (předání scénáře),
 `test_option_plan_golden_1741.py` (`plan_to_json`).
+
+**Přecenění v 9:31 ET** (`OptionPlanMaker.reprice`, F2c #1769, ADR-0062 K4 C body 2, 4–6
+a bod 10). Snímek 9:31 ET z `plan_chain_loop` spustí úlohu přecenění plánů seance
+(`plans_of_day`) a minutový cyklus na ni nečeká. Každý plán dostane klíč `plan.repricing`
+jednou. Zápis `record_repricing` běží v transakci se zámkem řádku, takže restart enginu druhé
+přecenění nevytvoří. Část JSON z 9:15 ET se nemění. Sloupce `status` a `verdict` popisují
+aktuální stav plánu (vlastník 11. 11., #1738), mění se proto jen u plánu bez opce, který
+se v 9:31 sestaví celý.
+
+- **Úplný plán (`sestaven`):** čistá funkce `compute/option_plan.reprice_variants` přecení
+  kontrakty variant z 9:15, hlavní plán i oba stíny. Do `repricing.prices` (`main`,
+  `entry_b`, `wick_test`) jde bid/ask, IV, delta, čas kotace a model v TP1/TP2 v čase
+  přecenění. Strike, úrovně, poměr, vstup A, EM ani stav se nemění, takže zpráva „ZMĚNA“
+  nenese. R:R, P3, P4 a rozpočet se nepočítají (K12 A).
+- **Ceny se nezapíšou** (`prices` je null, důvod je v `repricing.reasons` a platí ceny
+  z 9:15), když:
+  - snímek 9:31 je neúplný („snímek 9:31 ET neúplný: …“);
+  - kontrakt plánu ve snímku nemá kotaci s IV a deltou („záložní put 686 bez kotace s IV
+    a delta“). Výběr v 9:31 může vzít jiný strike (#1768);
+  - výpočet spadl („přecenění se nesestavilo (…)“), například kvůli kotaci po 9:31, tedy
+    pohledu dopředu.
+- **Plán bez opce z 9:15** (i plán z restartu) se v 9:31 sestaví celý z 9:31 (K4 bod 5,
+  stejně jako golden K9 A) do `repricing.plan` (`levels_nq`, `main`, `shadows`). Z 9:15 se
+  nebere nic. Vstupy:
+  - scénář z řádku `scenarios` (směr v `rationale.verdict`);
+  - flip, zdi a těžiště z úrovní NQ minuty 9:31. Pipeline NQ je předá po scénáři
+    (`on_levels`) a plán na ně čeká nejdéle do 9:34 ET (`levels_deadline`), tedy před prvním
+    5min close v 9:35;
+  - ONH/ONL (dnešní bary do openu) a PDH/PDL/PDC z API funkcí
+    `scenario_auto.gather_day_levels`, tou, kterou čte i scénář (strop 20 s);
+  - poměr, spot a řetěz ze snímku 9:31 a parametry účtu ze `settings` v 9:31.
+  Řádek pak má `status` `sestaven` a `verdict` hlavního plánu z 9:31, stav z 9:15 zůstane
+  v `plan.reasons`. Zpráva začíná „ZMĚNA“, když hlavní plán přejde na `čeká`. Plán bez nastaveného rozpočtu
+  zůstane `neobchodovat` (jen s jiným důvodem), takže zpráva „ZMĚNA“ nenese (K4 bod 4).
+- **Plán zůstane bez opce s důvodem**, když:
+  - je neúplný i snímek 9:31;
+  - úrovně NQ minuty 9:31 nedorazily do 9:34 ET. Úrovně z 9:32 by byly pohled dopředu;
+  - čtení ONH/ONL a PD z API selhalo („ONH/ONL a PDH/PDL/PDC z API: bars dnes: HTTP 503“);
+  - scénář dne byl smazán.
+- **Snímek 9:31 v tomto běhu nedorazil:** hlídač `_watch_repricing` zapíše důvod, ne mlčení.
+  Spustí ho první minuta úrovní NQ od 9:31 do exitu. Při chybě snímku nebo bez tasty zapíše
+  po limitu snímku (9:32:40 ET) „snímek 9:31 ET nedorazil do … UTC“. Při startu enginu po
+  9:31 hned zapíše „engine startoval po 9:31 ET — snímek přecenění se v tomto běhu
+  nedohání“. Plán s už zapsaným přeceněním nemění.
+- **Alert** `option_plan_repriced` jde do zvonku (symbol QQQ, `plan_id`, `scenario_id`, `ts`
+  9:31 ET, po restartu čas startu). Telegram ho registruje až F4c #1745. API do té doby
+  zaloguje jednou WARNING „Push: druh 'option_plan_repriced' nemá přepínač v PUSH_TOPICS“.
+
+Log enginu:
+
+- INFO, např. „QQQ: Plán QQQ #1 ke scénáři dne #35 přeceněn v 9:31 ET: hlavní put 687
+  1,91/1,95 (v 9:15 1,81/1,83), záložní put 686 … Stav beze změny: čeká — čeká na vstup A
+  (flip 698,21)“;
+- INFO „QQQ: ZMĚNA: Plán QQQ #1 ke scénáři dne #35 sestaven z 9:31 ET (PUT): hlavní put 687
+  (3. 11.) … Stav: neobchodovat — bez opce (důvod z 9:15) → čeká — čeká na vstup A (…)“;
+- „QQQ: Plán QQQ #N: přecenění 9:31 ET se nezapsalo — důvod. Platí ceny z 9:15 ET“
+  a „… zůstává bez opce (9:31 ET): důvod“ jako WARNING při otevřeném trhu, při zavřeném INFO;
+- „Přecenění plánu opce QQQ #N už je zapsané — nic se nemění“, „Přecenění plánu opce QQQ
+  #N selhalo“ (s tracebackem, důvod jde do plánu), „Přecenění plánu opce QQQ 9:31 ET seance …
+  selhalo — plán nese ceny z 9:15 ET“ a „Plán opce QQQ: hlídač přecenění seance … selhal“
+  (pád čtení PG, s tracebackem).
+
+Ověření v PG (jen čtení):
+`SELECT id, status, verdict, plan->'repricing'->'reasons' AS duvody, plan->'repricing'->'prices'->'main' AS ceny_9_31, plan->'repricing'->'plan'->'main'->>'verdict' AS stav_9_31 FROM option_plans ORDER BY id DESC LIMIT 3;`.
+Testy: `test_option_plan_reprice.py` (čistá funkce), `test_option_plan_job.py` (golden 2. 11.
+se „ZMĚNA“, bez rozpočtu bez „ZMĚNA“, úplný plán, neúplný snímek, chybějící kontrakt, pohled
+dopředu, úrovně NQ, výpadek API, plán z restartu, hlídač, start po 9:31, víkend, svátek
+a pondělí proti pátku, minutový cyklus nečeká), `test_option_plans_store.py`,
+`test_instruments.py` (předání úrovní minuty) a `test_scenario_auto.py` (`gather_day_levels`
+v `gather_context` beze změny chování).
 
 ## 6. Datové formáty a persistence
 
@@ -815,7 +888,7 @@ Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane č
 | `paper_accounts`, `paper_events`, `paper_orders`, `paper_order_changes` | Paper účet (#1187 fáze 1, ADR-0040): účet 1 (start 50 000 $ v jednotkách plného kontraktu, `halted` = kill switch), události (vklad/výběr/poznámka), ordery (side, qty, typ, entry/stop/cíl, status `working/open/closed/cancelled`, fill/exit ceny a čas, `exit_reason` stop/target/manual/settle/kill, `pnl_usd`, `fees_usd`, `r_multiple`, `risk_usd`, `context` JSON, `journal_entry_id`). Fily dělá engine per symbol po cyklu pipeline (`gexlens_engine.paper.PaperBroker`) proti 1min barům; `fees_usd` = kontrakty × poplatek podle instrumentu orderu (ES a NQ `fee_per_contract_usd`, MES a MNQ `fee_per_micro_contract_usd`) z platné verze parametrů setupů — novou verzi převezme za běhu spolu se `SetupEngine` (#1402; dřív jen při startu enginu); uzavřený obchod zapíše do `journal_entries`/`journal_trades` (typ `obchod`, tag `paper`). |
 | `setup_params` | Verzované prahy šablon setupů (#794 fáze 2, ADR-0033): append-only, poslední řádek platí; `created_by` (`engine` seed / `ui` / `script`), povinná `note`, `mechanics_version`, `params` JSON. Engine při prvním startu založí seed z `.env` + defaultů (od té chvíle **store přebíjí `.env`** klíče `GEXLENS_SETUP_*`), novou verzi přečte po NOTIFY nebo v k-tém cyklu. Setupy nesou `params_version` (NULL = před store). |
 | `adhoc_view` | Most UI → engine pro ad-hoc pohled (#521 C), viz kap. 12 |
-| `option_plans` | Plán opce QQQ ke scénáři dne NQ (ADR-0062 K2 A, #1742, kap. 5 „Plán opce QQQ ze scénáře dne“). Řádek vznikne jednou v 9:15 ET a zpětně se nepřepisuje: `scenario_id` (unikátní, bez cizího klíče, protože scénář smí uživatel smazat), `day`, `created_at` (štítek minuty scénáře, u restartu čas startu), `rules_version`. `status` je `sestaven` (z ranního snímku), nebo `bez opce`. `verdict` je hlavní slovo verdiktu hlavního plánu (`čeká` / `neobchodovat`, K12 A), u plánu bez opce NULL. JSON `plan` nese `slot`, `reasons`, `levels_nq` (úrovně scénáře), `chain` (zdroj, čas, spot, poměr a pokrytí obou expirací; `zero_dte.quoted_share` patří k P1 stínu B, Rozhodnuto 10. 11.), `main` (celý plán, `compute/option_plan.plan_to_json`) a `shadows` (`entry_b`, `wick_test`). `evaluated_at` a `result` doplní F3 #1748, `image_path` F4b #1744. Tabulku zakládá engine při startu (`ensure_schema`), před prvním nasazením záloha PG |
+| `option_plans` | Plán opce QQQ ke scénáři dne NQ (ADR-0062 K2 A, #1742, kap. 5 „Plán opce QQQ ze scénáře dne“). Řádek vznikne jednou v 9:15 ET a JSON z 9:15 se zpětně nepřepisuje: `scenario_id` (unikátní, bez cizího klíče, protože scénář smí uživatel smazat), `day`, `created_at` (štítek minuty scénáře, u restartu čas startu), `rules_version`. `status` je `sestaven` (z ranního snímku, nebo celý z 9:31 — pak nese `plan.repricing.plan`), nebo `bez opce`. `verdict` je hlavní slovo verdiktu hlavního plánu (`čeká` / `neobchodovat`, K12 A), u plánu bez opce NULL. Sloupce popisují aktuální stav plánu (vlastník 11. 11., #1738), stav z 9:15 zůstává v JSON. Platný plán řádku je `plan.repricing.plan`, když existuje (pak je `plan.main` null), jinak `plan.main` a `plan.shadows` (ADR-0062 K4 bod 10). Vybírá ho jediná čistá funkce `storage/option_plans_store.effective_plan` (API #1743, vyhodnocení F3, obrázek F4b). JSON `plan` nese `slot`, `reasons`, `levels_nq` (úrovně scénáře), `chain` (zdroj, čas, spot, poměr a pokrytí obou expirací; `zero_dte.quoted_share` patří k P1 stínu B, Rozhodnuto 10. 11.), `main` (celý plán, `compute/option_plan.plan_to_json`) a `shadows` (`entry_b`, `wick_test`). Přecenění v 9:31 ET (#1769) přidá jednou klíč `repricing`: `slot`, `reasons` (proč se ceny nezapsaly, nebo proč plán zůstal bez opce), `chain` (snímek 9:31), `prices` (sady cen úplného plánu podle klíčů `main`, `entry_b`, `wick_test`: bid, ask, IV, delta, `quote_ts`, `at_targets`) a `plan` (celý plán z 9:31 u plánu bez opce z 9:15: `levels_nq`, `main`, `shadows`). `evaluated_at` a `result` doplní F3 #1748, `image_path` F4b #1744. Tabulku zakládá engine při startu (`ensure_schema`), před prvním nasazením záloha PG. API ji jen čte (`GET /option-plans`, kap. 7); `ensure_schema` volá i API při prvním dotazu, kdyby startovalo před enginem |
 | `watchlist`, `alerts`, `annotations`, `settings` | CRUD přes API |
 
 ## 7. API reference
@@ -844,6 +917,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:80
 | — risk parametry (#1185) | Součást téže verze parametrů: `account_equity_usd` (50000), `risk_pct` (1), `risk_max_pct` (2), `fee_per_contract_usd` (4,48 — ES a NQ za kontrakt a obchod, reálně bez ×10, IBKR 2 × 2,24 $; do #1402 10 = „1 $ na mikro × 10“), `fee_per_micro_contract_usd` (1,22 — MES a MNQ, 2 × 0,61 $; od v6 i náklad brány; oba poplatky ≥ 0, ADR-0038 a ADR-0030 dodatky 2026-10-30), `daily_brake_r` (3), `weekly_brake_r` (6), `max_template_stops_per_day` (2), `template_gate_enabled` (true; od #1323 bez zaškrtávátka v UI, jen nouzově přes API), `template_gate_min_samples` (30), `template_gate_days` (60), stádia buněk (#1323) `shadow_cells` ([]), `trial_cells` ({buňka: {started_at, budget_setups, budget_r, mechanics_version}}) a výchozí rozpočet zkoušky `trial_budget_setups` (10), `trial_budget_r` (3). Engine u každého setupu zapíše do `context`: `risk_rules_version`, `contracts`, `risk_budget_usd`, `max_loss_usd`, `fee_usd` (kontrakty × poplatek instrumentu setupu), `affordable`, `tradeable`, `trade_block` (`stop_over_budget` / `stop_over_cap` / `daily_brake` / `weekly_brake` / `template_stops` / `gate`), `template_gate` (+ `_n`, `_lb`), `realized_day_r`, `realized_week_r`. Brzdy čtou uzavřené setupy napříč symboly (`tradeable` = true). `_load_realized` čte širší okno (týden, nebo okno brány ≈ 84 dní) a `brake_state` si z něj vymezí den (`session_bounds`, do otevření Globexu 17:00 CT) i týden (od `week_start` = neděle 17:00 CT, #1322). `realized_since` vynechá setupy mimo statistiky (`counts_in_stats`: vznik po settle vlastní expirace #1324, značka `context.excluded` #1346) — do brzd, `n` brány ani čerpání zkoušky nevstupují. Brána šablon má klíč šablona × symbol (#1325, ADR-0038 dodatek): `affordable_results` bere jen setupy vlastního symbolu (ticker instance, ADR-0041 bod 3: pinovaný `ESZ6` má vlastní buňku a začíná na n = 0) se stopem v rozpočtu za `template_gate_days` seancí; starší řádky bez kontextu dopočítá z entry/stop a hodnoty bodu vlastního symbolu (`runtime.multiplier`). `risk_rules_version` 2 = brána per šablona × symbol, 1 = do #1325 (brána míchala řádky obou symbolů); 4 = mechanika v6 (#1402, `NET_R_GATE`): `template_gate` (+ `_lb`), `template_gate_n_needed` a `template_gate_avg_net_r` nad čistým R po nákladech mikra (poplatek mikra z parametrů + skluz 1 tick na stranu, vstup `setup_library.gate_results`), do v5 brána nad hrubým R. Alert `risk_brake` (přepínač Telegramu „Brzda ztráty"), setup alert nese `tradeable` — stín do pushe nejde. UI: Settings → Risk management (POST téže cesty). **Stádia (#1323, `risk_rules_version` 3):** pořadí bloků sizing → brzdy → `user` (buňka ve Stínu) → `gate`; aktivní Zkouška přebije jen verdikt `block` / `insufficient` (`gate_overridden` = true), sizing ani brzdy ne. Čerpání `risk.trial_usage` (setupy buňky s `gate_overridden` od `started_at`: uzavřené z `realized_since`, otevřené z paměti instance — po restartu z kontextu), vyčerpaná zkouška = Auto bez zápisu; selže-li čtení výsledků, zkouška bránu nepřebije. `_load_realized` čte i od začátků zkoušek tickeru. Kontext navíc: `user_stage`, `gate_overridden`, `template_gate_avg_r`, `template_gate_avg_net_r`, `template_gate_n_needed`, u buňky se zkouškou `trial_started_at`, `trial_budget_setups`, `trial_budget_r`, `trial_setups`, `trial_sum_r`; `trade_block` může být `user`. Alert `setup_stage` / `trial_spent` (přepínač „Konec zkoušky setupu", skupina Setupy a burza) jen na přechodu do vyčerpání — jednou na zkoušku i po restartu; payload `symbol`, `template`, `message`, `trial_*`, `ts`. Setup alert `created` nese `template`, `user_stage`, `gate_overridden`, `trial_*` a text má šablonu jako `T7 trend_continuation`, stádium (AUTO / STÍN / ZKOUŠKA k/N) a řádek `Důkaz: ØR … (čistě …) · n a/b · brána …` — při dolní mezi ≤ 0 nebo bez ní (vždy u přebité brány) začíná `edge neprokázán:`; od `risk_rules_version` 4 (#1402, mechanika v6) nese brána `(LB čistě …)`, protože dolní mez je nad čistým R, ne vedle hrubého ØR. Zkouška platí od `started_at` a jen na mechanice, na které začala (`TrialCell.in_force`): `gate_overridden` ⇒ `created_ts` ≥ `started_at`, takže každý přebitý setup se do čerpání započte. UI: Setupy → Knihovna (zvonek `setup_stage` prokliká tamtéž). |
 | `GET /gammacliff/{symbol}` | Dnešní odpad gammy + historie útesů (#576) |
 | `GET /briefing/verdicts?symbol&days`, `GET /briefing/verdicts/stats?symbol&days` | Verdikt dne (#1090, #1091, ADR-0035 §3). Zapisuje **jen engine** (kap. 5 „Verdikty dne", #1595); `POST /briefing/verdicts` je odstraněn → **405** (starý bundle v otevřené kartě ho spolkne). GET vrací `{"verdicts": [...]}` — řádky posledních `days` dní (výchozí 30) včetně výsledku `outcome_*` (engine po settle + 15 min); Briefing z nich bere řádek seance `session_date` aktivního symbolu při každé obnově (à 60 s); `/stats` (výchozí 120 dní) hit-rate per verdikt a per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 — **jen aktuální verze pravidel** (`rules_version` v odpovědi, `VERDICT_RULES_VERSION`: 3 do bumpu v6, pak 4; verze se nesčítají, ADR-0057 bod 8) a **jen řádky s `updated_at` před US openem své seance** (#1588). Řádky zapsané po openu před #1585 (id 1, 2, 4, 7, 11; 9. 9.–2. 10. 2026) zůstávají v DB i ve výpisu, do statistiky nejdou. |
+| `GET /option-plans?limit`, `GET /option-plans/{id}` | **Plán opce QQQ ke scénáři dne** (ADR-0062, #1743), jen čtení tabulky `option_plans` (kap. 6), plán zakládá engine. Seznam: nejnovější podle seance a `id`, `limit` 1–500 (výchozí 50). Řádek nese sloupce `id`, `scenario_id`, `day`, `created_at`, `rules_version`, `status`, `verdict`, `evaluated_at`, `result`, `has_image` (`image_path` není NULL) a `effective` = platný plán řádku (ADR-0062 K4 bod 10, `option_plans_store.effective_plan`): `slot` (`9:15`, nebo `9:31` u plánu sestaveného v 9:31), `levels_nq`, `main` (null = bez opce), `shadows`, `prices` (ceny z 9:31 u plánu z 9:15, jinak null), `reasons` (mezery z 9:15) a `repricing_reasons` (mezery z 9:31, null = přecenění ještě neproběhlo). Detail navíc nese celý uložený JSON `plan` (9:15 i `repricing`, pokrytí snímků); neexistující id = 404. Parametr `symbol` není, plán je jen pro QQQ (Rozhodnuto 12. 11. v #1738: tvar B, `symbol` A) |
 | `GET /coach/summary?symbol&days` | Shrnutí kouče (`compute/coach_summary.py`): `lines` (4–6 vět z weekly + hours + setups) a `watch` (max 4 body pro Briefing). |
 | `GET /coach/setups?days&symbol`, `GET /coach/hours?days&symbol` | Kouč v2 (#1201, `compute/coach_setups.py`): setupy aktuální mechaniky za N dní (`closed_between`) → příznaky (`counter_regime`, `outside_band`, `unaffordable`, `low_rr`, `timeout`, `bad_window`), profil denní doby (hodiny Europe/Prague + segmenty seance z ET hranic), doporučení avoid/focus (n ≥ 30, Wilson LB); `/coach/hours` totéž zvlášť pro obchody deníku a setupy. Setupy nově nesou v kontextu `session_segment` a `hour_local`. |
 | `GET /coach/review?date&symbol`, `GET /coach/weekly?date&symbol` | Kouč v1 (#933, `compute/coach.py`): obchody deníku typu `obchod` (ruční i paper) s příznaky (`no_stop`, `after_brake`, `revenge`, `big_loss`, `no_setup`, `low_rr`, `early_exit` — z barů po výstupu, `overtrading`), cenou v R, skóre disciplíny, shrnutím; týdenní report po–pá s cenou příznaků, rozpadem po hodinách UTC a 1–3 pravidly. Čte `journal_between` + `bars_session`; nic nezapisuje. |
@@ -864,7 +938,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:80
 | `GET /replay/{sym}/{expiry}/{date}?resolution=daily` | Daily pohled (#1206): snapshoty jen poslední minuty, řady zredukované na poslední stav a pole `daily` (denní OptVol / Δ Flow / Evo OI / CumΔ + OHLC, stejné vzorce jako UI kromě minuty po mezeře v objemu, viz níž) — stovky kB místo 20–40 MB. `daily.cum_delta` = poslední **měřená** úroveň seance (`null`, když seance nic neměřila), `daily.cum_delta_gap_minutes` = počet minut bez tisků (NULL, ADR-0057 bod 3; pod v5 0), `daily.futures_cvd` = tok CVD podkladu za seanci (součet `futures_cvd_delta` = úroveň z konce obchodování; restart enginu uprostřed seance ani v pauze ho neposune, `null` = den bez CVD; balík v3, #1633) — dřív NULL na konci seance shodil balík na HTTP 500 uložené v cache až do restartu (#1588). **OptVol / Δ Flow** (`daily_totals`, #1602) = přírůstky denního kumulativního volume proti **průběžnému maximu** kontraktu v seanci (`volume_increments`): IBKR kumulativ kmitá (862 ↔ 863) i propadá (pauza Globexu, výjimečně přes noc) a přírůstek proti poslední hodnotě započítal návrat znovu; NULL (tasty fallback) ani chybějící strike nejsou 0 a první výskyt kontraktu jen založí stav. Počítá se při čtení ze snímků, takže oprava platí i zpětně (ES 15. 10. Opt Vol C+P 501 501 → 349 944, 7. 10. 1 623 419 → 305 961). Catch-up minuta (#518), minuta po mezeře v objemu (strike bez objemu v předchozí minutě osy: NULL z tasty fallbacku, díra ve sběru; rozhodnutí B 21. 10., #1632) i minuty po časové díře do první změny objemu strike (minuta se snímkem, které nepředchází snímek minuty − 1, kromě catch-up; #1774, A+) se do Daily počítají (objem výpadku), minutový panel (`ensureDerived`) je kreslí jako 0 a přírůstek jen posune maximum; minuta, ve které objem nenese žádný strike strany, je v panelu mezera (`null`, „—“, #1635) a koš TF s ní taky — Daily tak za den s mezerou nese víc než součet panelu. Engine počítá totéž pravidlo pod mechanikou v6 (`CumDeltaTracker.add_volume`, `setups._flows`, `tendency._flows`, replay; kap. 5 krok 4, ADR-0057 doplněk 22. 10.), minutu po mezeře tam jako 0. **Verze v URL:** frontend volá `?resolution=daily&v=N` (`DAILY_BUNDLE_VERSION` v `frontend/src/replay/loader.ts` a v `api/src/gexlens_api/main.py`, shodu hlídá pytest) — uzavřený den jde s `Cache-Control: immutable` na rok a prohlížeč ho drží podle URL, takže **každá změna obsahu Daily balíku** (součty, `cum_delta`, řady) **verzi zvedá**. API odpoví `immutable` a uloží do `_DAILY_BUNDLE_CACHE` jen dotaz se svou verzí; jiná nebo chybějící verze (otevřený starý frontend, návrat jen jedné služby) dostane `no-cache`. API bez této stráže (před #1602) ji neumí: při nasazení jde **API před frontendem** (pořadí deploy skriptu i `depends_on`) a návrat API pod #1602 jen spolu s frontendem, jinak si prohlížeč staré součty uloží pod novou URL na rok |
 | CRUD `/watchlist`, `/alerts`, `/annotations?symbol&date`, `/settings` | PostgreSQL persistence |
 | `POST /internal/status`, `POST /internal/publish` | **Ingest z enginu** — vyžaduje hlavičku `X-GEXLens-Token` (#542). Od #949 tu API vyhodnocuje **provozní alerty** `AlertEngine.observe_connection` / `observe_disk` (výpadek spojení s IBKR, obsazení disku přes limit) — ze **snímku** statusu, ne z těla requestu (engine posílá jen změněné klíče); obě hlášky jsou hranové. Výpadek spojení se při zavřeném trhu podle rozvrhu CME nehlásí a hrana se nenatahuje — trvá-li i po otevření, ohlásí ho první status po otevření (#1307, kap. 5). Do té doby byl `AlertEngine` mrtvý kód; pravidla `price_cross` / `cum_delta_jump` / `dominant_strike_change` odstraněna jako překonaná (`LevelProximityWatcher`), `POST /alerts` je přestává přijímat, CRUD `/alerts` zůstává |
-| `PUT /settings/{key}` | Zápis nastavení + `pg_notify` na kanál watchlistu (#992) — engine se probudí do sekund |
+| `PUT /settings/{key}` | Zápis nastavení + `pg_notify` na kanál watchlistu (#992) — engine se probudí do sekund. Jen klíče z `WRITABLE_SETTINGS`, jinak 422. Validace podle klíče: přepínače Telegramu bool, seznamy zdrojů zpráv seznam řetězců, parametry účtu plánu QQQ kladné číslo nebo `null` (kap. 4, #1743) |
 | `GET /backup/postgres` | Stream `pg_dump -Fc` — vyžaduje `X-GEXLens-Token` (#542) |
 
 ### WebSocket `/ws/live`

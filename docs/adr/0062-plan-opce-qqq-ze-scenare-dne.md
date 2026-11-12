@@ -14,9 +14,11 @@
   platí dál. **Revize 9. 11.:** úplnost snímků řetězu podle vstupů plánu místo prahu 90 % kotací
   nad pásmem (K4 bod 7, vlastník „B+E“). **Revize 10. 11.:** P1 stínu B z ranního řetězu
   s podílem kotací pásma 0DTE (K4 bod 7, vlastník „A“), začátek track recordu (bod 7, vlastník
-  „A“) a spojení vstupů při vzniku plánu (K4 bod 9, odvozeno v F2b #1742).
+  „A“) a spojení vstupů při vzniku plánu (K4 bod 9, odvozeno v F2b #1742). **11. 11.:**
+  přecenění v 9:31 ET (K4 bod 10, odvozeno v F2c #1769) a sloupce plánu sestaveného
+  v 9:31 (K4 bod 10, vlastník „A“).
 - **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09, P1, track record a K4 bod 9
-  2026-11-10)
+  2026-11-10, K4 bod 10 2026-11-11)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
   #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
@@ -172,7 +174,9 @@ K variantě A dál patří:
 - **Parametry účtu** budou dva klíče v tabulce `settings`. `option_plan_account_usd` slouží jen
   pro „% účtu“. `option_plan_max_loss_usd` je rozpočet P4 na obchod v $ (vlastník uvažuje
   v $ na kontrakt, „−100 $“). Když nejsou vyplněné, plán vznikne a obě varianty dostanou
-  `neobchodovat — rozpočet nenastaven`. Tichý default není.
+  `neobchodovat — rozpočet nenastaven`. Tichý default není. *(F4a #1743: zápis přes
+  `PUT /settings`; platná hodnota je kladné konečné číslo, `null` nebo prázdná = nenastaveno.
+  API i engine ji posuzují jednou funkcí `compute/option_plan.account_value`.)*
 
 **Rozhodnuto 2. 11.: A** včetně dílčích voleb výše (vlastník).
 
@@ -392,9 +396,53 @@ Odvozeno pro F2b (zapsal agent 10. 11., #1742):
      zdroj, čas a pokrytí snímku a důvody. Parametry účtu se čtou v okamžiku plánu a do logu
      ani do zprávy nejdou.
 
+Odvozeno pro F2c (zapsal agent 11. 11., #1769):
+
+10. **Přecenění v 9:31 ET** (`OptionPlanMaker.reprice`, `compute/option_plan.reprice_variants`):
+    - Spouští ho snímek 9:31 a běží v samostatné úloze, minutový cyklus nečeká. Výsledek jde
+      jednou do klíče `plan.repricing` (`slot`, `reasons`, `chain`, `prices`, `plan`). Část
+      z 9:15 se nemění (K2 A). Restart druhé přecenění nevytvoří.
+    - **Sloupce `status` a `verdict`** popisují aktuální stav plánu (rozhodl vlastník
+      11. 11., varianta A, #1738). Plán bez opce, který se v 9:31 sestaví celý, dostane
+      `sestaven` a hlavní slovo verdiktu plánu z 9:31. Stav z 9:15 zůstane v JSON
+      (`plan.reasons`, `plan.main` je null), `created_at` zůstane z 9:15 a plán sestavený
+      v 9:31 se pozná podle `plan.repricing.plan`. Track record (K2 A: „vystačí se `status`
+      a `result`“), seznam plánů F4a a statistiky F3 tak plán najdou bez čtení JSON.
+      Přecenění úplného plánu ani plán, který zůstal bez opce, sloupce nemění.
+    - **Platný plán řádku** pro čtenáře (F3 vyhodnocení, F4a seznam, F4b obrázek):
+      `plan.repricing.plan`, když existuje (plán z 9:31, `plan.main` je tam null), jinak
+      `plan.main` a `plan.shadows`. Ceny z 9:31 úplného plánu jsou v
+      `plan.repricing.prices`, ceny z 9:15 ve variantách `plan.main`. Pravidlo drží jediná
+      funkce `storage/option_plans_store.effective_plan` (F4a #1743), kopii nemá API ani
+      frontend.
+    - **Snímek 9:31 nedorazil** (chyba snímku, tasty mimo provoz, start enginu po 9:31):
+      hlídač, kterého spustí první minuta úrovní NQ od 9:31 do exitu, zapíše po limitu snímku
+      (9:32:40 ET) důvod. Mezera je v plánu, ne jen v logu (bod 6, AGENTS.md).
+    - **Úplný plán:** přecení se kontrakty z 9:15 hlavního plánu i obou stínů. Stíny počítá
+      táž funkce a kontrakty mají stejné (K10 B). Ceny se nezapíšou, když je snímek neúplný
+      (bod 6), nebo když řádky 9:31 nemají kotaci, IV a deltu právě kontraktů plánu. Výběr
+      v 9:31 se totiž může lišit (#1768). Stav se nemění, protože nestojí na kotacích, ale na
+      vstupu A, EM a parametrech účtu z 9:15 (K12 A). Parametry účtu se v 9:31 znovu nečtou.
+    - **Plán bez opce** se sestaví celý z 9:31, jak to chce bod 5 a Odvozeno („ONH/ONL od
+      začátku seance“ do minuty vzniku). Tak vznikl i golden K9 A (`gather_context` v 9:31).
+      Z 9:15 se nebere nic, takže se stejně sestaví i plán z restartu (`recover`). Zdroje:
+      - scénář z řádku `scenarios`, protože `CreatedScenario` žije jen v paměti běhu;
+      - flip, zdi a těžiště z úrovní NQ minuty 9:31, které předá pipeline NQ. Partice
+        `levels` jde přes buffer zapisovače a čtení z disku by je nemuselo vidět. Úrovně jiné
+        minuty se neberou, protože 9:32 by byl pohled dopředu. Plán na ně čeká do 9:34 ET,
+        tedy před prvním 5min close v 9:35. Cyklus minuty 9:31 je předá až po scénáři
+        a přetažená minuta ještě později;
+      - ONH/ONL a PDH/PDL/PDC z barů funkcí `scenario_auto.gather_day_levels`, tou, kterou
+        čte scénář. Selhané čtení API nechá plán bez opce s důvodem, protože úrovně
+        z poloviny by daly jinou úroveň A.
+    - **„ZMĚNA“** vzniká, když se změní hlavní slovo stavu (`neobchodovat` → `čeká`, bod 4).
+      Plán bez opce je `neobchodovat`. Sestavení bez nastaveného rozpočtu zůstane
+      `neobchodovat` a „ZMĚNA“ nenese. Přecenění úplného plánu stav nemění.
+
 **Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
 nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test
-přecenění s pevným strikem přinese F2c (#1769), naměřený golden první seance F6 (#1750).
+přecenění s pevným strikem je v F2c (#1769, `test_option_plan_reprice.py`), naměřený golden
+první seance přinese F6 (#1750).
 
 **Důvod:** rychlost, protože plán přijde se scénářem v 15:15 SEČ, a relevance dat, protože přesné
 ceny po openu přijdou v 15:31 a o obchodu rozhodují živé ceny při spoušti (K12 A). Cena: dvě
