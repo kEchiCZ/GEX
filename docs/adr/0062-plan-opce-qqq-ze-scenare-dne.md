@@ -469,6 +469,31 @@ Odvozeno pro F1b (zapsal agent 12. 11., #1747):
     - **Hlídač mezer** hlásí změnu množiny kontraktů bez kotace úrovní
       `plan_chain.missing_data_level`. Při zavřeném trhu jen loguje.
 
+Odvozeno pro F4b (zapsal agent 12. 11., #1744):
+
+12. **PNG plánu a záložní graf NQ** (`api/plan_chart.py`, `api/chart_render.py`, K1 A):
+    - **Snímek stavu plánu** (vlastník 12. 11. v chatu: „3. A“, #1738 Rozhodnuto). PNG se
+      nakreslí při prvním dotazu `GET /option-plans/{id}/image` a znovu jen po změně stavu:
+      9:15 ET, přecenění v 9:31 ET (klíč `plan.repricing`, bod 10) a vyhodnocení (F3 #1748).
+      Bary QQQ jsou do okamžiku kreslení. Odmítnuto B, kreslit s každým novým barem: každé
+      otevření Briefingu v RTH by čekalo ~2 s na podproces s +54 MB.
+    - **Popis grafu bez vzorce:** čisté funkce v API sestaví ze sloupců a JSON plánu
+      (`effective_plan`, bod 10) a z uložených barů jen seznam čar, bodů a popisků. Cesta
+      scénáře v cenách QQQ je vstup scénáře a cíle plánu v časech cesty (`scenario_entry`,
+      `targets`, `target_ts`). Poměrem se nic nepřevádí, takže bary NQ se do grafu QQQ
+      nekreslí. SL a vstup A jsou v grafu až po spoušti, protože plán z 9:15 je ještě nemá
+      (K12 A, P5 to říká textem).
+    - **Podproces** importuje jen standardní knihovnu a matplotlib. Popis dostane na stdin,
+      PNG vrátí na stdout. Neplatný popis skončí kódem 2, chyba kreslení kódem 1, důvod jde
+      na stderr. API kreslí nejvýš jeden obrázek naráz s limitem 60 s a chybu vrátí jako 500
+      s důvodem.
+    - **Místo:** PNG leží v `data/scenarios/QQQ/{den}/plan-{id}-{stav}.png`. Velikost jde do
+      nového sloupce `option_plans.image_bytes` (dopředná migrace, před nasazením záloha PG)
+      a sčítá se se snímky scénářů pod jeden limit #1173. Ruční úklid maže i PNG plánu, ten se
+      pak nakreslí znovu.
+    - **Záložní graf NQ** kreslí bary NQ seance, vstup, cíle, cestu a úrovně NQ uložené
+      v plánu ke scénáři (`plan.levels_nq`). Volá ho Telegram (F4c #1745), endpoint nemá.
+
 **Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
 nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test
 přecenění s pevným strikem je v F2c (#1769, `test_option_plan_reprice.py`), naměřený golden
