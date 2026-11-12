@@ -11,11 +11,15 @@ stav plánu (vlastník 11. 11., #1738):
 - `verdict`: hlavní slovo verdiktu hlavního plánu (`čeká`, `neobchodovat`, `obchodovat`),
   u plánu bez opce NULL.
 
+Platný plán řádku (ADR-0062 K4 bod 10) vybírá jediná funkce `effective_plan`: čte ji API
+(F4a #1743), vyhodnocení (F3 #1748) i obrázek (F4b #1744), pravidlo nemá kopii.
+
 Vazba na `scenarios` není cizí klíč: scénář smí uživatel smazat a plán s výsledkem zůstává
 (data se nemažou, AGENTS.md). PostgreSQL navždy, track record plánu.
 """
 
 import datetime as dt
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -76,6 +80,31 @@ class OptionPlanRow:
     evaluated_at: dt.datetime | None
     result: dict[str, Any] | None
     image_path: str | None
+
+
+def effective_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Platný plán řádku z JSON `plan` (ADR-0062 K4 bod 10); čistá funkce, nic nepočítá.
+
+    - Plán sestavený celý v 9:31 ET (`plan.repricing.plan`) má přednost, `plan.main` je u něj
+      null. Ceny z 9:31 nese sám (`main.variants`), `prices` je null.
+    - Jinak platí `plan.main` a `plan.shadows` z 9:15 ET s cenami z 9:15 ve variantách
+      a `prices` = ceny z 9:31 (`plan.repricing.prices`), když se přecenění zapsalo.
+
+    `main` je null u plánu bez opce. `reasons` jsou mezery z 9:15 (`plan.reasons`),
+    `repricing_reasons` mezery z 9:31; null = přecenění ještě neproběhlo.
+    """
+    repricing: Mapping[str, Any] | None = plan.get(REPRICING_KEY)
+    rebuilt: Mapping[str, Any] | None = repricing.get("plan") if repricing is not None else None
+    source = rebuilt if rebuilt is not None else plan
+    return {
+        "slot": source["slot"],
+        "levels_nq": source["levels_nq"],
+        "main": source["main"],
+        "shadows": source["shadows"],
+        "prices": repricing.get("prices") if repricing is not None and rebuilt is None else None,
+        "reasons": list(plan["reasons"]),
+        "repricing_reasons": list(repricing["reasons"]) if repricing is not None else None,
+    }
 
 
 def _utc(value: dt.datetime | None) -> dt.datetime | None:
@@ -144,6 +173,23 @@ class OptionPlansRepository:
         if key is None:
             raise RuntimeError("insert option_plans nevrátil id")
         return int(key[0])
+
+    def get(self, plan_id: int) -> OptionPlanRow | None:
+        stmt = select(option_plans_table).where(option_plans_table.c.id == plan_id)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return _row(row) if row is not None else None
+
+    def list_plans(self, limit: int) -> list[OptionPlanRow]:
+        """Nejnovější plány: podle seance, v ní podle `id` (F4a #1743)."""
+        stmt = (
+            select(option_plans_table)
+            .order_by(option_plans_table.c.day.desc(), option_plans_table.c.id.desc())
+            .limit(limit)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [_row(row) for row in rows]
 
     def get_for_scenario(self, scenario_id: int) -> OptionPlanRow | None:
         stmt = select(option_plans_table).where(option_plans_table.c.scenario_id == scenario_id)

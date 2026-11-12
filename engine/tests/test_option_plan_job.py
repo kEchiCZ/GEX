@@ -17,13 +17,17 @@ import pytest
 from sqlalchemy import create_engine
 
 from gexlens_engine.compute.dayverdict import AutoScenario, LevelInputs
-from gexlens_engine.compute.option_plan import AccountParams, build_option_plan, plan_to_json
+from gexlens_engine.compute.option_plan import (
+    ACCOUNT_KEY,
+    MAX_LOSS_KEY,
+    AccountParams,
+    build_option_plan,
+    plan_to_json,
+)
 from gexlens_engine.compute.scenario import Bar
 from gexlens_engine.option_plan_job import (
-    ACCOUNT_KEY,
     ALERT_KIND,
     CHANGE,
-    MAX_LOSS_KEY,
     REPRICE_ALERT_KIND,
     STATUS_BUILT,
     STATUS_NO_OPTION,
@@ -325,6 +329,15 @@ def test_nevyplnene_parametry_uctu_plan_vznikne_neobchodovat(
     assert account_params({}) == AccountParams(None, None)
     assert account_params({ACCOUNT_KEY: "1500", MAX_LOSS_KEY: 120}) == AccountParams(1500.0, 120.0)
     assert account_params({ACCOUNT_KEY: "nan"}).account_usd is None
+    # Táž pravidla jako `PUT /settings` (#1743): prázdná hodnota = nenastaveno bez WARNING,
+    # nula a záporné číslo = neplatné s WARNING bez hodnoty
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert account_params({ACCOUNT_KEY: "", MAX_LOSS_KEY: None}) == AccountParams(None, None)
+    assert caplog.text == ""
+    with caplog.at_level(logging.WARNING):
+        assert account_params({ACCOUNT_KEY: 0, MAX_LOSS_KEY: -75}) == AccountParams(None, None)
+    assert "-75" not in caplog.text and "neplatné" in caplog.text
     maker, plans, _, _ = _maker(tmp_path, BOUNDARY + dt.timedelta(seconds=68), account=unset)
     maker.on_snapshot(_snapshot())
     asyncio.run(maker.make(_created()))

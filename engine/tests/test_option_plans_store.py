@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine
 
-from gexlens_engine.storage.option_plans_store import OptionPlansRepository
+from gexlens_engine.storage.option_plans_store import OptionPlansRepository, effective_plan
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
 
 DAY = dt.date(2026, 11, 2)
@@ -139,3 +139,85 @@ def test_preceneni_se_zapise_jednou_a_9_15_zustane(tmp_path: Path) -> None:
     assert (other.status, other.verdict) == ("sestaven", "čeká")
     with pytest.raises(LookupError):
         plans.record_repricing(plan_id + 99, repricing)
+
+
+def test_seznam_od_nejnovejsi_seance_a_cteni_podle_id(tmp_path: Path) -> None:
+    """F4a #1743: seznam podle seance a `id` sestupně s limitem, neexistující id = None."""
+    scenarios, plans = _repos(tmp_path)
+    assert plans.list_plans(10) == []
+    ids = []
+    for offset in (1, 0, 1):
+        day = DAY + dt.timedelta(days=offset)
+        plan_id = plans.create(
+            scenario_id=_scenario(scenarios, day=day),
+            day=day,
+            created_at=LABEL + dt.timedelta(days=offset),
+            rules_version=1,
+            verdict=None,
+            status="bez opce",
+            plan={"slot": "9:15", "reasons": ["restart"]},
+        )
+        assert plan_id is not None
+        ids.append(plan_id)
+    assert [row.id for row in plans.list_plans(10)] == [ids[2], ids[0], ids[1]]
+    assert [row.id for row in plans.list_plans(1)] == [ids[2]]
+    row = plans.get(ids[1])
+    assert row is not None and (row.day, row.status) == (DAY, "bez opce")
+    assert plans.get(max(ids) + 1) is None
+
+
+MAIN_915 = {"rules": "hlavní", "variants": [{"strike": 687.0, "bid": 1.30, "ask": 1.36}]}
+SHADOWS_915 = {"entry_b": {"rules": "stín vstup B"}, "wick_test": {"rules": "stín test knotem"}}
+BUILT_915 = {
+    "slot": "9:15",
+    "reasons": [],
+    "levels_nq": {"flip": 28_800.0},
+    "chain": {"complete": True},
+    "main": MAIN_915,
+    "shadows": SHADOWS_915,
+}
+NO_OPTION_915 = {
+    "slot": "9:15",
+    "reasons": ["ranní snímek 9:15 ET nedorazil"],
+    "levels_nq": {"flip": 28_800.0},
+    "chain": None,
+    "main": None,
+    "shadows": {},
+}
+
+
+def _repricing(**values: object) -> dict[str, object]:
+    return {"slot": "9:31", "reasons": [], "chain": {}, "prices": None, "plan": None, **values}
+
+
+def test_platny_plan_z_9_15_pred_precenenim_a_s_cenami_z_9_31() -> None:
+    """ADR-0062 K4 bod 10: úplný plán z 9:15, ceny z 9:31 vedle, mezery přecenění zvlášť."""
+    before = effective_plan(BUILT_915)
+    assert (before["slot"], before["main"], before["shadows"]) == ("9:15", MAIN_915, SHADOWS_915)
+    assert (before["prices"], before["reasons"], before["repricing_reasons"]) == (None, [], None)
+    prices = {"main": [{"strike": 687.0, "bid": 1.22, "ask": 1.26}], "entry_b": [], "wick_test": []}
+    repriced = effective_plan({**BUILT_915, "repricing": _repricing(prices=prices)})
+    assert (repriced["slot"], repriced["main"], repriced["prices"]) == ("9:15", MAIN_915, prices)
+    assert repriced["repricing_reasons"] == []
+    gap = ["snímek 9:31 ET neúplný: 1DTE bez kotace"]
+    failed = effective_plan({**BUILT_915, "repricing": _repricing(reasons=gap)})
+    assert (failed["main"], failed["prices"], failed["repricing_reasons"]) == (MAIN_915, None, gap)
+
+
+def test_platny_plan_sestaveny_v_9_31_a_plan_bez_opce() -> None:
+    """Plán bez opce z 9:15 sestavený v 9:31 platí celý z 9:31; jinak zůstane bez opce."""
+    main_931 = {"rules": "hlavní", "variants": [{"strike": 686.0, "bid": 1.10, "ask": 1.14}]}
+    rebuilt = {
+        "slot": "9:31",
+        "levels_nq": {"flip": 28_790.0},
+        "main": main_931,
+        "shadows": {"entry_b": {}, "wick_test": {}},
+    }
+    plan = effective_plan({**NO_OPTION_915, "repricing": _repricing(plan=rebuilt)})
+    assert (plan["slot"], plan["main"], plan["levels_nq"]) == ("9:31", main_931, {"flip": 28_790.0})
+    assert plan["shadows"] == {"entry_b": {}, "wick_test": {}} and plan["prices"] is None
+    assert (plan["reasons"], plan["repricing_reasons"]) == (NO_OPTION_915["reasons"], [])
+    gap = ["úrovně NQ minuty 9:31 ET nedorazily do 14:34:00 UTC"]
+    none = effective_plan({**NO_OPTION_915, "repricing": _repricing(reasons=gap)})
+    assert (none["slot"], none["main"], none["shadows"]) == ("9:15", None, {})
+    assert (none["reasons"], none["repricing_reasons"]) == (NO_OPTION_915["reasons"], gap)

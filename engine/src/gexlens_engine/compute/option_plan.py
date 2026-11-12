@@ -126,6 +126,35 @@ class AccountParams:
     max_loss_usd: float | None
 
 
+#: Klíče parametrů účtu plánu v tabulce `settings` (ADR-0062 K2 A); výchozí hodnota v kódu není.
+#: Zapisuje je `PUT /settings` (API) a čte engine v okamžiku plánu, oba přes `account_value`.
+ACCOUNT_KEY = "option_plan_account_usd"
+MAX_LOSS_KEY = "option_plan_max_loss_usd"
+ACCOUNT_KEYS = (ACCOUNT_KEY, MAX_LOSS_KEY)
+
+
+def account_value(raw: object) -> float | None:
+    """Hodnota parametru účtu ze Settings: None = nenastaveno, jinak kladné konečné číslo.
+
+    `null` i prázdný řetězec znamenají nenastaveno (Q3 B, tichý default není). Číslo smí
+    přijít i jako text. Bool, nečíselný text, nula, záporné číslo, NaN a nekonečno jsou
+    `ValueError`. Hláška hodnotu nenese: velikost účtu je soukromá a repo veřejné.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int | float | str):
+        raise ValueError(f"čekalo se číslo, přišel typ {type(raw).__name__}")
+    try:
+        number = float(raw)
+    except ValueError:
+        raise ValueError("text není číslo") from None
+    except OverflowError:  # celé číslo mimo rozsah float (JSON nemá strop počtu číslic)
+        raise ValueError("číslo musí být kladné a konečné") from None
+    if not _positive(number):
+        raise ValueError("číslo musí být kladné a konečné")
+    return number
+
+
 @dataclass(frozen=True)
 class PlanRules:
     """Parametry pravidel. Hlavní plán = jen vstup A s testem 5min close (K6 B)."""
