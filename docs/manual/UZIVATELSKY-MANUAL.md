@@ -763,7 +763,9 @@ upozornění: karta ukáže **bez výsledku** a „termín mimo obchodní seanci
 v barech obchodního dne zůstává „bez barů v okně — nešlo posoudit") a do track
 recordu se nepočítá. Snímky leží na disku (`data/scenarios/`); nad **1 GB**
 přijde alert „pročisti" — mazání je ruční v Settings → Scénáře dne (mizí jen
-PNG, výsledky zůstávají).
+PNG, výsledky zůstávají). Do počtu „Snímky" a limitu 1 GB patří i PNG plánů opce
+QQQ (#1744) a tlačítko smaže i je; smazaný PNG plánu se při dalším otevření
+nakreslí znovu z uložených hodnot plánu.
 
 ### Technická poznámka k ukotvení
 

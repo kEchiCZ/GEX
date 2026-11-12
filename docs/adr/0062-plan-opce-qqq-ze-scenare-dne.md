@@ -490,7 +490,7 @@ Odvozeno pro F4b (zapsal agent 12. 11., #1744):
     - **Místo:** PNG leží v `data/scenarios/QQQ/{den}/plan-{id}-{stav}.png`. Velikost jde do
       nového sloupce `option_plans.image_bytes` (dopředná migrace, před nasazením záloha PG)
       a sčítá se se snímky scénářů pod jeden limit #1173. Ruční úklid maže i PNG plánu, ten se
-      pak nakreslí znovu.
+      pak nakreslí znovu (společný limit a úklid potvrdil vlastník 12. 11., #1744, varianta A).
     - **Záložní graf NQ** kreslí bary NQ seance, vstup, cíle, cestu a úrovně NQ uložené
       v plánu ke scénáři (`plan.levels_nq`). Volá ho Telegram (F4c #1745), endpoint nemá.
 
