@@ -16,9 +16,10 @@
   s podílem kotací pásma 0DTE (K4 bod 7, vlastník „A“), začátek track recordu (bod 7, vlastník
   „A“) a spojení vstupů při vzniku plánu (K4 bod 9, odvozeno v F2b #1742). **11. 11.:**
   přecenění v 9:31 ET (K4 bod 10, odvozeno v F2c #1769) a sloupce plánu sestaveného
-  v 9:31 (K4 bod 10, vlastník „A“).
+  v 9:31 (K4 bod 10, vlastník „A“). **12. 11.:** odběr kontraktů plánu a podkladu do close
+  (K4 bod 11, odvozeno v F1b #1747).
 - **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09, P1, track record a K4 bod 9
-  2026-11-10, K4 bod 10 2026-11-11)
+  2026-11-10, K4 bod 10 2026-11-11, K4 bod 11 2026-11-12)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
   #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
@@ -451,15 +452,18 @@ Odvozeno pro F1b (zapsal agent 12. 11., #1747):
       „do close“). Po close se odběr uvolní. Restart enginu ho obnoví z plánu dne v PG.
     - **Partice `derived/QQQ/option_quotes/{den}.parquet`** (K2 A) nese `ts_min`, `expiry`,
       `strike`, `right`, `bid`, `ask`, `mid`, `iv`, `delta` a `quote_age_s`. Štítek je minuta
-      a vzorek leží v jejím závěru, kotace se zapíše i v minutě začátku odběru.
+      a vzorek leží v jejím závěru, kotace se zapíše i v minutě začátku odběru. Stáří se
+      měří k závěru minuty: kotace přijatá až po něm (zpožděný vzorek) má stáří záporné.
       - Kotace chybí, nebo je starší než 90 s (limit ad-hoc pohledu a snímků): ceny jsou NULL
         se stářím, forward-fill se nedělá.
       - IV a delta jsou jen z dxFeed Greeks, dopočet z mid odběr nedělá (měřené > odhadnuté).
-      - Vzorek později než 10 s po závěru minuty by byl pohled dopředu, proto se nezapíše
-        a mezeru ohlásí hlídač.
+      - Vzorek později než 10 s po závěru minuty se nezapíše a mezeru ohlásí hlídač. Kratší
+        zpoždění je vidět na záporném stáří, takže pohled dopředu může vyhodnocení odmítnout.
     - **Bary podkladu** jdou z mid kotace do `derived/QQQ/bars/{den}.parquet` jako u ad-hoc
       pohledu. Věta „bary QQQ se nesbírají“ (Odvozeno, 3. 11.) tím v okně plánu neplatí.
-      Bar minuty, ve které odběr podkladu začal, se nezapíše, protože je neúplný.
+      Bar minuty, ve které odběr podkladu začal, se nezapíše, protože je neúplný. Otevřený
+      ad-hoc pohled QQQ píše tutéž partici a jeho neúplná první minuta může bar odběru
+      přepsat (nález #1794).
     - **Rozpočet:** účel `plan_quotes` (Quote + Greeks) z rezervy ad-hoc, 6 položek. IBKR
       lines 0, minutový cyklus se nemění.
     - **Hlídač mezer** hlásí změnu množiny kontraktů bez kotace úrovní

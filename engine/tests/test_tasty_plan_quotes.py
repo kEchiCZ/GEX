@@ -204,7 +204,7 @@ def test_minuta_zapise_kotace_obou_kontraktu_a_bar_podkladu(tmp_path: Path) -> N
     assert main["expiry"] == EXPIRY
     assert (main["bid"], main["ask"], main["mid"]) == (1.38, 1.42, pytest.approx(1.40))
     assert (main["iv"], main["delta"]) == (0.30, -0.25)
-    assert main["quote_age_s"] == pytest.approx(5.05)
+    assert main["quote_age_s"] == pytest.approx(5.0)  # k závěru minuty 14:18:00
     (bar,) = h.bars()
     assert bar["ts_min"] == _ts(14, 17)
     assert (bar["open"], bar["high"], bar["low"], bar["close"]) == (700.0, 700.5, 699.5, 699.5)
@@ -336,7 +336,7 @@ def test_chybejici_kotace_je_mezera_se_starim_a_hlidac_hlasi_jen_zmenu(
     h.tick(_ts(15, 2, 0.05))
     rows = {row["strike"]: row for row in h.quotes() if row["ts_min"] == _ts(15, 1)}
     assert rows[687.0]["bid"] is None and rows[687.0]["mid"] is None
-    assert rows[687.0]["quote_age_s"] == pytest.approx(100.05)
+    assert rows[687.0]["quote_age_s"] == pytest.approx(100.0)
     assert rows[686.0]["bid"] is None and rows[686.0]["quote_age_s"] is None
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 2
@@ -372,7 +372,9 @@ def test_hlidac_pri_zavrenem_trhu_jen_info(
     h.add_plan(_plan())
     h.tick(_ts(15, 0, 10))
     caplog.clear()
-    # Kontrakty bez kotace; minuta seance, vzorek v okamžiku `now`
+    # Minuta seance s kontrakty bez kotace, vzorek v okamžiku `now`. Okno odběru zavřený trh
+    # nezasáhne, ale engine může minutu zapsat po probuzení uspaného hostitele: větev pozdního
+    # vzorku i větev kontraktů bez kotace hlásí touž úrovní `missing_data_level`
     _run(h.recorder.write_minute(_ts(15, 4), now))
     gaps = [r for r in caplog.records if "bez kotace" in r.getMessage()]
     assert [r.levelno for r in gaps] == [level]
@@ -420,6 +422,9 @@ def test_retezec_selhal_zkusi_se_znovu(tmp_path: Path, caplog: pytest.LogCapture
     h.tick(_ts(15, 0, 10))
     assert h.recorder.streamers() == set()
     assert any("řetěz z tasty selhal" in r.getMessage() for r in caplog.records)
+    h.tick(_ts(15, 0, 15))  # další pokus až za PLAN_REFRESH_S, ne každý tik
+    h.tick(_ts(15, 0, 35))
+    assert h.symbols.calls == 1
     h.symbols.fail = False
     h.tick(_ts(15, 0, 10 + PLAN_REFRESH_S))
     assert h.recorder.streamers() == {P687, P686, "QQQ"}
@@ -451,18 +456,50 @@ def test_plan_contracts_hlavni_a_stiny_bez_duplicit_platny_plan_z_9_31() -> None
 def test_quote_row_kotace_bez_smyslu_a_stare_greeks_jsou_mezera() -> None:
     clock = _Clock(_ts(15, 0, 1))
     cache = TastyChainCache(clock=clock)
+    contract = (EXPIRY, 687.0, "P")
     feed_quote(cache, P687, 1.42, 1.38)  # ask pod bidem
     feed_greeks(cache, P687, 0.30, -0.25, 0.05)
-    row = quote_row(_ts(15, 0), (EXPIRY, 687.0, "P"), cache.state(P687), _ts(15, 1))
+    row = quote_row(_ts(15, 0), contract, cache.state(P687))
     assert (row.bid, row.ask, row.mid) == (None, None, None)
     assert (row.iv, row.delta) == (0.30, -0.25)
-    later = _ts(15, 0, 1) + dt.timedelta(seconds=MAX_AGE_S + 1)
-    clock.now = later
+    assert row.quote_age_s == pytest.approx(59.0)  # k závěru minuty 15:01:00
+    clock.now = _ts(15, 0, 1) + dt.timedelta(seconds=MAX_AGE_S + 1)
     feed_quote(cache, P687, 1.38, 1.42)
-    row = quote_row(_ts(15, 1), (EXPIRY, 687.0, "P"), cache.state(P687), later)
+    row = quote_row(_ts(15, 1), contract, cache.state(P687))
     assert (row.bid, row.ask) == (1.38, 1.42)
     assert (row.iv, row.delta) == (None, None)  # Greeks starší MAX_AGE_S, bez dopočtu z mid
-    assert quote_row(_ts(15, 1), (EXPIRY, 690.0, "P"), None, later).quote_age_s is None
+    assert quote_row(_ts(15, 1), (EXPIRY, 690.0, "P"), None).quote_age_s is None
+
+
+def test_quote_row_kotace_po_zaveru_minuty_ma_zaporne_stari() -> None:
+    clock = _Clock(_ts(15, 2, 3))
+    cache = TastyChainCache(clock=clock)
+    feed_quote(cache, P687, 1.38, 1.42)
+    # Vzorek minuty 15:01 se zpozdil a kotace přišla 3 s po jejím závěru: pohled dopředu
+    # zůstane vidět v datech (F3 ho odmítne), ceny se nezahodí jako mezera
+    row = quote_row(_ts(15, 1), (EXPIRY, 687.0, "P"), cache.state(P687))
+    assert row.quote_age_s == pytest.approx(-3.0)
+    assert (row.bid, row.ask) == (1.38, 1.42)
+
+
+def test_bez_planu_cte_pg_nejvys_po_periode(tmp_path: Path) -> None:
+    h = _Harness(tmp_path, _ts(14, 15, 5))
+    reads: list[dt.date] = []
+    plans_of_day = h.plans.plans_of_day
+
+    def counted(day: dt.date) -> list[Any]:
+        reads.append(day)
+        return plans_of_day(day)
+
+    h.plans.plans_of_day = counted  # type: ignore[method-assign]
+    # Seance bez plánu (scénář none / wait_news) nebo před jeho vznikem: tik à 5 s, PG à 30 s
+    for second in range(5, 60, 5):
+        h.tick(_ts(14, 15, second))
+    assert len(reads) == 2
+    h.add_plan(_plan())
+    h.tick(_ts(14, 16, 10))
+    assert h.recorder.streamers() == {P687, P686, "QQQ"}
+    assert len(reads) == 3
 
 
 def test_rozpocet_plan_quotes_6_polozek_z_rezervy() -> None:

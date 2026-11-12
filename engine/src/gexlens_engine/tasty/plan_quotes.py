@@ -20,8 +20,9 @@ a restart enginu ho obnoví z plánu dne v PG. Víkend a svátek plán nemají
 
 Výstup za každou dokončenou minutu (štítek minuty, vzorek v jejím závěru):
 - `derived/QQQ/option_quotes/{den}.parquet` (`SnapshotWriter.write_option_quotes`): řádek na
-  kontrakt s bid, ask, mid, IV, deltou a stářím kotace. Chybějící nebo starší kotace než
-  `MAX_AGE_S` = řádek bez cen se stářím, ne forward-fill. IV a delta jen z dxFeed Greeks.
+  kontrakt s bid, ask, mid, IV, deltou a stářím kotace k závěru minuty (záporné = kotace
+  přišla až po závěru, vzorek se zpozdil). Chybějící nebo starší kotace než `MAX_AGE_S` =
+  řádek bez cen se stářím, ne forward-fill. IV a delta jen z dxFeed Greeks.
 - `derived/QQQ/bars/{den}.parquet`: bar z mid kotace podkladu vzorkovaný à `TICK_S`, zápis
   shodný s ad-hoc pohledem (`AdhocViewer.write_minute`). Objem 0, jsou to kotace, ne obchody.
   Bar minuty, ve které odběr začal, se nezapíše: neúplný vzorek by dal falešné high/low.
@@ -108,25 +109,26 @@ def _age_s(updated_at: dt.datetime | None, now: dt.datetime) -> float | None:
 
 
 def quote_row(
-    ts_min: dt.datetime,
-    contract: Contract,
-    state: TastyContractState | None,
-    now: dt.datetime,
+    ts_min: dt.datetime, contract: Contract, state: TastyContractState | None
 ) -> OptionQuoteRow:
-    """Řádek kotace kontraktu v okamžiku `now` se štítkem minuty `ts_min`; čistá funkce.
+    """Řádek kotace kontraktu se štítkem minuty `ts_min` ze stavu vzorku; čistá funkce.
 
-    Ceny jen z kotace nejvýš `MAX_AGE_S` staré s ask ≥ bid ≥ 0 a kladným ask, jinak NULL
-    (mezera se stářím, ne forward-fill). IV a delta jen z čerstvých dxFeed Greeks.
+    Stáří se měří k závěru minuty (`ts_min` + 1 min), ne k okamžiku vzorku. Kotace přijatá
+    až po závěru (vzorek se zpozdil) má stáří záporné, takže pohled dopředu je vidět v datech
+    a čtenář (F3) ho může odmítnout. Ceny jen z kotace nejvýš `MAX_AGE_S` staré s ask ≥ bid ≥ 0
+    a kladným ask, jinak NULL (mezera se stářím, ne forward-fill). IV a delta jen z čerstvých
+    dxFeed Greeks.
     """
     expiry, strike, right = contract
-    quote_age = _age_s(state.quote.updated_at, now) if state is not None else None
+    end = ts_min + MINUTE
+    quote_age = _age_s(state.quote.updated_at, end) if state is not None else None
     bid = ask = mid = iv = delta = None
     if state is not None and quote_age is not None and quote_age <= MAX_AGE_S:
         q_bid, q_ask = state.quote.bid, state.quote.ask
         if q_bid is not None and q_ask is not None and 0.0 <= q_bid <= q_ask and q_ask > 0.0:
             bid, ask, mid = q_bid, q_ask, (q_bid + q_ask) / 2.0
     if state is not None:
-        greeks_age = _age_s(state.greeks.updated_at, now)
+        greeks_age = _age_s(state.greeks.updated_at, end)
         g_iv, g_delta = state.greeks.iv, state.greeks.delta
         if (
             greeks_age is not None
@@ -198,6 +200,8 @@ class PlanQuoteRecorder:
     _underlying: str | None = field(default=None, init=False)
     #: První úplná minuta baru podkladu (minuta po začátku jeho odběru)
     _bar_since: dt.datetime | None = field(default=None, init=False)
+    #: Seance a okamžik posledního čtení plánů z PG (brzda `PLAN_REFRESH_S`)
+    _refreshed: dt.date | None = field(default=None, init=False)
     _last_refresh: dt.datetime | None = field(default=None, init=False)
     _last_minute: dt.datetime | None = field(default=None, init=False)
     _bar: _MinuteBar | None = field(default=None, init=False)
@@ -274,7 +278,7 @@ class PlanQuoteRecorder:
             self._watch(ts_min, {"minuta": f"vzorek {late:.0f} s po jejím závěru"}, now)
             return 0
         rows = [
-            quote_row(ts_min, contract, self.cache.state(streamer) if streamer else None, now)
+            quote_row(ts_min, contract, self.cache.state(streamer) if streamer else None)
             for contract, streamer in contracts
         ]
         if rows:
@@ -332,12 +336,14 @@ class PlanQuoteRecorder:
         ):
             self._release(now)
             return
+        # Perioda platí i bez odběru: den bez plánu, čas před vznikem plánu, selhaný řetěz
         if (
-            self._session == session
+            self._refreshed == session
             and self._last_refresh is not None
             and (now - self._last_refresh).total_seconds() < PLAN_REFRESH_S
         ):
             return
+        self._refreshed = session
         self._last_refresh = now
         rows = await asyncio.to_thread(self.repository.plans_of_day, session)
         if not rows:
@@ -417,7 +423,6 @@ class PlanQuoteRecorder:
         self._bar_since = None
         self._bar = None
         self._gaps = frozenset()
-        self._last_refresh = None
         if had:
             self._notify()
 

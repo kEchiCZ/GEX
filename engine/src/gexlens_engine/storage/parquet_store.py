@@ -168,9 +168,10 @@ BARS_SCHEMA = pa.schema(
 )
 
 # Minutové kotace kontraktů plánu opce QQQ (ADR-0062 K2 A, F1b #1747): vzorek stavu kotace
-# v závěru minuty `ts_min`. Chybějící nebo zastaralá kotace = řádek bez cen se stářím
-# (`quote_age_s`; NULL = kotace v tomto běhu nepřišla), ne forward-fill. IV a delta jsou jen
-# z dxFeed Greeks, dopočet z mid si udělá čtenář (měřené > odhadnuté).
+# v závěru minuty `ts_min`. `quote_age_s` = stáří kotace k závěru minuty (záporné = kotace
+# přišla až po něm, vzorek se zpozdil; NULL = kotace v tomto běhu nepřišla). Chybějící nebo
+# zastaralá kotace = řádek bez cen se stářím, ne forward-fill. IV a delta jsou jen z dxFeed
+# Greeks, dopočet z mid si udělá čtenář (měřené > odhadnuté).
 OPTION_QUOTES_SCHEMA = pa.schema(
     [
         ("ts_min", pa.timestamp("us", tz="UTC")),
@@ -515,7 +516,8 @@ class OptionQuoteRow:
     """Kotace kontraktu plánu opce QQQ v závěru minuty `ts_min` (F1b #1747).
 
     `expiry` ve tvaru YYYYMMDD jako klíč řetězu tasty. Ceny NULL = mezera (kotace chybí,
-    je starší než limit, nebo nedává smysl), `quote_age_s` řekne, jak stará byla.
+    je starší než limit, nebo nedává smysl), `quote_age_s` řekne, jak stará byla v závěru
+    minuty (záporné = přišla až po něm).
     """
 
     ts_min: dt.datetime
