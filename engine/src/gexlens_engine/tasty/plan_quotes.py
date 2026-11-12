@@ -68,6 +68,10 @@ TICK_S = 5.0
 PLAN_REFRESH_S = 30.0
 #: Po hranici minuty se zápis spustí s touto rezervou, ať vzorek leží v závěru minuty
 BOUNDARY_SLACK_S = 0.05
+#: Vzorek později po závěru minuty by nesl stav z doby po ní (pohled dopředu): minuta se
+#: nezapíše a hlídač ohlásí mezeru (uspaný hostitel, smyčka stála)
+SAMPLE_LATE_S = 2 * TICK_S
+MINUTE = dt.timedelta(minutes=1)
 
 #: Kontrakt jako klíč `ChainSymbols.by_contract`: (expiry YYYYMMDD, strike, right)
 Contract = tuple[str, float, str]
@@ -251,15 +255,29 @@ class PlanQuoteRecorder:
     async def write_minute(self, ts_min: dt.datetime, now: dt.datetime) -> int:
         """Řádky kotací a bar podkladu minuty `ts_min` (vzorek v `now`); vrací počet řádků.
 
-        Idempotentní: opakovaný zápis minuty přepíše řádky téhož klíče (upsert).
+        Idempotentní: opakovaný zápis minuty přepíše řádky téhož klíče (upsert). Vzorek víc
+        než `SAMPLE_LATE_S` po závěru minuty se nezapíše, mezeru ohlásí hlídač.
         """
         session = self._session
         if session is None or ts_min >= settle_ts(session):
             return 0
-        rows = [
-            quote_row(ts_min, contract, self.cache.state(streamer) if streamer else None, now)
+        # Minuta začátku odběru streameru je neúplná a nezapisuje se (`_since`)
+        contracts = [
+            (contract, streamer)
             for contract, streamer in sorted(self._contracts.items())
             if streamer is None or self._since.get(streamer, ts_min) <= ts_min
+        ]
+        underlying = self._underlying
+        with_bar = underlying is not None and self._since.get(underlying, ts_min) <= ts_min
+        if not contracts and not with_bar:
+            return 0
+        late = (now - (ts_min + MINUTE)).total_seconds()
+        if late > SAMPLE_LATE_S:
+            self._watch(ts_min, {"minuta": f"vzorek {late:.0f} s po jejím závěru"}, now)
+            return 0
+        rows = [
+            quote_row(ts_min, contract, self.cache.state(streamer) if streamer else None, now)
+            for contract, streamer in contracts
         ]
         if rows:
             await asyncio.to_thread(self.writer.write_option_quotes, PRODUCT, session, rows)
@@ -270,8 +288,7 @@ class PlanQuoteRecorder:
             for row in rows
             if row.bid is None
         }
-        underlying = self._underlying
-        if underlying is not None and self._since.get(underlying, ts_min) <= ts_min:
+        if with_bar:
             bar = self._bar
             if bar is not None and bar.minute == ts_min:
                 done = Bar(

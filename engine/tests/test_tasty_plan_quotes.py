@@ -381,6 +381,19 @@ def test_obchodni_den_sobota_nedele_a_pondeli_proti_patku(tmp_path: Path) -> Non
     assert h.recorder.streamers() == {P687, P686, "QQQ"}
 
 
+def test_pozdni_vzorek_minuty_se_nezapise(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    h = _Harness(tmp_path, _ts(15, 0, 10))
+    h.add_plan(_plan())
+    h.tick(_ts(15, 0, 10))
+    h.feed(_ts(15, 1, 20))
+    h.tick(_ts(15, 1, 20))
+    # Smyčka stála (uspaný hostitel): vzorek 3 min po závěru minuty 15:01 by byl pohled dopředu
+    h.feed(_ts(15, 5, 1))
+    h.tick(_ts(15, 5, 1))
+    assert h.quotes() == [] and h.bars() == []
+    assert any("vzorek 181 s po jejím závěru" in r.getMessage() for r in caplog.records)
+
+
 def test_retezec_selhal_zkusi_se_znovu(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     h = _Harness(tmp_path, _ts(15, 0, 10))
     h.add_plan(_plan())
