@@ -28,6 +28,8 @@ extended — jinak by první ad-hoc pohled vyřadil kus extended pokrytí a heal
 by je pak střídal. Z téže rezervy berou i krátké snímky řetězu QQQ pro plán opce
 (`plan_chain`, #1740, #1768): ~520 položek na ~2 min v 9:15 ET a na pár sekund
 v 9:31 ET se vejde vedle jednoho ad-hoc pohledu a extended kvůli nim nepřijde o nic.
+Rezervu čerpá i odběr kontraktů plánu a podkladu QQQ od vzniku plánu do close
+(`plan_quotes`, F1b #1747): 2 kontrakty a podklad × Quote + Greeks = 6 položek.
 """
 
 from __future__ import annotations
@@ -50,15 +52,25 @@ EVENTS_BY_PURPOSE: dict[str, tuple[str, ...]] = {
     "chain": ALL_EVENTS,  # validátor, OI fill, recorder printů, stínové CumΔ
     "adhoc": ("Quote", "Greeks", "Summary"),  # pohled bez flows (#521 C)
     "plan_chain": ("Quote", "Greeks", "Summary"),  # snímek řetězu QQQ pro plán (#1740)
+    "plan_quotes": ("Quote", "Greeks"),  # kontrakty plánu a podklad QQQ do close (#1747)
     "extended": ("Quote", "Greeks", "Summary"),  # #616: snapshoty z mid + greeks
     "wide": ("Quote", "Summary"),  # #828: jen OI; Quote drží „nemlčí"
 }
 
 #: Pořadí přidělování; ořezává se jen `TRIMMABLE`, a to zezadu seznamu
-KEEP_ORDER: tuple[str, ...] = ("underlying", "chain", "adhoc", "plan_chain", "wide", "extended")
+KEEP_ORDER: tuple[str, ...] = (
+    "underlying",
+    "chain",
+    "adhoc",
+    "plan_chain",
+    "plan_quotes",
+    "wide",
+    "extended",
+)
 TRIMMABLE: frozenset[str] = frozenset({"wide", "extended"})
-#: Účely, které čerpají rezervu ad-hoc (snímek plánu #1740 sdílí rezervu s pohledy)
-RESERVE_PURPOSES: frozenset[str] = frozenset({"adhoc", "plan_chain"})
+#: Účely, které čerpají rezervu ad-hoc (snímek plánu #1740 a odběr plánu #1747 sdílí rezervu
+#: s pohledy)
+RESERVE_PURPOSES: frozenset[str] = frozenset({"adhoc", "plan_chain", "plan_quotes"})
 
 
 @dataclass(frozen=True)

@@ -570,7 +570,7 @@ class OptionPlanMaker:
         gaps: list[str] = []
         for key, plan in plans.items():
             repriced, missing = reprice_variants(
-                _variant_keys(plan),
+                variant_keys(plan),
                 chain_1dte=one.rows,
                 expiry_1dte=expiry,
                 targets=[float(target) for target in plan["targets"]],
@@ -730,8 +730,8 @@ def _repricing_json(reasons: list[str], chain: dict[str, Any] | None) -> dict[st
     }
 
 
-def _variant_keys(plan: Mapping[str, Any]) -> tuple[VariantKey, ...]:
-    """Kontrakty variant plánu z JSON (`plan_to_json`)."""
+def variant_keys(plan: Mapping[str, Any]) -> tuple[VariantKey, ...]:
+    """Kontrakty variant plánu z JSON (`plan_to_json`); přecenění (F2c) i odběr kotací (F1b)."""
     return tuple(
         VariantKey(
             role=variant["role"],
