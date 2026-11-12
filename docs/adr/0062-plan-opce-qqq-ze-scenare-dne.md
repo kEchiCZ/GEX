@@ -439,6 +439,32 @@ Odvozeno pro F2c (zapsal agent 11. 11., #1769):
       Plán bez opce je `neobchodovat`. Sestavení bez nastaveného rozpočtu zůstane
       `neobchodovat` a „ZMĚNA“ nenese. Přecenění úplného plánu stav nemění.
 
+Odvozeno pro F1b (zapsal agent 12. 11., #1747):
+
+11. **Odběr kontraktů plánu a podkladu do close** (`tasty/plan_quotes.PlanQuoteRecorder`):
+    - **Kontrakty** jsou sjednocení variant platného plánu řádku (`effective_plan`, bod 10)
+      přes hlavní plán a oba stíny. Stíny mají stejné kontrakty, protože výběr varianty
+      (`compute/option_plan._pick_variants`) pravidla nečte (K10 B), odebírají se tedy dva.
+      Plán sestavený celý v 9:31 přepne odběr na své kontrakty do 30 s po zápisu, tedy před
+      prvním 5min close v 9:35. Plán z 9:15 bez opce kontrakty nemá a odebírá se jen podklad.
+    - **Okno** trvá od hranice 9:15 ET, když seance má plán, do `settle_ts` seance (K2 A
+      „do close“). Po close se odběr uvolní. Restart enginu ho obnoví z plánu dne v PG.
+    - **Partice `derived/QQQ/option_quotes/{den}.parquet`** (K2 A) nese `ts_min`, `expiry`,
+      `strike`, `right`, `bid`, `ask`, `mid`, `iv`, `delta` a `quote_age_s`. Štítek je minuta
+      a vzorek leží v jejím závěru, kotace se zapíše i v minutě začátku odběru.
+      - Kotace chybí, nebo je starší než 90 s (limit ad-hoc pohledu a snímků): ceny jsou NULL
+        se stářím, forward-fill se nedělá.
+      - IV a delta jsou jen z dxFeed Greeks, dopočet z mid odběr nedělá (měřené > odhadnuté).
+      - Vzorek později než 10 s po závěru minuty by byl pohled dopředu, proto se nezapíše
+        a mezeru ohlásí hlídač.
+    - **Bary podkladu** jdou z mid kotace do `derived/QQQ/bars/{den}.parquet` jako u ad-hoc
+      pohledu. Věta „bary QQQ se nesbírají“ (Odvozeno, 3. 11.) tím v okně plánu neplatí.
+      Bar minuty, ve které odběr podkladu začal, se nezapíše, protože je neúplný.
+    - **Rozpočet:** účel `plan_quotes` (Quote + Greeks) z rezervy ad-hoc, 6 položek. IBKR
+      lines 0, minutový cyklus se nemění.
+    - **Hlídač mezer** hlásí změnu množiny kontraktů bez kotace úrovní
+      `plan_chain.missing_data_level`. Při zavřeném trhu jen loguje.
+
 **Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
 nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test
 přecenění s pevným strikem je v F2c (#1769, `test_option_plan_reprice.py`), naměřený golden
