@@ -58,6 +58,7 @@ from gexlens_api.heatmap import (
 from gexlens_api.live import LiveHub, TooManyChannels, TooManySubscribers, parse_channels
 from gexlens_api.meta_repo import MetaRepository
 from gexlens_api.news_explain import ExplainOptions
+from gexlens_api.option_plan_routes import build_option_plan_router
 from gexlens_api.paper_routes import build_paper_router
 from gexlens_api.push_telegram import PushOptions, TelegramPush
 from gexlens_api.scenario_routes import build_scenario_router
@@ -101,6 +102,7 @@ from gexlens_engine.storage.gammacliff_store import gamma_cliff_table
 from gexlens_engine.storage.ivrank_store import IvRankRepository
 from gexlens_engine.storage.meta import ADHOC_CHANNEL
 from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.option_plans_store import OptionPlansRepository
 from gexlens_engine.storage.paper_store import PaperRepository
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
@@ -378,6 +380,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.data_dir,
             lambda payload: live_hub.publish("alerts", payload),
         )
+    )
+    # Plán opce QQQ ke scénáři dne (ADR-0062, #1743): tabulku plní engine, API jen čte
+    app.include_router(
+        build_option_plan_router(lambda: OptionPlansRepository(meta_repository.engine()))
     )
 
     # Paper účet (#1187 fáze 1): ordery + risk vrstva (blokuje), fily dělá engine
