@@ -1104,6 +1104,35 @@ def test_mezera_vrati_jen_usek_do_rezu_bez_rezu_i_otevreny() -> None:
     assert tracker.day_stats()["printed_volume"] == 2.0
 
 
+def test_mezera_bez_rezu_tisk_po_baru_dalsi_bar_nesparuje() -> None:
+    """#1735 (sonda ověřovatele #1618): vzorek bez řezu → bar +3 vyprázdní počítadla →
+    tisk 5 před uzávěrkou → uzávěrka bez řezu ho z pokrytí vyřadí. Další měřený bar +8
+    ho spárovat nesmí: rozklad NULL, pokrytí ani podíly se nezmění (dřív printed 5 /
+    structured 3 a podíl 1,0 s tiskem, který v pokrytí není)."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = spec("C")
+    start_measured(tracker)
+    tracker.add_volume(c, 100.0)  # založí stav
+    tracker.close_minute(GAP_TS)
+    tracker.begin_cycle()  # vzorek selhal: bez vzorku i řezu
+    assert not tracker.minute_measured
+    assert tracker.add_volume(c, 103.0) == 3.0
+    tracker.add_dx_trade(c, size=5.0, aggressor="BUY", delta=0.5)
+    assert tracker.close_minute(GAP_TS + dt.timedelta(minutes=1)).cum_delta is None
+    tracker.take_breakdowns()
+    before = tracker.day_stats()
+
+    next_cycle(tracker, True)
+    assert tracker.minute_measured
+    assert tracker.add_volume(c, 111.0) == 8.0
+    assert tracker.take_breakdowns() == {c: BarBreakdown(8.0, None, None)}
+    assert tracker.day_stats() == before
+    # Další bar už interval tisků uzavřený má: rozklad se měří
+    tracker.add_dx_trade(c, size=2.0, aggressor="BUY", delta=0.5)
+    assert tracker.add_volume(c, 115.0) == 4.0
+    assert tracker.take_breakdowns() == {c: BarBreakdown(4.0, 2.0, 2.0)}
+
+
 # ── Předání sekundáru v rollu v settle (#1460, varianta C) ────────────
 #: Roll 19. 10. 2026: settle 20:00 UTC, cyklus sekundáru D+1 po 3 minutách
 ROLL_K = dt.datetime(2026, 10, 19, 19, 58, tzinfo=dt.UTC)
