@@ -8,9 +8,11 @@ Plán je převod auto-scénáře NQ na opci QQQ 1DTE (ADR-0062 bod 2), ne vlastn
 Pravidla P1–P5 platí podle K3 A: vstup A po odmítnutí od úrovně, SL za extrémem od testu
 a okno spouště do exitu. Plán vzniká v 9:15 ET se scénářem dne z ranního snímku řetězu
 a v 9:31 ET se přecení (K4 C, F2b #1742, F2c #1769). Neúplný ranní snímek = plán v 9:15 bez
-opce a v 9:31 celý z 9:31 (K4 bod 5). Předá-li volající bary po vzniku, funkce najde spoušť
-vstupu A a ocení ji modelem (P3, P4). Kotace v minutě spouště a průběh po vstupu patří
-vyhodnocení (F3 #1748). Do JSON tabulky `option_plans` plán převede `plan_to_json` (K2 A).
+opce a v 9:31 celý z 9:31 (K4 bod 5). Přecenění úplného plánu (`reprice_variants`) drží
+kontrakty z 9:15 a mění jen kotace, IV a model v TP1/TP2. Předá-li volající bary po
+vzniku, funkce najde spoušť vstupu A a ocení ji modelem (P3, P4). Kotace v minutě spouště
+a průběh po vstupu patří vyhodnocení (F3 #1748). Do JSON tabulky `option_plans` plán
+převede `plan_to_json` (K2 A).
 
 Hlavní plán má jen vstup A a hledá ho jednou (K6 B). Stíny track recordu (K10 B) jsou
 parametry téže funkce:
@@ -290,6 +292,41 @@ class OptionPlan:
         """Hlavní slovo verdiktu plánu bez důvodu (sloupec `option_plans.verdict`)."""
         chosen = self._chosen()
         return chosen.verdict if chosen is not None else "neobchodovat"
+
+
+@dataclass(frozen=True)
+class VariantKey:
+    """Kontrakt varianty plánu z 9:15 ET, který přecenění v 9:31 ET drží (K4 C bod 2)."""
+
+    role: Literal["hlavní", "záložní"]
+    right: Literal["C", "P"]
+    strike: float
+    expiry: dt.date
+
+
+@dataclass(frozen=True)
+class RepricedVariant:
+    """Sada cen varianty z přecenění (K4 C bod 2): kotace, IV a model v TP1/TP2 se svým časem.
+
+    Strike, role a expirace jsou z plánu 9:15. Stav varianty ani R:R přecenění nenese (K12 A).
+    """
+
+    role: Literal["hlavní", "záložní"]
+    right: Literal["C", "P"]
+    strike: float
+    expiry: dt.date
+    bid: float
+    ask: float
+    iv: float
+    delta: float
+    quote_ts: dt.datetime
+    #: Model při TP1/TP2 v časech cesty (nejpozději v exitu), ocenění v okamžiku přecenění
+    at_targets: tuple[float, ...]
+    source: str = CHAIN_SOURCE
+
+    @property
+    def mid(self) -> float:
+        return (self.bid + self.ask) / 2.0
 
 
 def _cz(value: float, digits: int = 2) -> str:
@@ -861,6 +898,67 @@ def build_option_plan(
         missing=tuple(missing),
         p5=_p5(side, entries.chosen, variants[0] if variants else None, em_value),
     )
+
+
+def reprice_variants(
+    variants: Sequence[VariantKey],
+    *,
+    chain_1dte: Sequence[ChainRowLike],
+    expiry_1dte: dt.date,
+    targets: Sequence[float],
+    target_ts: Sequence[dt.datetime],
+    exit_ts: dt.datetime,
+    now: dt.datetime,
+) -> tuple[tuple[RepricedVariant, ...], tuple[str, ...]]:
+    """Přecenění kontraktů plánu z 9:15 ET řetězem 1DTE v `now` (9:31 ET, K4 C bod 2).
+
+    Vrací (sady cen, mezery). Strike, úrovně, vstup A a EM se nemění, nový je jen řádek
+    téhož kontraktu. Mezera = kontrakt bez kotace s IV a deltou (stejné kritérium jako výběr
+    varianty), jiná expirace 1DTE, nebo plán bez varianty. S mezerou se nezapíše nic
+    (K4 bod 6) a sady cen jsou prázdné. Kotace po `now` jsou chyba volajícího (pohled
+    dopředu) → `ValueError`.
+    """
+    late = [row for row in chain_1dte if row.ts_min > now]
+    if late:
+        raise ValueError(f"řetěz má {len(late)} kotací po přecenění {now:%H:%M} UTC")
+    if len(targets) != len(target_ts):
+        raise ValueError("cíle a jejich časy mají různou délku")
+    if not variants:
+        return (), ("plán z 9:15 ET nemá variantu opce",)
+    gaps: list[str] = []
+    out: list[RepricedVariant] = []
+    for key in variants:
+        name = f"{key.role} {'call' if key.right == 'C' else 'put'} {key.strike:g}"
+        if key.expiry != expiry_1dte:
+            gaps.append(f"{name}: expirace {key.expiry} ≠ 1DTE snímku {expiry_1dte}")
+            continue
+        row = next(
+            (r for r in chain_1dte if r.strike == key.strike and _quoted(r, key.right)), None
+        )
+        if row is None or row.bid is None or row.ask is None or row.iv is None:
+            gaps.append(f"{name} bez kotace s IV a delta")
+            continue
+        model = _Model(key.right, key.strike, row.iv, settle_ts(key.expiry))
+        out.append(
+            RepricedVariant(
+                role=key.role,
+                right=key.right,
+                strike=key.strike,
+                expiry=key.expiry,
+                bid=row.bid,
+                ask=row.ask,
+                iv=row.iv,
+                delta=row.delta or 0.0,
+                quote_ts=row.ts_min,
+                at_targets=tuple(
+                    model.price(target, _clamp(ts, now, exit_ts))
+                    for target, ts in zip(targets, target_ts, strict=True)
+                ),
+            )
+        )
+    if gaps:
+        return (), tuple(gaps)
+    return tuple(out), ()
 
 
 def jsonable(value: object, path: str = "plán") -> Any:

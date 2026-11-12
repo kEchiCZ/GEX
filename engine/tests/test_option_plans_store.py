@@ -3,6 +3,7 @@
 import datetime as dt
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 
 from gexlens_engine.storage.option_plans_store import OptionPlansRepository
@@ -91,3 +92,50 @@ def test_scenar_dne_bez_planu_jen_auto_tehoz_dne_a_symbolu(tmp_path: Path) -> No
         plan={"reasons": ["restart"]},
     )
     assert plans.orphan_auto_scenario("NQ", DAY) is None
+
+
+def test_preceneni_se_zapise_jednou_a_9_15_zustane(tmp_path: Path) -> None:
+    """F2c #1769: klíč `plan.repricing` jednou za plán; JSON z 9:15 zůstane (K2 A).
+
+    Sloupce se mění jen se `status` (plán sestavený celý v 9:31, vlastník 11. 11., #1738).
+    """
+    scenarios, plans = _repos(tmp_path)
+    first = _scenario(scenarios)
+    other_day = _scenario(scenarios, day=DAY + dt.timedelta(days=1))
+    morning = {"slot": "9:15", "main": {"strike": 687.0}}
+    plan_id = plans.create(
+        scenario_id=first,
+        day=DAY,
+        created_at=LABEL,
+        rules_version=1,
+        verdict="čeká",
+        status="sestaven",
+        plan=morning,
+    )
+    other_id = plans.create(
+        scenario_id=other_day,
+        day=DAY + dt.timedelta(days=1),
+        created_at=LABEL + dt.timedelta(days=1),
+        rules_version=1,
+        verdict=None,
+        status="bez opce",
+        plan={"reasons": ["restart"]},
+    )
+    assert plan_id is not None
+    assert [row.id for row in plans.plans_of_day(DAY)] == [plan_id]
+    assert plans.plans_of_day(DAY - dt.timedelta(days=1)) == []
+    repricing = {"slot": "9:31", "reasons": [], "prices": {"main": [{"strike": 687.0}]}}
+    assert plans.record_repricing(plan_id, repricing) is True
+    assert plans.record_repricing(plan_id, {"slot": "9:31", "reasons": ["druhé"]}) is False
+    (row,) = plans.plans_of_day(DAY)
+    assert row.plan == {**morning, "repricing": repricing}
+    assert (row.status, row.verdict, row.created_at) == ("sestaven", "čeká", LABEL)
+    assert other_id is not None
+    rebuilt = {"slot": "9:31", "reasons": [], "plan": {"main": {"strike": 686.0}}}
+    assert plans.record_repricing(other_id, rebuilt, status="sestaven", verdict="čeká") is True
+    assert plans.record_repricing(other_id, rebuilt, status="bez opce") is False
+    (other,) = plans.plans_of_day(DAY + dt.timedelta(days=1))
+    assert other.plan == {"reasons": ["restart"], "repricing": rebuilt}
+    assert (other.status, other.verdict) == ("sestaven", "čeká")
+    with pytest.raises(LookupError):
+        plans.record_repricing(plan_id + 99, repricing)

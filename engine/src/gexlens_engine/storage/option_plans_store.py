@@ -1,10 +1,13 @@
 """Tabulka `option_plans` (ADR-0062 K2 A, F2b #1742) — plán opce QQQ ke scénáři dne NQ.
 
 Jeden plán na auto-scénář (`scenario_id` je unikátní). Plán je point-in-time: řádek vznikne
-jednou v 9:15 ET (K4 C) a zpětně se nepřepisuje. `evaluated_at` a `result` doplní vyhodnocení
-(F3 #1748), `image_path` PNG plánu (F4b #1744). Detail plánu nese JSON `plan`
-(`compute/option_plan.plan_to_json`), sloupce slouží jen dotazům a vazbám:
-- `status` při vzniku: `sestaven` (z ranního snímku), nebo `bez opce` (důvody v `plan`);
+jednou v 9:15 ET (K4 C) a JSON z 9:15 se zpětně nepřepisuje. Přecenění v 9:31 ET (F2c #1769)
+přidá do JSON `plan` jen klíč `repricing`, jednou. `evaluated_at` a `result` doplní
+vyhodnocení (F3 #1748), `image_path` PNG plánu (F4b #1744). Detail plánu nese JSON `plan`
+(`compute/option_plan.plan_to_json`), sloupce slouží jen dotazům a vazbám a popisují aktuální
+stav plánu (vlastník 11. 11., #1738):
+- `status`: `sestaven` (z ranního snímku, nebo celý z 9:31 — pak `plan.repricing.plan`),
+  jinak `bez opce` (důvody v `plan` a `plan.repricing`);
 - `verdict`: hlavní slovo verdiktu hlavního plánu (`čeká`, `neobchodovat`, `obchodovat`),
   u plánu bez opce NULL.
 
@@ -28,11 +31,15 @@ from sqlalchemy import (
     exists,
     insert,
     select,
+    update,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from gexlens_engine.storage.scenarios_store import scenarios_table
+
+#: Klíč přecenění v 9:31 ET v JSON `plan` (F2c #1769); jeho existence = přecenění proběhlo
+REPRICING_KEY = "repricing"
 
 option_plans_metadata = MetaData()
 
@@ -143,6 +150,58 @@ class OptionPlansRepository:
         with self._engine.connect() as conn:
             row = conn.execute(stmt).mappings().first()
         return _row(row) if row is not None else None
+
+    def plans_of_day(self, day: dt.date) -> list[OptionPlanRow]:
+        """Plány seance podle `id` (jeden auto-scénář NQ za seanci = obvykle jeden plán)."""
+        stmt = (
+            select(option_plans_table)
+            .where(option_plans_table.c.day == day)
+            .order_by(option_plans_table.c.id)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [_row(row) for row in rows]
+
+    def record_repricing(
+        self,
+        plan_id: int,
+        repricing: dict[str, Any],
+        *,
+        status: str | None = None,
+        verdict: str | None = None,
+    ) -> bool:
+        """Přecenění v 9:31 ET (F2c #1769) jako klíč `plan.repricing`; False = už zapsané.
+
+        Jednou za plán (restart nevytvoří druhé). Část JSON z 9:15 ET se nemění (K2 A).
+        `status` a `verdict` přepíšou sloupce jen u plánu sestaveného celého v 9:31: sloupce
+        popisují aktuální stav plánu (vlastník 11. 11., #1738); bez `status` zůstanou z 9:15.
+        Řádek se v transakci zamkne (PG `FOR UPDATE`), kontrola a zápis jsou atomické.
+        """
+        with self._engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(option_plans_table.c.plan)
+                    .where(option_plans_table.c.id == plan_id)
+                    .with_for_update()
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                raise LookupError(f"option_plans #{plan_id} neexistuje")
+            plan = dict(row["plan"])
+            if REPRICING_KEY in plan:
+                return False
+            plan[REPRICING_KEY] = repricing
+            values: dict[str, Any] = {"plan": plan}
+            if status is not None:
+                values |= {"status": status, "verdict": verdict}
+            conn.execute(
+                update(option_plans_table)
+                .where(option_plans_table.c.id == plan_id)
+                .values(**values)
+            )
+        return True
 
     def orphan_auto_scenario(self, symbol: str, day: dt.date) -> tuple[int, dt.datetime] | None:
         """(id, created_at) auto-scénáře seance bez plánu, jinak None — restart enginu (#1742)."""

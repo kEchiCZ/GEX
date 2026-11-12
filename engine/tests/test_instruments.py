@@ -61,7 +61,7 @@ from gexlens_engine.storage.oi_archive import (
     OIMiss,
     OIRecord,
 )
-from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import LevelsRow, NetFlowRow, SnapshotWriter
 from gexlens_engine.storage.setups_store import SetupsRepository
 
 TS = dt.datetime(2026, 7, 17, 15, 0, tzinfo=dt.UTC)
@@ -819,6 +819,27 @@ async def test_two_pipelines_write_separate_symbol_partitions(
     channels = [channel for channel, _ in publisher.messages]
     assert "levels.ES.20260717" in channels
     assert "levels.NQ.20260717" in channels
+
+
+async def test_urovne_minuty_jdou_planu_opce_a_pad_prijemce_cyklus_nezastavi(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """F2c #1769: pipeline předá úrovně téže minuty; pád plánu opce sběr dat nezastaví."""
+    settings, writer, repository, publisher = env
+    nq = make_pipeline("NQ", 24000.0, settings, writer, repository, publisher)
+    received: list[LevelsRow] = []
+    nq.on_minute_levels = received.append
+    await run_minute_oi(nq, TS)
+    assert [row.ts_min for row in received] == [TS]
+    assert received[0] is nq.runtime.last_levels
+
+    def boom(row: LevelsRow) -> None:
+        raise RuntimeError("plán spadl")
+
+    nq.on_minute_levels = boom
+    later = TS + dt.timedelta(minutes=1)
+    await run_minute_oi(nq, later)
+    assert nq.runtime.last_levels is not None and nq.runtime.last_levels.ts_min == later
 
 
 async def test_pipeline_failure_does_not_stop_others(

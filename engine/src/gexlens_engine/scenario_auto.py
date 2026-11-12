@@ -167,23 +167,16 @@ def _settle_close(bars: list[dict[str, Any]]) -> float | None:
     return settle
 
 
-async def gather_context(
-    api: ApiReader,
-    symbol: str,
-    expiry: str | None,
-    session: dt.date,
-    now: dt.datetime,
+async def gather_day_levels(
+    api: ApiReader, symbol: str, session: dt.date, ctx: VerdictContext | None = None
 ) -> VerdictContext:
-    ctx = VerdictContext()
-    # Svíčky per TF → trend (stejný port jako karta Trend)
-    by_tf: dict[str, list[Candle]] = {}
-    for tf in TIMEFRAMES:
-        try:
-            payload = await api.get(f"/candles/{symbol}", {"tf": tf, "limit": CANDLE_LIMITS[tf]})
-            by_tf[tf] = _candles(payload.get("candles", []))
-        except Exception as exc:  # noqa: BLE001 — chybějící TF = „málo dat", ne pád
-            ctx.fail(f"candles {tf}", exc)
-    ctx.trend = assess_trends(by_tf) if by_tf else None
+    """ONH/ONL (dnešní bary do US openu) a PDH/PDL/PDC (poslední seance s US close).
+
+    Část `gather_context` (scénář a verdikt dne), kterou čte i plán opce QQQ sestavený
+    v 9:31 ET (F2c #1769, ADR-0062 Odvozeno: ONH/ONL od začátku seance do minuty vzniku).
+    Selhané čtení jde do `ctx.failures` („bars dnes“, „bars včera“), ne pád.
+    """
+    ctx = ctx if ctx is not None else VerdictContext()
     # Bary: dnešní (ONH/ONL do openu) a poslední uložený den před dneškem (PDH/PDL/PDC)
     try:
         today = await api.get(f"/bars/{symbol}", {"date": session.isoformat()})
@@ -228,6 +221,27 @@ async def gather_context(
             ctx.missing.append("bary včerejška: žádný uložený den")
     except Exception as exc:  # noqa: BLE001
         ctx.fail("bars včera", exc)
+    return ctx
+
+
+async def gather_context(
+    api: ApiReader,
+    symbol: str,
+    expiry: str | None,
+    session: dt.date,
+    now: dt.datetime,
+) -> VerdictContext:
+    ctx = VerdictContext()
+    # Svíčky per TF → trend (stejný port jako karta Trend)
+    by_tf: dict[str, list[Candle]] = {}
+    for tf in TIMEFRAMES:
+        try:
+            payload = await api.get(f"/candles/{symbol}", {"tf": tf, "limit": CANDLE_LIMITS[tf]})
+            by_tf[tf] = _candles(payload.get("candles", []))
+        except Exception as exc:  # noqa: BLE001 — chybějící TF = „málo dat", ne pád
+            ctx.fail(f"candles {tf}", exc)
+    ctx.trend = assess_trends(by_tf) if by_tf else None
+    await gather_day_levels(api, symbol, session, ctx)
     try:
         cliff = await api.get(f"/gammacliff/{symbol}", {"limit": 1})
         rows = cliff.get("rows") or cliff.get("history") or []
