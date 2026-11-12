@@ -1538,9 +1538,10 @@ test('minuta po mezeře v objemu je v panelu 0, per strike (#1632)', () => {
   expect(day.panels.deltaFlowCall).toEqual([0, 5, 10, 10.5])
 })
 
-test('minuta bez snapshotu (díra ve sběru #459) je mezera i pro objem (#1632)', () => {
+test('minuta bez snapshotu (díra ve sběru #459) je mezera i pro objem (#1632, #1774)', () => {
   // Minuta 1 má jen bar (opční sweep neběžel): maska objemu 0 → mezera null
-  // (#1635), minuta 2 je první po mezeře a kreslí 0, minuta 3 počítá proti 130
+  // (#1635), minuta 2 je první po časové díře a kreslí 0 (kotva 130), minuta 3
+  // je první změna po díře a jen posune referenci (A+)
   const cells: Cell[] = [100, 130, 150].map((volume, i) => ({
     ts: minuteIso([0, 2, 3][i]),
     strike: 7600,
@@ -1554,7 +1555,7 @@ test('minuta bez snapshotu (díra ve sběru #459) je mezera i pro objem (#1632)'
     ts_min: minuteIso(minuteIdx),
   }))
   const day = buildReplayDay(bundleFor(cells, bars, [], []))
-  expect(day.panels.optVolCall).toEqual([0, null, 0, 20])
+  expect(day.panels.optVolCall).toEqual([0, null, 0, 0])
 })
 
 test('rozdělaná minuta na živé hraně není mezera, finální díra ano (#1635)', () => {
@@ -1587,6 +1588,98 @@ test('catch-up minuta referenci jen posune (#518, #1602)', () => {
     catchup: [{ ts_min: minuteIso(2) }],
   })
   expect(day.panels.optVolCall).toEqual([0, 10, 0, 0, 20])
+})
+
+/** Buňky call striků po minutách osy; minuta bez řádku v `series` = jen bar (backfill). */
+function gapCells(series: Record<number, Record<number, number>>): Cell[] {
+  const cells: Cell[] = []
+  for (const [strike, values] of Object.entries(series)) {
+    for (const [minuteIdx, volume] of Object.entries(values)) {
+      cells.push({
+        ts: minuteIso(Number(minuteIdx)),
+        strike: Number(strike),
+        right: 'C',
+        volume,
+        oi: 100,
+        delta: 0.5,
+      })
+    }
+  }
+  return cells
+}
+
+const barsAt = (minuteIdxs: number[]) =>
+  minuteIdxs.map((minuteIdx) => ({ ...BARS[0], ts_min: minuteIso(minuteIdx) }))
+
+test('časová díra po spánku: objem z cache ani první čerstvý se nekreslí (#1774, A+)', () => {
+  // ES 6. 11.: spánek 08:55–15:11, sloupce díry jsou jen bary z backfillu. První
+  // sweep po probuzení (minuta 5) nese objem z cache, ATM přinese čerstvý objem
+  // v minutě 6, křídlo až dalším sweepem křídel v minutě 8 — dřív 15:12 Σ 47 981
+  const cells = gapCells({
+    7600: { 0: 240, 1: 251, 5: 251, 6: 4717, 7: 4720, 8: 4731, 9: 4735 },
+    7700: { 0: 100, 1: 100, 5: 100, 6: 100, 7: 100, 8: 180, 9: 185 },
+  })
+  const day = buildReplayDay(bundleFor(cells, barsAt([...Array(10).keys()]), [], []))
+  expect(day.panels.optVolCall).toEqual([0, 11, null, null, null, 0, 0, 3, 11, 9])
+  expect(day.panels.deltaFlowCall).toEqual([0, 5.5, null, null, null, 0, 0, 1.5, 5.5, 4.5])
+})
+
+test('ztracená minuta bez baru (skok osy) je časová díra (#1774, A+)', () => {
+  // 10. 11. 20:41 vypadla i s barem: minuta 3 nese dvě minuty a jen založí kotvu,
+  // minuta 4 je první změna a jen posune referenci, minuta 5 se měří
+  const cells = gapCells({ 7600: { 0: 100, 1: 110, 3: 130, 4: 150, 5: 160 } })
+  const day = buildReplayDay(bundleFor(cells, barsAt([0, 1, 3, 4, 5]), [], []))
+  expect(day.panels.optVolCall).toEqual([0, 10, 0, 0, 10])
+})
+
+test('restart po díře (catch-up) jen posune referenci, kotvu nezakládá (#1774, #518)', () => {
+  // Engine po restartu začíná prázdný: catch-up se nekreslí, další minuta už ano
+  const cells = gapCells({ 7600: { 0: 100, 1: 110, 4: 400, 5: 410 } })
+  const day = buildReplayDay({
+    ...bundleFor(cells, barsAt([...Array(6).keys()]), [], []),
+    catchup: [{ ts_min: minuteIso(4) }],
+  })
+  expect(day.panels.optVolCall).toEqual([0, 10, null, null, 0, 10])
+})
+
+test('živý append přes časovou díru dá totéž jako plný build (#1774, #515)', () => {
+  // Kotvy se jako maximum přepočtou z platného prefixu cache odvozenin
+  const values: Record<number, number> = { 0: 100, 1: 110, 4: 110, 5: 140, 6: 150, 7: 151 }
+  const full = buildReplayDay(bundleFor(gapCells({ 7600: values }), barsAt([0, 1, 4, 5, 6, 7]), [], [])) // prettier-ignore
+  let inputs = decodeBundle(bundleFor(gapCells({ 7600: { 0: 100 } }), barsAt([0]), [], []))
+  for (const minuteIdx of [1, 4, 5, 6, 7]) {
+    inputs = appendMinute(inputs, {
+      tsIso: minuteIso(minuteIdx),
+      rows: [{ strike: 7600, right: 'C', oi: 100, volume: values[minuteIdx], delta: 0.5 }],
+    })
+    assembleReplayDay(inputs) // naplní cache odvozenin po každé minutě
+  }
+  const live = assembleReplayDay(inputs)
+  expect(live.panels.optVolCall).toEqual([0, 10, 0, 0, 10, 1])
+  expect(live.panels.optVolCall).toEqual(full.panels.optVolCall)
+})
+
+test('pozdní snapshot sloupce jen s barem časovou díru zruší (#1774, #515)', () => {
+  // Bar minuty 2 přijde dřív než její snapshot (#135): minuta 3 je do jeho
+  // příchodu po časové díře; pozdní snapshot sloupec 2 doplní a cache se přepočte
+  const values = [100, 110, 120, 130]
+  const full = buildReplayDay(volumeBundle(values, []))
+  let inputs = decodeBundle(volumeBundle(values.slice(0, 2), []))
+  inputs = appendMinute(inputs, { tsIso: minuteIso(2), rows: [], bar: { close: 7000, volume: 3 } })
+  assembleReplayDay(inputs)
+  const row = (minuteIdx: number) => ({
+    strike: 7600,
+    right: 'C' as const,
+    oi: 100,
+    volume: values[minuteIdx],
+    delta: 0.5,
+  })
+  inputs = appendMinute(inputs, { tsIso: minuteIso(3), rows: [row(3)] })
+  expect(assembleReplayDay(inputs).panels.optVolCall).toEqual([0, 10, null, 0])
+  inputs = appendMinute(inputs, { tsIso: minuteIso(2), rows: [row(2)] })
+  const live = assembleReplayDay(inputs)
+  expect(live.panels.optVolCall).toEqual([0, 10, 10, 10])
+  expect(live.panels.optVolCall).toEqual(full.panels.optVolCall)
 })
 
 test('živý append a přepis starší minuty dají totéž jako plný build (#515, #1602)', () => {

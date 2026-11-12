@@ -659,3 +659,34 @@ async def test_otevreny_trh_nebo_v4_tendenci_pocita(prints: bool, ts: dt.datetim
     engine = _engine(prints=prints)
     with pytest.raises(AssertionError, match="runtime"):
         await engine.on_minute(ts, 7450.0, cast(EngineRuntime, _UntouchedRuntime()))
+
+
+def test_tendence_flows_po_casove_dire_vynecha_minuty_do_zmeny_objemu() -> None:
+    """#1774 (A+): po přeskočeném štítku tendence minuty vynechá, dokud objem kotvu nepřeroste."""
+    engine = _engine(prints=True)
+    runtime = QuotesRuntime()
+    call = next(iter(VOLUME_PLAN))
+    session = dt.date(2026, 11, 6)
+    start = dt.datetime(2026, 11, 6, 8, 54, tzinfo=dt.UTC)
+
+    def flows(offset: int, volume: float) -> tuple[float | None, float | None]:
+        engine._volumes.cycle(start + dt.timedelta(minutes=offset))
+        runtime.quotes = {call: quote(volume, 0.5)}
+        return engine._flows(cast(EngineRuntime, runtime), session)
+
+    assert flows(0, 240.0) == (None, None)
+    assert flows(1, 251.0) == (5.5, 0.0)
+    assert flows(377, 251.0) == (None, None)  # 15:11 objem z cache
+    assert flows(378, 4717.0) == (None, None)  # první čerstvý jen založí stav
+    assert flows(379, 4720.0) == (1.5, 0.0)
+
+
+async def test_v5_stitek_minuty_i_za_zavreneho_trhu() -> None:
+    """#1774: štítek se počítá před bránou zavřeného trhu — díru dá jen přeskočená minuta."""
+    engine = _engine(prints=True)
+    pause = dt.datetime(2026, 10, 15, 21, 30, tzinfo=dt.UTC)
+    for offset in range(3):
+        ts = pause + dt.timedelta(minutes=offset)
+        await engine.on_minute(ts, 7450.0, cast(EngineRuntime, _UntouchedRuntime()))
+    assert not engine._volumes.cycle(pause + dt.timedelta(minutes=3))
+    assert engine._volumes.cycle(pause + dt.timedelta(minutes=5))

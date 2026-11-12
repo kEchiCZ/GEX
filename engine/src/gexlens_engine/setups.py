@@ -313,8 +313,10 @@ class SetupEngine:
         Mechanika v6: přírůstek proti maximu seance (`compute/volume.py`, #1602)
         — pokles i návrat k maximu dají 0, kontrakt po cyklu bez objemu (tasty
         fallback, chybějící kotace) jen založí stav a nová seance (`session`)
-        stav maže. Cyklus = volání v minutě s bary. Mechanika v5 beze změny
-        proti poslední známé hodnotě (ADR-0057 bod 11).
+        stav maže. Cyklus = volání v minutě s bary. Po časové díře (přeskočený
+        štítek `on_minute`) zůstane kontrakt v mezeře do první změny objemu
+        (#1774, A+). Mechanika v5 beze změny proti poslední známé hodnotě
+        (ADR-0057 bod 11).
         """
         call_flow = put_flow = raw = 0.0
         if self.cumdelta_prints:
@@ -370,6 +372,9 @@ class SetupEngine:
     async def on_minute(
         self, now: dt.datetime, spot: float, bars: list[Bar], runtime: EngineRuntime
     ) -> None:
+        if self.cumdelta_prints:
+            # Štítek každé minuty, i bez barů: přeskočený = časová díra (#1774)
+            self._volumes.cycle(now)
         if not bars:
             # Dávka bez baru (#1346): minuta se přeskočí — žádná detekce, řádek
             # historie ani feature logu. Spot místo baru jsou vymyšlená data:
