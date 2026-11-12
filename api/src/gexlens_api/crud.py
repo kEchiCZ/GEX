@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from gexlens_api.alerts import AlertKind
 from gexlens_api.meta_repo import DuplicateEntryError, MetaRepository, NotFoundError
 from gexlens_api.push_telegram import PUSH_SETTING_KEYS
+from gexlens_engine.compute.option_plan import ACCOUNT_KEYS, account_value
 from gexlens_engine.runtime_settings import CONNECTION_SETTINGS, RUNTIME_SETTINGS
 from gexlens_engine.storage.meta import (
     FAILURE_MODES,
@@ -49,7 +50,14 @@ NEWS_LIST_SETTINGS = frozenset(["news_bluesky_authors", "news_reddit_subreddits"
 # alertu. Dřívější přepínače kategorií (`push_telegram_setup/ops/news/info`) už zapsat
 # nejde — zůstávají jen jako záloha pro dědění (`push_telegram.effective`).
 # `retro_pass` chybí schválně — ten si news-engine píše přímo do DB, ne přes API.
-WRITABLE_SETTINGS = ENGINE_SETTINGS | UI_SETTINGS | NEWS_LIST_SETTINGS | PUSH_SETTING_KEYS
+#
+# Parametry účtu plánu opce QQQ (ADR-0062 K2 A, #1743): kladné číslo v $, nebo `null`
+# = nenastaveno. Validuje je táž funkce, kterou je čte engine (`account_value`). Hodnota
+# do logu ani do chybové hlášky nejde, velikost účtu je soukromá (repo je veřejné).
+OPTION_PLAN_SETTINGS = frozenset(ACCOUNT_KEYS)
+WRITABLE_SETTINGS = (
+    ENGINE_SETTINGS | UI_SETTINGS | NEWS_LIST_SETTINGS | PUSH_SETTING_KEYS | OPTION_PLAN_SETTINGS
+)
 
 # Ruční přepojení datových zdrojů (#950). Klíče NEJSOU ve WRITABLE_SETTINGS —
 # hodnotu (časové razítko) generuje server, klient smí jen říct KTERÝ zdroj.
@@ -481,7 +489,16 @@ def build_router(repository: MetaRepository) -> APIRouter:
                 raise HTTPException(
                     422, f"Klíč {key!r} vyžaduje seznam neprázdných řetězců (max 200 × 300 znaků)"
                 )
-        repository.setting_put(key, setting.value)
-        return {"key": key, "value": setting.value}
+        value = setting.value
+        if key in OPTION_PLAN_SETTINGS:
+            try:
+                # Uloží se normalizovaně: číslo, nebo `null` (prázdná hodnota = nenastaveno)
+                value = account_value(value)
+            except ValueError as error:
+                raise HTTPException(
+                    422, f"Klíč {key!r} vyžaduje kladné číslo v $, nebo prázdnou hodnotu: {error}"
+                ) from None
+        repository.setting_put(key, value)
+        return {"key": key, "value": value}
 
     return router

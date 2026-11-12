@@ -39,16 +39,17 @@ import asyncio
 import contextlib
 import datetime as dt
 import logging
-import math
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from gexlens_engine.compute.dayverdict import AutoScenario, LevelInputs
 from gexlens_engine.compute.option_plan import (
+    ACCOUNT_KEY,
     CHAIN_SOURCE,
     EXIT_BEFORE_SETTLE,
     MAIN_RULES,
+    MAX_LOSS_KEY,
     RULES_VERSION,
     SHADOW_B,
     SHADOW_WICK,
@@ -57,6 +58,7 @@ from gexlens_engine.compute.option_plan import (
     PlanRules,
     VariantKey,
     _cz,
+    account_value,
     build_option_plan,
     jsonable,
     plan_to_json,
@@ -86,10 +88,6 @@ from gexlens_engine.tasty.plan_chain import (
 
 logger = logging.getLogger(__name__)
 
-#: Klíče parametrů účtu plánu v tabulce `settings` (ADR-0062 K2 A); výchozí hodnota v kódu není
-ACCOUNT_KEY = "option_plan_account_usd"
-MAX_LOSS_KEY = "option_plan_max_loss_usd"
-ACCOUNT_KEYS = (ACCOUNT_KEY, MAX_LOSS_KEY)
 #: Rezerva po limitu snímku na zápis jeho partic a naplánování úloh
 SNAPSHOT_RESERVE_S = 60.0
 #: `option_plans.status` při vzniku
@@ -138,23 +136,22 @@ def levels_deadline(session: dt.date) -> dt.datetime:
 
 
 def account_params(values: Mapping[str, object]) -> AccountParams:
-    """Parametry účtu ze `settings`; chybějící nebo nečíselná hodnota = nenastaveno (K2 A).
+    """Parametry účtu ze `settings`; chybějící nebo neplatná hodnota = nenastaveno (K2 A).
 
+    Platnost posuzuje `account_value`, táž funkce jako validace `PUT /settings` v API.
     Hodnota se do logu nepíše, velikost účtu je soukromá (repo je veřejné).
     """
 
     def number(key: str) -> float | None:
-        value = values.get(key)
-        if value is None:
+        try:
+            return account_value(values.get(key))
+        except ValueError as error:
+            logger.warning(
+                "Plán opce QQQ: Settings %s je neplatné (%s) — bere se jako nenastavené",
+                key,
+                error,
+            )
             return None
-        parsed: float | None = None
-        if isinstance(value, int | float | str) and not isinstance(value, bool):
-            with contextlib.suppress(ValueError):
-                parsed = float(value)
-        if parsed is None or not math.isfinite(parsed):
-            logger.warning("Plán opce QQQ: Settings %s není číslo — bere se jako nenastavené", key)
-            return None
-        return parsed
 
     return AccountParams(account_usd=number(ACCOUNT_KEY), max_loss_usd=number(MAX_LOSS_KEY))
 

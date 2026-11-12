@@ -31,6 +31,7 @@ from gexlens_engine.compute.cumdelta import LIVE_SOURCE, SOURCE_AGGRESSOR, CumDe
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
+from gexlens_engine.compute.option_plan import ACCOUNT_KEYS as OPTION_PLAN_ACCOUNT_KEYS
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS, SetupParams
 from gexlens_engine.compute.spot import PriceAt, SpotReading, bar_close_at, resolve_spot
@@ -108,7 +109,6 @@ from gexlens_engine.instruments import (
 from gexlens_engine.ivrank import IvRankCollector, TastyMetricsLike
 from gexlens_engine.mapstate import MapStateCollector
 from gexlens_engine.memwatch import MemoryWatch
-from gexlens_engine.option_plan_job import ACCOUNT_KEYS as OPTION_PLAN_ACCOUNT_KEYS
 from gexlens_engine.option_plan_job import OptionPlanMaker, account_params
 from gexlens_engine.paper import PaperBroker
 from gexlens_engine.probes import T9ProbeCollector
