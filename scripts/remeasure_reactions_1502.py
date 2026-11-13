@@ -15,7 +15,8 @@ uložený režim (retence levels 90 dní), zůstává uložený — nejde znovu 
 retro nově uzná za čisté, outcome nemá; doplní ho `PredictionJob.evaluate` v příštím cyklu.
 Okno nově kontaminované outcome drží, váhy ho ale čtou podle reakce (#1708). Okno, které
 nový úsek nezměří (bez barů, např. zpráva těsně před otevřením), dostane NULL jako u měření
-jobem; jeho outcome zůstává beze změny a report ho jen počítá. Váhy
+jobem a jeho outcome se smaže (vlastník 13. 11.: a) — stejný stav jako u nové zprávy, kde
+`PredictionJob.evaluate` okno bez výnosu nevyhodnotí. Váhy
 `news_weights` přepočítá news-engine v příštím cyklu reakcí (à 300 s), `news_model_stats`
 první cyklus po půlnoci UTC (`ModelStatsJob`).
 
@@ -58,7 +59,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from reclassify_news_rules import database_url, make_engine  # noqa: E402
-from sqlalchemy import and_, bindparam, exists, func, or_, select, update  # noqa: E402
+from sqlalchemy import and_, bindparam, delete, exists, func, or_, select, update  # noqa: E402
 from sqlalchemy.engine import Engine  # noqa: E402
 
 from gexlens_engine.compute.settle import trading_session_date  # noqa: E402
@@ -252,10 +253,12 @@ class Report:
     outcomes_seen: int = 0
     outcomes_flipped: Counter[int] = field(default_factory=Counter)
     outcomes_orphaned: int = 0
+    outcomes_deleted: int = 0
     outcomes_written: int = 0
     sweep_ran: bool = False
     sweep_seen: int = 0
     sweep_orphaned: int = 0
+    sweep_deleted: int = 0
     sweep_written: int = 0
     sweep_resume: int | None = None
     stopped: str = DONE
@@ -296,13 +299,15 @@ class Report:
             f"Outcomes oken {OUTCOME_WINDOWS} s přeměřeným oknem: posouzeno "
             f"{self.outcomes_seen}, jiný směr nebo správnost "
             f"{sum(self.outcomes_flipped.values())} (po oknech {flipped}), zapsáno "
-            f"{self.outcomes_written}; na okně bez výnosu (zůstávají beze změny) "
-            f"{self.outcomes_orphaned}.",
+            f"{self.outcomes_written}; na okně bez výnosu {self.outcomes_orphaned}, "
+            f"{'smazáno' if apply else 'ke smazání (dry-run nemaže)'} "
+            f"{self.outcomes_deleted if apply else self.outcomes_orphaned}.",
         ]
         if self.sweep_ran:
             lines.append(
                 f"Závěrečná kontrola outcomes podle stavu: posouzeno {self.sweep_seen}, "
-                f"zapsáno {self.sweep_written}, na okně bez výnosu {self.sweep_orphaned}."
+                f"zapsáno {self.sweep_written}, na okně bez výnosu {self.sweep_orphaned}, "
+                f"smazáno {self.sweep_deleted}."
             )
         lines.append(f"Konec běhu: {self.stopped}.")
         if self.resume_since is not None:
@@ -572,10 +577,10 @@ def current_returns(
 
 @dataclass
 class Assessment:
-    """Outcomes s přeměřeným oknem: posouzené, na okně bez výnosu a změny (`outcome_of`)."""
+    """Outcomes s přeměřeným oknem: posouzené, na okně bez výnosu (ke smazání) a změny."""
 
     seen: int = 0
-    orphaned: int = 0
+    orphans: list[dict[str, Any]] = field(default_factory=list)
     updates: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -585,7 +590,7 @@ def assess_outcomes(
     """Outcomes, kterým nový výnos okna dá jiný směr nebo správnost.
 
     Outcome okna, které ještě není přeměřené, se přeskočí. Outcome okna, které nový vzorec
-    nezměřil, zůstává beze změny a jen se počítá (`orphaned`).
+    nezměřil, patří do `orphans` (smaže se, vlastník 13. 11.: a).
     """
     result = Assessment()
     for row in rows:
@@ -594,7 +599,13 @@ def assess_outcomes(
             continue
         ret = returns[key]
         if ret is None:
-            result.orphaned += 1
+            result.orphans.append(
+                {
+                    "b_prediction": int(row.prediction_id),
+                    "b_symbol": str(row.symbol),
+                    "b_window": int(row.window_min),
+                }
+            )
             continue
         result.seen += 1
         realized, correct = outcome_of(int(row.predicted_dir), ret)
@@ -627,6 +638,19 @@ def write_outcomes(engine: Engine, updates: Sequence[dict[str, Any]], *, batch: 
     return len(updates)
 
 
+def delete_outcomes(engine: Engine, keys: Sequence[dict[str, Any]], *, batch: int) -> int:
+    """Smaže outcomes podle klíče (predikce, symbol, okno) — jen ty z `Assessment.orphans`."""
+    statement = delete(news_prediction_outcomes).where(
+        news_prediction_outcomes.c.prediction_id == bindparam("b_prediction"),
+        news_prediction_outcomes.c.symbol == bindparam("b_symbol"),
+        news_prediction_outcomes.c.window_min == bindparam("b_window"),
+    )
+    for start in range(0, len(keys), batch):
+        with engine.begin() as conn:
+            conn.execute(statement, list(keys[start : start + batch]))
+    return len(keys)
+
+
 def reevaluate_outcomes(
     engine: Engine,
     cutoff: dt.datetime,
@@ -634,11 +658,12 @@ def reevaluate_outcomes(
     batch: int,
     event_ids: Sequence[int] | None = None,
     predictions: tuple[int, int] | None = None,
-) -> tuple[Assessment, int]:
-    """Přehodnocení podle stavu (idempotentní): posouzení a počet zapsaných outcomes."""
+) -> tuple[Assessment, int, int]:
+    """Přehodnocení podle stavu (idempotentní): posouzení, zapsané a smazané outcomes."""
     rows = outcome_rows(engine, event_ids=event_ids, cutoff=cutoff, predictions=predictions)
     assessment = assess_outcomes(rows, current_returns(rows, cutoff))
-    return assessment, write_outcomes(engine, assessment.updates, batch=batch)
+    written = write_outcomes(engine, assessment.updates, batch=batch)
+    return assessment, written, delete_outcomes(engine, assessment.orphans, batch=batch)
 
 
 def sweep_outcomes(
@@ -668,12 +693,13 @@ def sweep_outcomes(
             report.sweep_resume = first
             report.stopped = f"{reason} — spusť znovu s `--sweep-from {first}`"
             return
-        assessment, written = reevaluate_outcomes(
+        assessment, written, deleted = reevaluate_outcomes(
             engine, cutoff, batch=batch, predictions=(first, first + SWEEP_PREDICTIONS)
         )
         report.sweep_seen += assessment.seen
-        report.sweep_orphaned += assessment.orphaned
+        report.sweep_orphaned += len(assessment.orphans)
         report.sweep_written += written
+        report.sweep_deleted += deleted
         first += SWEEP_PREDICTIONS
 
 
@@ -795,14 +821,15 @@ def run(
                             float(value) if value is not None else None  # type: ignore[arg-type]
                         )
         if apply:
-            assessment, count = reevaluate_outcomes(
+            assessment, count, deleted = reevaluate_outcomes(
                 engine, cutoff, batch=batch, event_ids=event_ids
             )
             report.outcomes_written += count
+            report.outcomes_deleted += deleted
         else:
             assessment = assess_outcomes(outcome_rows(engine, event_ids=event_ids), new_returns)
         report.outcomes_seen += assessment.seen
-        report.outcomes_orphaned += assessment.orphaned
+        report.outcomes_orphaned += len(assessment.orphans)
         report.outcomes_flipped.update(int(item["b_window"]) for item in assessment.updates)
         last = events[-1]
         after = (_utc(last.ts_event), int(last.id))
