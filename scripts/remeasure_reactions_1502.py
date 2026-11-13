@@ -13,7 +13,9 @@ GEX režim (`regime_min`, `regime_daily`) se mění jen o změnu spotu (#1502: s
 místo close baru minuty zprávy): kde dnešní levels se spotem dřívějšího vzorce nezopakují
 uložený režim (retence levels 90 dní), zůstává uložený — nejde znovu pořídit. Okno, které
 retro nově uzná za čisté, outcome nemá; doplní ho `PredictionJob.evaluate` v příštím cyklu.
-Okno nově kontaminované outcome drží, váhy ho ale čtou podle reakce (#1708). Váhy
+Okno nově kontaminované outcome drží, váhy ho ale čtou podle reakce (#1708). Okno, které
+nový úsek nezměří (bez barů, např. zpráva těsně před otevřením), dostane NULL jako u měření
+jobem; jeho outcome zůstává beze změny a report ho jen počítá. Váhy
 `news_weights` přepočítá news-engine v příštím cyklu reakcí (à 300 s), `news_model_stats`
 první cyklus po půlnoci UTC (`ModelStatsJob`).
 
@@ -29,8 +31,8 @@ eventů dávky se po zápisu přehodnotí podle stavu (uložený výnos fáze s 
 ≥ `--cutoff`) a zapisují se jen rozdíly. Běh, který dojde na konec („hotovo“), projde
 podle stavu i všechny outcomes (dávka přerušená mezi zápisem reakcí a outcomes). Běh končí
 po `--max-minutes` (výchozí 9) nebo když volná paměť klesne pod `--min-available-mb`;
-další spuštění pokračuje. Dry-run nic nezapisuje, a proto vypíše, odkud pokračovat
-(`--since`).
+další spuštění pokračuje, přerušená závěrečná kontrola s `--sweep-from`. Dry-run nic
+nezapisuje, a proto vypíše, odkud pokračovat (`--since`).
 
 Použití z hostitele (PG produkce na :55432, heslo z `GEXLENS_PG_PASSWORD`, nevypisuje se):
     uv run python scripts/remeasure_reactions_1502.py --cutoff <StartedAt news-engine s #1502>
@@ -62,6 +64,8 @@ from sqlalchemy.engine import Engine  # noqa: E402
 from gexlens_engine.compute.settle import trading_session_date  # noqa: E402
 from gexlens_engine.storage.sentiment import (  # noqa: E402
     REACTION_ALL_WINDOWS,
+    REACTION_DAILY_WINDOWS,
+    REACTION_WINDOWS,
     news_events,
     news_prediction_outcomes,
     news_predictions,
@@ -92,6 +96,9 @@ PHASES = ("min", "daily")
 OUTCOME_WINDOWS = REACTION_ALL_WINDOWS
 #: Okno, jehož otočené znaménko report počítá: minutová fáze 5 min, denní 1 den
 FLIP_WINDOW = {"min": 5, "daily": 1440}
+#: Okna a sloupce okna fáze širokého řádku (`vol_z` jen minutová, #998)
+PHASE_WINDOWS = {"min": REACTION_WINDOWS, "daily": REACTION_DAILY_WINDOWS}
+WINDOW_COLUMNS = {"min": ("ret", "range", "vol_z", "cont"), "daily": ("ret", "range", "cont")}
 DEFAULT_BATCH = 200
 DEFAULT_CHECK_EVERY = 97
 DEFAULT_MAX_MINUTES = 9.0
@@ -240,12 +247,17 @@ class Report:
     unmeasurable: Counter[str] = field(default_factory=Counter)
     regime_kept: Counter[str] = field(default_factory=Counter)
     regime_changed: Counter[str] = field(default_factory=Counter)
+    vanished: Counter[str] = field(default_factory=Counter)
     checked: int = 0
     outcomes_seen: int = 0
     outcomes_flipped: Counter[int] = field(default_factory=Counter)
+    outcomes_orphaned: int = 0
     outcomes_written: int = 0
+    sweep_ran: bool = False
     sweep_seen: int = 0
+    sweep_orphaned: int = 0
     sweep_written: int = 0
+    sweep_resume: int | None = None
     stopped: str = DONE
     resume_since: dt.datetime | None = None
 
@@ -272,7 +284,8 @@ class Report:
                 f"{self._total(self.flipped, phase)}, teď nejde změřit (beze změny, zůstávají "
                 f"kandidáty) {self.unmeasurable[phase]}, `regime_{phase}` jiný spotem základu "
                 f"{self.regime_changed[phase]}, ponechaný uložený (dnešní levels ho nezopakují) "
-                f"{self.regime_kept[phase]}."
+                f"{self.regime_kept[phase]}, okno bez barů nového úseku (uložený výnos → NULL) "
+                f"{self.vanished[phase]}."
             )
         flipped = ", ".join(
             f"{window}: {self.outcomes_flipped[window]}" for window in OUTCOME_WINDOWS
@@ -280,14 +293,16 @@ class Report:
         lines += [
             f"cont_5 jiné celkem {sum(self.cont_5.values())}.",
             f"Kontrola úzkého výřezu proti `load_range`: {self.checked} eventů, shoda.",
-            f"Outcomes oken {OUTCOME_WINDOWS}: posouzeno {self.outcomes_seen}, jiný směr nebo "
-            f"správnost {sum(self.outcomes_flipped.values())} (po oknech {flipped}), zapsáno "
-            f"{self.outcomes_written}.",
+            f"Outcomes oken {OUTCOME_WINDOWS} s přeměřeným oknem: posouzeno "
+            f"{self.outcomes_seen}, jiný směr nebo správnost "
+            f"{sum(self.outcomes_flipped.values())} (po oknech {flipped}), zapsáno "
+            f"{self.outcomes_written}; na okně bez výnosu (zůstávají beze změny) "
+            f"{self.outcomes_orphaned}.",
         ]
-        if apply and self.stopped == DONE:
+        if self.sweep_ran:
             lines.append(
                 f"Závěrečná kontrola outcomes podle stavu: posouzeno {self.sweep_seen}, "
-                f"zapsáno {self.sweep_written}."
+                f"zapsáno {self.sweep_written}, na okně bez výnosu {self.sweep_orphaned}."
             )
         lines.append(f"Konec běhu: {self.stopped}.")
         if self.resume_since is not None:
@@ -440,6 +455,8 @@ def compare_phase(
     """Porovná přeměřenou fázi s uloženou, doplní uložený režim; vrací řádky k zápisu.
 
     `bars` a `ahead` = výřez fáze (`load_range(t − 5 d, t + ahead)`) pro spot dřívějšího vzorce.
+    Okno, které nový úsek nezměří (bez barů), dostane NULL ve všech sloupcích okna jako
+    u měření jobem — UPDATE by jinak v řádku nechal hodnotu dřívějšího vzorce.
     """
     by_symbol = {row.symbol: row for row in measured}
     regime_key = f"regime_{phase}"
@@ -465,6 +482,12 @@ def compare_phase(
         elif kept != old.get(regime_key):
             report.regime_changed[phase] += 1
         row.values[regime_key] = kept
+        for window in PHASE_WINDOWS[phase]:
+            if f"ret_{window}" in row.values:
+                continue
+            if old.get(f"ret_{window}") is not None:
+                report.vanished[phase] += 1
+            row.values.update({f"{column}_{window}": None for column in WINDOW_COLUMNS[phase]})
         keys = [key for key in row.values if key != f"computed_at_{phase}"]
         if not all(_same(old.get(key), row.values[key]) for key in keys):
             report.changed[phase, month] += 1
@@ -527,30 +550,56 @@ def outcome_rows(
         return list(conn.execute(stmt).fetchall())
 
 
-def current_returns(rows: Iterable[Any], cutoff: dt.datetime) -> dict[tuple[int, str, int], float]:
-    """Výnos okna každého outcome z reakce, jejíž fáze okna je přeměřená od `cutoff`."""
-    returns: dict[tuple[int, str, int], float] = {}
+def current_returns(
+    rows: Iterable[Any], cutoff: dt.datetime
+) -> dict[tuple[int, str, int], float | None]:
+    """Výnos okna každého outcome z reakce, jejíž fáze okna je přeměřená od `cutoff`.
+
+    None = přeměřená fáze okno nezměřila (bez barů nového úseku).
+    """
+    returns: dict[tuple[int, str, int], float | None] = {}
     for row in rows:
         window = int(row.window_min)
         measured = getattr(row, f"computed_at_{reaction_phase(window)}")
+        if measured is None or _utc(measured) < cutoff:
+            continue
         value = getattr(row, f"ret_{window}")
-        if value is not None and measured is not None and _utc(measured) >= cutoff:
-            returns[(int(row.event_id), str(row.symbol), window)] = float(value)
+        returns[(int(row.event_id), str(row.symbol), window)] = (
+            float(value) if value is not None else None
+        )
     return returns
 
 
-def outcome_updates(
-    rows: Iterable[Any], returns: dict[tuple[int, str, int], float]
-) -> list[dict[str, Any]]:
-    """Outcomes, kterým nový výnos okna dá jiný směr nebo správnost (`outcome_of`)."""
-    updates = []
+@dataclass
+class Assessment:
+    """Outcomes s přeměřeným oknem: posouzené, na okně bez výnosu a změny (`outcome_of`)."""
+
+    seen: int = 0
+    orphaned: int = 0
+    updates: list[dict[str, Any]] = field(default_factory=list)
+
+
+def assess_outcomes(
+    rows: Iterable[Any], returns: Mapping[tuple[int, str, int], float | None]
+) -> Assessment:
+    """Outcomes, kterým nový výnos okna dá jiný směr nebo správnost.
+
+    Outcome okna, které ještě není přeměřené, se přeskočí. Outcome okna, které nový vzorec
+    nezměřil, zůstává beze změny a jen se počítá (`orphaned`).
+    """
+    result = Assessment()
     for row in rows:
-        ret = returns.get((int(row.event_id), str(row.symbol), int(row.window_min)))
+        key = (int(row.event_id), str(row.symbol), int(row.window_min))
+        if key not in returns:
+            continue
+        ret = returns[key]
         if ret is None:
-            continue  # okno teď nejde změřit nebo ještě není přeměřené — outcome se nemění
-        realized, correct = outcome_of(int(row.predicted_dir), float(ret))
+            result.orphaned += 1
+            continue
+        result.seen += 1
+        realized, correct = outcome_of(int(row.predicted_dir), ret)
         if realized != row.realized_dir or correct != bool(row.correct):
-            updates.append(
+            result.updates.append(
                 {
                     "b_prediction": int(row.prediction_id),
                     "b_symbol": str(row.symbol),
@@ -559,7 +608,7 @@ def outcome_updates(
                     "b_correct": correct,
                 }
             )
-    return updates
+    return result
 
 
 def write_outcomes(engine: Engine, updates: Sequence[dict[str, Any]], *, batch: int) -> int:
@@ -585,29 +634,47 @@ def reevaluate_outcomes(
     batch: int,
     event_ids: Sequence[int] | None = None,
     predictions: tuple[int, int] | None = None,
-) -> tuple[int, list[dict[str, Any]], int]:
-    """Přehodnocení podle stavu (idempotentní): posouzeno, změny, zapsáno."""
+) -> tuple[Assessment, int]:
+    """Přehodnocení podle stavu (idempotentní): posouzení a počet zapsaných outcomes."""
     rows = outcome_rows(engine, event_ids=event_ids, cutoff=cutoff, predictions=predictions)
-    updates = outcome_updates(rows, current_returns(rows, cutoff))
-    return len(rows), updates, write_outcomes(engine, updates, batch=batch)
+    assessment = assess_outcomes(rows, current_returns(rows, cutoff))
+    return assessment, write_outcomes(engine, assessment.updates, batch=batch)
 
 
-def sweep_outcomes(engine: Engine, cutoff: dt.datetime, report: Report, *, batch: int) -> None:
-    """Závěrečná kontrola všech outcomes podle stavu, po rozsazích id predikcí."""
+def sweep_outcomes(
+    engine: Engine,
+    cutoff: dt.datetime,
+    report: Report,
+    *,
+    batch: int,
+    start: int | None,
+    limit_reason: Callable[[], str | None],
+) -> None:
+    """Závěrečná kontrola všech outcomes podle stavu, po rozsazích id predikcí.
+
+    Hlídá tytéž limity jako přeměření; přerušená kontrola pokračuje `--sweep-from`.
+    """
+    report.sweep_ran = True
     with engine.connect() as conn:
         lowest, highest = conn.execute(
             select(func.min(news_predictions.c.id), func.max(news_predictions.c.id))
         ).one()
     if lowest is None:
         return
-    start = int(lowest)
-    while start <= int(highest):
-        seen, _, written = reevaluate_outcomes(
-            engine, cutoff, batch=batch, predictions=(start, start + SWEEP_PREDICTIONS)
+    first = max(int(lowest), start) if start is not None else int(lowest)
+    while first <= int(highest):
+        reason = limit_reason()
+        if reason is not None:
+            report.sweep_resume = first
+            report.stopped = f"{reason} — spusť znovu s `--sweep-from {first}`"
+            return
+        assessment, written = reevaluate_outcomes(
+            engine, cutoff, batch=batch, predictions=(first, first + SWEEP_PREDICTIONS)
         )
-        report.sweep_seen += seen
+        report.sweep_seen += assessment.seen
+        report.sweep_orphaned += assessment.orphaned
         report.sweep_written += written
-        start += SWEEP_PREDICTIONS
+        first += SWEEP_PREDICTIONS
 
 
 def run(
@@ -623,6 +690,7 @@ def run(
     check_every: int = DEFAULT_CHECK_EVERY,
     max_minutes: float = DEFAULT_MAX_MINUTES,
     min_available_mb: float = DEFAULT_MIN_AVAILABLE_MB,
+    sweep_from: int | None = None,
     log: Any = print,
 ) -> Report:
     if cutoff > now:
@@ -633,6 +701,15 @@ def run(
     regimes = LevelsRegimeReader(data_dir)
     report = Report()
     began = time.monotonic()
+
+    def limit_reason() -> str | None:
+        if (time.monotonic() - began) / 60 >= max_minutes:
+            return f"časový limit {max_minutes:g} min"
+        free = available_mb()
+        if free is not None and free < min_available_mb:
+            return f"volná paměť {free:.0f} MB pod {min_available_mb:g} MB"
+        return None
+
     after: tuple[dt.datetime, int] | None = None
     baseline_day: dt.date | None = None
     baselines: dict[str, Any] = {}
@@ -646,7 +723,7 @@ def run(
             break
         event_ids = [int(e.id) for e in events]
         stored = stored_rows(engine, event_ids, cutoff)
-        new_returns: dict[tuple[int, str, int], float] = {}
+        new_returns: dict[tuple[int, str, int], float | None] = {}
         for event in events:
             event_id, ts_event = int(event.id), _utc(event.ts_event)
             old_rows = stored.get(event_id, {})
@@ -710,22 +787,23 @@ def run(
                 if apply and written["daily"]:
                     job.write_daily(event_id, written["daily"])
             report.checked += checked
-            for phase_rows in written.values():
+            for phase, phase_rows in written.items():
                 for row in phase_rows:
-                    for window in OUTCOME_WINDOWS:
-                        value = row.values.get(f"ret_{window}")
-                        if value is not None:
-                            new_returns[(event_id, row.symbol, window)] = float(value)  # type: ignore[arg-type]
+                    for window in PHASE_WINDOWS[phase]:
+                        value = row.values[f"ret_{window}"]
+                        new_returns[(event_id, row.symbol, window)] = (
+                            float(value) if value is not None else None  # type: ignore[arg-type]
+                        )
         if apply:
-            seen, updates, count = reevaluate_outcomes(
+            assessment, count = reevaluate_outcomes(
                 engine, cutoff, batch=batch, event_ids=event_ids
             )
             report.outcomes_written += count
         else:
-            rows = outcome_rows(engine, event_ids=event_ids)
-            seen, updates = len(rows), outcome_updates(rows, new_returns)
-        report.outcomes_seen += seen
-        report.outcomes_flipped.update(int(item["b_window"]) for item in updates)
+            assessment = assess_outcomes(outcome_rows(engine, event_ids=event_ids), new_returns)
+        report.outcomes_seen += assessment.seen
+        report.outcomes_orphaned += assessment.orphaned
+        report.outcomes_flipped.update(int(item["b_window"]) for item in assessment.updates)
         last = events[-1]
         after = (_utc(last.ts_event), int(last.id))
         elapsed = (time.monotonic() - began) / 60
@@ -734,16 +812,16 @@ def run(
             f"… {measured_events} eventů do {after[0].isoformat()} ({elapsed:.1f} min"
             + (f", volno {free:.0f} MB)" if free is not None else ")")
         )
-        if elapsed >= max_minutes:
-            report.stopped = f"časový limit {max_minutes:g} min — spusť znovu"
-            break
-        if free is not None and free < min_available_mb:
-            report.stopped = f"volná paměť {free:.0f} MB pod {min_available_mb:g} MB — spusť znovu"
+        reason = limit_reason()
+        if reason is not None:
+            report.stopped = f"{reason} — spusť znovu"
             break
     if not apply and after is not None and report.stopped != DONE:
         report.resume_since = after[0]
     if apply and report.stopped == DONE:
-        sweep_outcomes(engine, cutoff, report, batch=batch)
+        sweep_outcomes(
+            engine, cutoff, report, batch=batch, start=sweep_from, limit_reason=limit_reason
+        )
     return report
 
 
@@ -771,6 +849,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--check-every", type=int, default=DEFAULT_CHECK_EVERY)
     parser.add_argument("--max-minutes", type=float, default=DEFAULT_MAX_MINUTES)
     parser.add_argument("--min-available-mb", type=float, default=DEFAULT_MIN_AVAILABLE_MB)
+    parser.add_argument(
+        "--sweep-from",
+        type=int,
+        help="id predikce, od kterého pokračuje přerušená závěrečná kontrola outcomes",
+    )
     args = parser.parse_args(argv)
     if not (args.data_dir / "derived").is_dir():
         raise SystemExit(f"Chybí archiv barů: {args.data_dir / 'derived'}")
@@ -788,6 +871,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         check_every=args.check_every,
         max_minutes=args.max_minutes,
         min_available_mb=args.min_available_mb,
+        sweep_from=args.sweep_from,
     )
     mode = "zápis" if args.apply else "dry-run"
     print(f"`as_of` = {now.isoformat()}, cutoff {args.cutoff.isoformat()}, režim {mode}\n")

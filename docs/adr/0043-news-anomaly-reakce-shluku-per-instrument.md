@@ -197,6 +197,10 @@ text), `reactions.py` (výchylka, baseline) a `preopen.py` (etapy, sklon, úrovn
     výnos, rozpětí a režim. Okno, které retro nově uzná za čisté, outcome nemá a doplní ho
     `PredictionJob.evaluate` v příštím cyklu; nově kontaminované outcome drží, váhy ho čtou
     podle reakce (#1708).
+  - Okno, které nový úsek M … M+w−1 nezměří (bez barů, typicky zpráva těsně před otevřením
+    nebo chybějící bar M), retro zapíše jako NULL ve všech sloupcích okna, stejně jako job.
+    Nad produkcí 13. 11. jde o 164 oken 1 a 216 oken 5 a stojí na nich 284 outcomes. Ty retro
+    nemění a report je počítá zvlášť. Naopak 111 oken 1 nově bary má.
   - Retro mění `regime_*` jen o změnu spotu: kde dnešní levels se spotem dřívějšího vzorce
     nezopakují uložený režim (levels mají retenci 90 dní, 29 526 minutových režimů je starších),
     uložený režim zůstává — data se neztratí. Změní se i režim zpráv v celou minutu (spot

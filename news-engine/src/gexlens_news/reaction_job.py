@@ -523,14 +523,8 @@ class ReactionJob:
             rows.append(PhaseRow(symbol, _phase_values(reactions, regime, now), len(reactions)))
         return rows
 
-    def write_daily(
-        self,
-        event_id: int,
-        rows: Sequence[PhaseRow],
-        *,
-        only_symbols: Collection[str] | None = None,
-    ) -> int:
-        """Zapíše denní fázi (`only_symbols` ji omezí); vrací počet oken.
+    def write_daily(self, event_id: int, rows: Sequence[PhaseRow]) -> int:
+        """Zapíše denní fázi řádků `rows` v jedné transakci; vrací počet oken.
 
         Denní fáze doplňuje řádek minutové fáze (UPDATE); řádek ještě nemusí
         existovat — historický event před pokrytím minutových barů dostává jen
@@ -539,9 +533,8 @@ class ReactionJob:
         written = 0
         with self._engine.begin() as conn:
             for row in rows:
-                if only_symbols is None or row.symbol in only_symbols:
-                    _write_phase(conn, event_id, row.symbol, row.values)
-                    written += row.windows
+                _write_phase(conn, event_id, row.symbol, row.values)
+                written += row.windows
         return written
 
     def run(self, now: dt.datetime, *, limit: int = 200) -> int:

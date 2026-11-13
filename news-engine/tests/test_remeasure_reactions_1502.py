@@ -55,8 +55,10 @@ def load_script() -> Any:
 script = load_script()
 
 
-def write_bars(data_dir: Path, symbol: str, *, drift_bp: float) -> None:
-    """Ploché bary `DAYS` dní; od baru 14:30 dne DAY (minuta zprávy) cena o `drift_bp` výš."""
+def write_bars(
+    data_dir: Path, symbol: str, *, drift_bp: float, skip: frozenset[dt.datetime] = frozenset()
+) -> None:
+    """Ploché bary `DAYS` dní bez minut `skip`; od 14:30 dne DAY (zpráva) o `drift_bp` výš."""
     directory = data_dir / "derived" / symbol / "bars"
     directory.mkdir(parents=True, exist_ok=True)
     for offset in range(DAYS):
@@ -65,6 +67,8 @@ def write_bars(data_dir: Path, symbol: str, *, drift_bp: float) -> None:
         rows = []
         for minute in range(24 * 60):
             ts = start + dt.timedelta(minutes=minute)
+            if ts in skip:
+                continue
             price = 7000.0 * (1 + drift_bp / 10_000 * (1 if ts >= MINUTE else 0))
             rows.append(
                 {
@@ -130,13 +134,14 @@ def old_row(event_id: int, symbol: str) -> dict[str, object]:
     }
 
 
-@pytest.fixture
-def env(tmp_path: Path) -> tuple[Engine, Path, int]:
+def build_env(
+    tmp_path: Path, skip: frozenset[dt.datetime] = frozenset()
+) -> tuple[Engine, Path, int]:
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
     ensure_sentiment_schema(engine)
     data_dir = tmp_path / "data"
-    write_bars(data_dir, "ES", drift_bp=20.0)
-    write_bars(data_dir, "NQ", drift_bp=0.0)
+    write_bars(data_dir, "ES", drift_bp=20.0, skip=skip)
+    write_bars(data_dir, "NQ", drift_bp=0.0, skip=skip)
     event_id = add_event(engine, NEWS, importance=1, category="TECH", title="Zpráva")
     # Mezi close základu (14:30:00) a zprávou — kontaminuje podle (a)
     add_event(engine, MINUTE + dt.timedelta(seconds=20), importance=2, category="FED", title="Jiná")
@@ -164,6 +169,11 @@ def env(tmp_path: Path) -> tuple[Engine, Path, int]:
             ],
         )
     return engine, data_dir, event_id
+
+
+@pytest.fixture
+def env(tmp_path: Path) -> tuple[Engine, Path, int]:
+    return build_env(tmp_path)
 
 
 def reaction(engine: Engine, event_id: int, symbol: str) -> dict[str, Any]:
@@ -308,3 +318,111 @@ def test_denni_vyrez_dava_totez_co_load_range(env: tuple[Engine, Path, int]) -> 
         assert last_closed_before(sliced, t) == last_closed_before(full, t)
         first = next(bar for bar in full if bar.ts >= t)
         assert next(bar for bar in sliced if bar.ts >= t) == first
+
+
+def test_okno_bez_baru_noveho_useku_dostane_null(tmp_path: Path) -> None:
+    """Chybí bar 14:30: okno 1 (bary 14:30) nejde změřit, uložená hodnota nesmí zůstat."""
+    engine, data_dir, event_id = build_env(tmp_path, skip=frozenset({MINUTE}))
+    dry = run(engine, data_dir, apply=False)
+    assert dry.vanished["min"] == 2 and dry.outcomes_orphaned == 2
+
+    report = run(engine, data_dir, apply=True)
+    assert report.vanished["min"] == 2 and report.outcomes_orphaned == 2
+    assert report.sweep_orphaned == 2
+    es = reaction(engine, event_id, "ES")
+    assert all(es[f"{column}_1"] is None for column in ("ret", "range", "vol_z", "cont"))
+    assert es["ret_5"] == pytest.approx(20.0)  # okno 5 má bary 14:31–14:34
+    # Outcome okna bez výnosu zůstává beze změny; okno 5 a 1 den se přehodnotí
+    assert outcomes(engine) == UNCHANGED | {("ES", 5): (1, True), ("ES", 1440): (1, True)}
+
+
+def test_radek_jen_s_denni_fazi_minutovou_nemeni(env: tuple[Engine, Path, int]) -> None:
+    """Řádek bez minutové fáze: retro přeměří jen denní a `market_closed` nechá být."""
+    engine, data_dir, event_id = env
+    minute_columns = {
+        f"{column}_{window}": None
+        for window in WINDOWS
+        for column in ("ret", "range", "vol_z", "cont")
+    }
+    with engine.begin() as conn:
+        conn.execute(
+            update(news_reactions).values(
+                **minute_columns, deferred_min=None, regime_min=None, computed_at_min=None
+            )
+        )
+        conn.execute(
+            update(news_events).where(news_events.c.id == event_id).values(market_closed=True)
+        )
+    report = run(engine, data_dir, apply=True)
+    assert report._total(report.rows, "min") == 0 and report._total(report.rows, "daily") == 2
+    es = reaction(engine, event_id, "ES")
+    assert all(es[key] is None for key in minute_columns) and es["computed_at_min"] is None
+    assert es["ret_1440"] == pytest.approx(20.0)
+    with engine.connect() as conn:
+        closed = conn.execute(
+            select(news_events.c.market_closed).where(news_events.c.id == event_id)
+        ).scalar_one()
+    assert closed is True
+
+
+def test_nesoulad_vyrezu_s_load_range_skonci(
+    env: tuple[Engine, Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, data_dir, event_id = env
+    original = script.DayWindow.minute_slice
+    monkeypatch.setattr(script.DayWindow, "minute_slice", lambda self, t: original(self, t)[3:])
+    with pytest.raises(SystemExit, match="Úzký výřez"):
+        run(engine, data_dir, apply=True)
+    # Nic se nezapsalo: řádek je dál z dřívějšího vzorce
+    assert reaction(engine, event_id, "ES")["ret_5"] == 0.0
+
+
+def test_zaverecna_kontrola_po_castech_pokracuje_od_predikce(
+    env: tuple[Engine, Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, data_dir, event_id = env
+    with engine.begin() as conn:
+        second = conn.execute(
+            insert(news_predictions).values(
+                event_id=event_id, predicted_dir=-1, predictor="llm", created_at=OLD
+            )
+        ).inserted_primary_key
+        assert second is not None
+        conn.execute(
+            insert(news_prediction_outcomes),
+            [
+                {
+                    "prediction_id": int(second[0]),
+                    "symbol": "ES",
+                    "window_min": window,
+                    "realized_dir": 1,
+                    "correct": False,
+                    "computed_at": OLD,
+                }
+                for window in OUTCOME_WINDOWS
+            ],
+        )
+    run(engine, data_dir, apply=True)
+    with engine.begin() as conn:
+        conn.execute(update(news_prediction_outcomes).values(realized_dir=0, correct=False))
+    monkeypatch.setattr(script, "SWEEP_PREDICTIONS", 1)
+    first = script.Report()
+    calls = iter([None, "časový limit 9 min"])
+    script.sweep_outcomes(
+        engine, CUTOFF, first, batch=10, start=None, limit_reason=lambda: next(calls)
+    )
+    assert first.sweep_written == 3 and first.sweep_resume == int(second[0])
+    assert "--sweep-from" in first.stopped
+    rest = script.Report()
+    script.sweep_outcomes(
+        engine, CUTOFF, rest, batch=10, start=first.sweep_resume, limit_reason=lambda: None
+    )
+    assert rest.sweep_written == 3 and rest.sweep_resume is None
+    with engine.connect() as conn:
+        llm = conn.execute(
+            select(news_prediction_outcomes).where(
+                news_prediction_outcomes.c.prediction_id == int(second[0])
+            )
+        ).fetchall()
+    # Predikce dolů, ES vzrostl o 20 bp: realizováno nahoru, nesprávně
+    assert {(int(row.realized_dir), bool(row.correct)) for row in llm} == {(1, False)}
