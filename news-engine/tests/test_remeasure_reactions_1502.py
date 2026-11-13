@@ -326,14 +326,35 @@ def test_okno_bez_baru_noveho_useku_dostane_null(tmp_path: Path) -> None:
     dry = run(engine, data_dir, apply=False)
     assert dry.vanished["min"] == 2 and dry.outcomes_orphaned == 2
 
+    assert dry.outcomes_deleted == 0 and outcomes(engine) == UNCHANGED
+
     report = run(engine, data_dir, apply=True)
     assert report.vanished["min"] == 2 and report.outcomes_orphaned == 2
-    assert report.sweep_orphaned == 2
+    assert report.outcomes_deleted == 2 and report.sweep_orphaned == 0
     es = reaction(engine, event_id, "ES")
     assert all(es[f"{column}_1"] is None for column in ("ret", "range", "vol_z", "cont"))
     assert es["ret_5"] == pytest.approx(20.0)  # okno 5 má bary 14:31–14:34
-    # Outcome okna bez výnosu zůstává beze změny; okno 5 a 1 den se přehodnotí
-    assert outcomes(engine) == UNCHANGED | {("ES", 5): (1, True), ("ES", 1440): (1, True)}
+    # Outcome okna bez výnosu se smaže (vlastník 13. 11.: a); okno 5 a 1 den se přehodnotí
+    expected = {key: value for key, value in UNCHANGED.items() if key[1] != 1}
+    assert outcomes(engine) == expected | {("ES", 5): (1, True), ("ES", 1440): (1, True)}
+
+    # Outcome okna bez výnosu, který zůstal (pád mezi zápisy): smaže ho závěrečná kontrola
+    with engine.begin() as conn:
+        prediction = conn.execute(select(news_predictions.c.id)).scalar_one()
+        conn.execute(
+            insert(news_prediction_outcomes).values(
+                prediction_id=prediction,
+                symbol="ES",
+                window_min=1,
+                realized_dir=0,
+                correct=False,
+                computed_at=OLD,
+            )
+        )
+    again = run(engine, data_dir, apply=True)
+    assert sum(again.events.values()) == 0
+    assert again.sweep_orphaned == 1 and again.sweep_deleted == 1
+    assert ("ES", 1) not in outcomes(engine)
 
 
 def test_radek_jen_s_denni_fazi_minutovou_nemeni(env: tuple[Engine, Path, int]) -> None:
