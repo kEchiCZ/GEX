@@ -3,9 +3,9 @@
 Jeden plán na auto-scénář (`scenario_id` je unikátní). Plán je point-in-time: řádek vznikne
 jednou v 9:15 ET (K4 C) a JSON z 9:15 se zpětně nepřepisuje. Přecenění v 9:31 ET (F2c #1769)
 přidá do JSON `plan` jen klíč `repricing`, jednou. `evaluated_at` a `result` doplní
-vyhodnocení (F3 #1748), `image_path` PNG plánu (F4b #1744). Detail plánu nese JSON `plan`
-(`compute/option_plan.plan_to_json`), sloupce slouží jen dotazům a vazbám a popisují aktuální
-stav plánu (vlastník 11. 11., #1738):
+vyhodnocení (F3 #1748), `image_path` a `image_bytes` PNG plánu (API, F4b #1744). Detail
+plánu nese JSON `plan` (`compute/option_plan.plan_to_json`), sloupce slouží jen dotazům
+a vazbám a popisují aktuální stav plánu (vlastník 11. 11., #1738):
 - `status`: `sestaven` (z ranního snímku, nebo celý z 9:31 — pak `plan.repricing.plan`),
   jinak `bez opce` (důvody v `plan` a `plan.repricing`);
 - `verdict`: hlavní slovo verdiktu hlavního plánu (`čeká`, `neobchodovat`, `obchodovat`),
@@ -33,8 +33,11 @@ from sqlalchemy import (
     String,
     Table,
     exists,
+    func,
     insert,
+    inspect,
     select,
+    text,
     update,
 )
 from sqlalchemy.engine import Engine
@@ -64,6 +67,8 @@ option_plans_table = Table(
     Column("evaluated_at", DateTime(timezone=True), nullable=True),
     Column("result", JSON, nullable=True),
     Column("image_path", String(255), nullable=True),
+    # Velikost PNG plánu: hlídání místa sčítá z DB, ne procházením stromu (#1173, #1105)
+    Column("image_bytes", Integer, nullable=False, default=0),
 )
 
 
@@ -80,6 +85,7 @@ class OptionPlanRow:
     evaluated_at: dt.datetime | None
     result: dict[str, Any] | None
     image_path: str | None
+    image_bytes: int = 0
 
 
 def effective_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -130,6 +136,7 @@ def _row(mapping: Any) -> OptionPlanRow:
         evaluated_at=_utc(mapping["evaluated_at"]),
         result=mapping["result"],
         image_path=mapping["image_path"],
+        image_bytes=int(mapping["image_bytes"] or 0),
     )
 
 
@@ -139,6 +146,18 @@ class OptionPlansRepository:
 
     def ensure_schema(self) -> None:
         option_plans_metadata.create_all(self._engine)
+        # Dopředná migrace (F4b #1744): velikost PNG k řádkům z F2b. Start enginu a první
+        # dotaz API ji můžou spustit souběžně, proto na PG `IF NOT EXISTS` (vzor fa_calibration)
+        columns = {column["name"] for column in inspect(self._engine).get_columns("option_plans")}
+        if "image_bytes" not in columns:
+            guard = " IF NOT EXISTS" if self._engine.dialect.name == "postgresql" else ""
+            with self._engine.begin() as conn:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE option_plans ADD COLUMN{guard} image_bytes INTEGER "
+                        "NOT NULL DEFAULT 0"
+                    )
+                )
 
     def create(
         self,
@@ -248,6 +267,37 @@ class OptionPlansRepository:
                 .values(**values)
             )
         return True
+
+    def set_image(self, plan_id: int, image_path: str | None, image_bytes: int) -> None:
+        """Cesta a velikost PNG plánu (F4b #1744); None = PNG smazaný úklidem, nakreslí se znovu."""
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                update(option_plans_table)
+                .where(option_plans_table.c.id == plan_id)
+                .values(image_path=image_path, image_bytes=image_bytes)
+            )
+        if result.rowcount != 1:
+            raise LookupError(f"option_plans #{plan_id} neexistuje")
+
+    def images_older_than(self, cutoff: dt.datetime) -> list[OptionPlanRow]:
+        """Plány s PNG vzniklé před `cutoff` (ruční úklid snímků, #1173)."""
+        stmt = (
+            select(option_plans_table)
+            .where(option_plans_table.c.image_path.is_not(None))
+            .where(option_plans_table.c.created_at < cutoff)
+        )
+        with self._engine.connect() as conn:
+            return [_row(row) for row in conn.execute(stmt).mappings()]
+
+    def disk_usage(self) -> dict[str, int]:
+        """Součet velikostí PNG plánů z DB — bez procházení stromu (#1105 lekce)."""
+        stmt = select(
+            func.coalesce(func.sum(option_plans_table.c.image_bytes), 0),
+            func.count(option_plans_table.c.image_path),
+        )
+        with self._engine.connect() as conn:
+            total, images = conn.execute(stmt).one()
+        return {"bytes": int(total), "images": int(images)}
 
     def orphan_auto_scenario(self, symbol: str, day: dt.date) -> tuple[int, dt.datetime] | None:
         """(id, created_at) auto-scénáře seance bez plánu, jinak None — restart enginu (#1742)."""

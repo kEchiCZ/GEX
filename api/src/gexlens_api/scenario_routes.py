@@ -10,15 +10,18 @@ uloží se do `data/scenarios/{sym}/{den}/{id}.png`; velikost snímků se
 sčítá z DB (`image_bytes`), ne procházením stromu (#1105). Nad
 `SCENARIO_DISK_LIMIT` odejde alert do zvonku (hranově, jednou za překročení)
 — mazání je ruční (`DELETE /scenarios/images?older_than_days=N`), řádky
-s výsledkem zůstávají.
+s výsledkem zůstávají. Do limitu i úklidu patří i PNG plánů QQQ ve stejném
+adresáři (`ImageDiskWatch`, F4b #1744); smazaný PNG plánu se při dalším
+dotazu nakreslí znovu.
 """
 
 import base64
 import datetime as dt
 import logging
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -59,6 +62,92 @@ class ScenarioIn(BaseModel):
     image_png_base64: str | None = None
 
 
+class ImageRow(Protocol):
+    """Řádek se snímkem na disku (scénář, plán QQQ)."""
+
+    @property
+    def id(self) -> int: ...
+    @property
+    def image_path(self) -> str | None: ...
+    @property
+    def image_bytes(self) -> int: ...
+
+
+class ImageStore(Protocol):
+    """Tabulka se snímky v `data/scenarios` (`ScenariosRepository`, `OptionPlansRepository`)."""
+
+    def ensure_schema(self) -> None: ...
+    def disk_usage(self) -> dict[str, int]: ...
+    def images_older_than(self, cutoff: dt.datetime, /) -> Sequence[ImageRow]: ...
+    def set_image(self, row_id: int, image_path: str | None, image_bytes: int, /) -> None: ...
+
+
+class ImageDiskWatch:
+    """Hlídání místa snímků v `data/scenarios` (#1173) přes všechny tabulky se snímky.
+
+    Snímky scénářů i PNG plánů QQQ (F4b #1744) mají jeden limit `SCENARIO_DISK_LIMIT`
+    a jeden hranový alert. Velikost se sčítá z DB (`image_bytes`), ne procházením stromu
+    (#1105). Úložiště se zakládají líně (app se sestavuje i bez DB, vzor routerů).
+    """
+
+    def __init__(
+        self,
+        stores: Sequence[Callable[[], ImageStore]],
+        publish_alert: Any = None,
+        *,
+        now: Any = None,
+    ) -> None:
+        self._factories = list(stores)
+        self._ready: list[ImageStore] = []
+        self._lock = threading.Lock()
+        self._publish = publish_alert
+        self._clock = now or (lambda: dt.datetime.now(dt.UTC))
+        self._over = False
+
+    def stores(self) -> list[ImageStore]:
+        """Všechna úložiště, nebo výjimka: částečný seznam by tiše vynechal jejich snímky."""
+        with self._lock:
+            if not self._ready:
+                ready: list[ImageStore] = []
+                for factory in self._factories:
+                    store = factory()
+                    store.ensure_schema()
+                    ready.append(store)
+                self._ready = ready
+            return list(self._ready)
+
+    def usage(self) -> dict[str, int]:
+        """Součet `bytes` a `images` přes všechny tabulky se snímky."""
+        total = {"bytes": 0, "images": 0}
+        for store in self.stores():
+            usage = store.disk_usage()
+            total["bytes"] += usage["bytes"]
+            total["images"] += usage["images"]
+        return total
+
+    def check(self) -> dict[str, int]:
+        """Po zápisu snímku: nad limitem alert do zvonku, jednou za překročení."""
+        usage = self.usage()
+        over = usage["bytes"] >= SCENARIO_DISK_LIMIT
+        if over and not self._over and self._publish is not None:
+            self._publish(
+                {
+                    "kind": "scenario_disk",
+                    "symbol": "*",
+                    "message": (
+                        f"Snímky scénářů zabírají {usage['bytes'] / 1e9:.2f} GB "
+                        f"({usage['images']} souborů) — pročisti v Settings → Scénáře"
+                    ),
+                    "ts": self._clock().timestamp(),
+                }
+            )
+        self._over = over
+        return usage
+
+    def reset(self) -> None:
+        self._over = False
+
+
 def _decode_png(encoded: str | None) -> bytes | None:
     if not encoded:
         return None
@@ -79,12 +168,13 @@ def build_scenario_router(
     publish_alert: Any = None,
     *,
     now: Any = None,
+    disk_watch: ImageDiskWatch | None = None,
 ) -> APIRouter:
     """`repository_factory` vrací úložiště nad sdíleným PG (lazy — DB nemusí být při
-    sestavení app dostupná); `publish_alert(payload)` = LiveHub kanál alerts."""
+    sestavení app dostupná); `publish_alert(payload)` = LiveHub kanál alerts.
+    `disk_watch` sdílí hlídání místa s PNG plánů QQQ (app), bez něj hlídá jen scénáře."""
     router = APIRouter(tags=["scenarios"])
     clock = now or (lambda: dt.datetime.now(dt.UTC))
-    over_limit = {"value": False}
     # Schéma lazy při prvním dotazu (vzor sentiment routeru): app se sestavuje
     # i bez dostupné DB (testy, start před PG)
     cache: list[ScenariosRepository] = []
@@ -96,23 +186,10 @@ def build_scenario_router(
             cache.append(repository)
         return cache[0]
 
+    watch = disk_watch or ImageDiskWatch([repo], publish_alert, now=clock)
+
     def _check_disk() -> dict[str, int]:
-        usage = repo().disk_usage()
-        over = usage["bytes"] >= SCENARIO_DISK_LIMIT
-        if over and not over_limit["value"] and publish_alert is not None:
-            publish_alert(
-                {
-                    "kind": "scenario_disk",
-                    "symbol": "*",
-                    "message": (
-                        f"Snímky scénářů zabírají {usage['bytes'] / 1e9:.2f} GB "
-                        f"({usage['images']} souborů) — pročisti v Settings → Scénáře"
-                    ),
-                    "ts": clock().timestamp(),
-                }
-            )
-        over_limit["value"] = over
-        return usage
+        return watch.check()
 
     @router.post("/scenarios", status_code=201)
     def scenario_create(payload: ScenarioIn) -> dict[str, Any]:
@@ -221,7 +298,7 @@ def build_scenario_router(
 
     @router.get("/scenarios/disk")
     def scenarios_disk() -> dict[str, Any]:
-        usage = repo().disk_usage()
+        usage = {**repo().disk_usage(), **watch.usage()}
         return {
             **usage,
             "limit_bytes": SCENARIO_DISK_LIMIT,
@@ -230,24 +307,28 @@ def build_scenario_router(
 
     @router.delete("/scenarios/images")
     def scenarios_images_delete(older_than_days: int = Query(..., ge=1, le=3650)) -> dict[str, Any]:
-        """Ruční úklid snímků starších než N dní — řádky s výsledky zůstávají."""
+        """Ruční úklid snímků starších než N dní — řádky s výsledky zůstávají.
+
+        Uklízí snímky scénářů i PNG plánů QQQ (`disk_watch`); PNG plánu se při dalším
+        dotazu nakreslí znovu z uložených hodnot."""
         cutoff = clock() - dt.timedelta(days=older_than_days)
         removed = 0
         freed = 0
-        for row in repo().images_older_than(cutoff):
-            if row.image_path:
-                target = data_dir / row.image_path
-                try:
-                    if target.exists():
-                        target.unlink()
-                except OSError:
-                    logger.exception("Snímek scénáře %s nešel smazat", target)
-                    continue
-            freed += row.image_bytes
-            removed += 1
-            repo().set_image(row.id, None, 0)
-        over_limit["value"] = False
-        return {"removed": removed, "freed_bytes": freed, **repo().disk_usage()}
+        for store in watch.stores():
+            for row in store.images_older_than(cutoff):
+                if row.image_path:
+                    target = data_dir / row.image_path
+                    try:
+                        if target.exists():
+                            target.unlink()
+                    except OSError:
+                        logger.exception("Snímek %s nešel smazat", target)
+                        continue
+                freed += row.image_bytes
+                removed += 1
+                store.set_image(row.id, None, 0)
+        watch.reset()
+        return {"removed": removed, "freed_bytes": freed, **repo().disk_usage(), **watch.usage()}
 
     @router.get("/scenarios/{scenario_id}/image")
     def scenario_image(scenario_id: int) -> FileResponse:

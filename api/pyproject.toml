@@ -11,6 +11,8 @@ dependencies = [
     "pyarrow>=18",
     "uvicorn[standard]>=0.32",
     "httpx>=0.28",
+    # Serverové PNG plánu QQQ a záložní graf NQ jen v krátkém podprocesu (ADR-0062 K1 A, #1744)
+    "matplotlib>=3.11",
 ]
 
 [tool.uv.sources]

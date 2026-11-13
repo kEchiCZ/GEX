@@ -4,7 +4,7 @@ import datetime as dt
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 
 from gexlens_engine.storage.option_plans_store import OptionPlansRepository, effective_plan
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -221,3 +221,41 @@ def test_platny_plan_sestaveny_v_9_31_a_plan_bez_opce() -> None:
     none = effective_plan({**NO_OPTION_915, "repricing": _repricing(reasons=gap)})
     assert (none["slot"], none["main"], none["shadows"]) == ("9:15", None, {})
     assert (none["reasons"], none["repricing_reasons"]) == (NO_OPTION_915["reasons"], gap)
+
+
+def test_migrace_image_bytes_k_radkum_z_f2b_a_snimky_planu(tmp_path: Path) -> None:
+    """F4b #1744: tabulka z F2b bez `image_bytes` dostane sloupec, starý řádek má 0."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'old.sqlite'}")
+    with db.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE option_plans (id INTEGER PRIMARY KEY, scenario_id INTEGER NOT NULL "
+                "UNIQUE, day DATE NOT NULL, created_at DATETIME NOT NULL, rules_version INTEGER "
+                "NOT NULL, verdict VARCHAR(16), status VARCHAR(16) NOT NULL, plan JSON NOT NULL, "
+                "evaluated_at DATETIME, result JSON, image_path VARCHAR(255))"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO option_plans (scenario_id, day, created_at, rules_version, status, "
+                "plan) VALUES (29, '2026-11-02', '2026-11-02 14:15:00.000000', 1, 'sestaven', '{}')"
+            )
+        )
+    plans = OptionPlansRepository(db)
+    plans.ensure_schema()
+    plans.ensure_schema()  # druhý start: migrace se neopakuje
+    assert "image_bytes" in {column["name"] for column in inspect(db).get_columns("option_plans")}
+    old = plans.get_for_scenario(29)
+    assert old is not None and (old.image_path, old.image_bytes) == (None, 0)
+    assert plans.disk_usage() == {"bytes": 0, "images": 0}
+
+    plans.set_image(old.id, "scenarios/QQQ/2026-11-02/plan-1-0915.png", 4321)
+    stored = plans.get(old.id)
+    assert stored is not None and stored.image_bytes == 4321
+    assert plans.disk_usage() == {"bytes": 4321, "images": 1}
+    assert [row.id for row in plans.images_older_than(LABEL + dt.timedelta(days=1))] == [old.id]
+    assert plans.images_older_than(LABEL) == []
+    plans.set_image(old.id, None, 0)
+    assert plans.disk_usage() == {"bytes": 0, "images": 0}
+    with pytest.raises(LookupError):
+        plans.set_image(999, None, 0)
