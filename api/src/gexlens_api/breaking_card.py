@@ -14,7 +14,8 @@ nekopíruje.
   bere i rozpracovaná minuta, kterou engine zapisuje každý cyklus; s `at`
   (replay) jen uzavřené minuty, aby poslední minuta nenesla budoucí cenu.
 * **Kontaminace K1** jako `ReactionJob._contaminating`: jiný event s importance
-  ≥ 2 a jinou kategorií v okně, známý v `at`.
+  ≥ 2 a jinou kategorií v měřeném úseku od close základu do konce okna (#1502 = a),
+  známý v `at`.
 """
 
 import bisect
@@ -36,7 +37,7 @@ from gexlens_engine.storage.sentiment import news_event_sources, news_events
 from gexlens_news import breaking
 from gexlens_news.bars import BarsRepository
 from gexlens_news.reaction_job import CLOSURE_LOOKBACK_DAYS, CONTAMINATION_MIN_IMPORTANCE
-from gexlens_news.reactions import SIGMA_LOOKBACK_MIN, Bar, contaminates
+from gexlens_news.reactions import SIGMA_LOOKBACK_MIN, Bar, contaminates, last_closed_before
 
 SYMBOLS = ("ES", "NQ")
 #: Partic barů v paměti: 2 symboly × (okno karty + základ až 5 dní zpět + kraje)
@@ -225,9 +226,12 @@ def breaking_card(
     if selected:
         first = min(item[1] for item in selected)
         last = max(item[1] for item in selected)
-        others = _contaminating(engine, first, last + _BARS_AFTER, moment)
         series = {symbol: _series(cache.bars, symbol, first, moment, live) for symbol in SYMBOLS}
         stamps = {symbol: [bar.ts for bar in bars] for symbol, bars in series.items()}
+        # Kontaminuje i event mezi základem a zprávou (#1502 = a): kandidáti od
+        # close nejstaršího základu, tedy základu nejstarší zprávy
+        lower = min((_base_close(bars, first) for bars in series.values()), default=first)
+        others = _contaminating(engine, lower, last + _BARS_AFTER, moment)
         for row, ts_event, ts_ingested, tier in selected:
             items.append(
                 _item(
@@ -256,13 +260,13 @@ def _series(
 ) -> list[Bar]:
     """Bary symbolu od hodiny před nejstarší zprávou do `moment`.
 
-    Základ dopadu je poslední bar před zprávou až 5 dní zpět (jako `ReactionJob`).
-    Hlubší historii je potřeba dočíst jen tehdy, když řada nemá bar před nejstarší
-    zprávou (zpráva těsně po zavření). Pětidenní řada pokaždé by odpověď
-    zpomalila ~3× (měřeno 10. 10.).
+    Základ dopadu je poslední uzavřený bar před zprávou až 5 dní zpět (jako
+    `ReactionJob`). Hlubší historii je potřeba dočíst jen tehdy, když řada nemá
+    uzavřený bar před nejstarší zprávou (zpráva těsně po zavření). Pětidenní řada
+    pokaždé by odpověď zpomalila ~3× (měřeno 10. 10.).
     """
     series = _visible(bars.load_range(symbol, first - _SIGMA_BEFORE, moment), moment, live)
-    if not series or series[0].ts >= first:
+    if not series or series[0].ts + _MINUTE > first:
         series = _visible(bars.load_range(symbol, first - _BASE_LOOKBACK, moment), moment, live)
     return series
 
@@ -277,22 +281,29 @@ def _visible(series: Sequence[Bar], moment: dt.datetime, live: bool) -> list[Bar
 def _around(
     series: Sequence[Bar], stamps: Sequence[dt.datetime], ts_event: dt.datetime
 ) -> list[Bar]:
-    """Bary pro dopad jedné zprávy: hodina před ní (σ), poslední bar před ní (základ,
-    i přes zavření) a okno karty. Celá řada by výpočet zpomalila ~10× (měřeno 10. 10.)."""
-    before = bisect.bisect_left(stamps, ts_event)
-    start = min(bisect.bisect_left(stamps, ts_event - _SIGMA_BEFORE), max(0, before - 1))
+    """Bary pro dopad jedné zprávy: hodina před ní (σ), poslední uzavřený bar před ní
+    (základ, i přes zavření) a okno karty. Celá řada by výpočet zpomalila ~10× (měřeno
+    10. 10.)."""
+    base = bisect.bisect_right(stamps, ts_event - _MINUTE) - 1
+    start = min(bisect.bisect_left(stamps, ts_event - _SIGMA_BEFORE), max(0, base))
     end = bisect.bisect_left(stamps, ts_event + _BARS_AFTER)
     return list(series[start:end])
 
 
+def _base_close(bars: Sequence[Bar], ts_event: dt.datetime) -> dt.datetime:
+    """Close základu zprávy = začátek měřeného úseku; bez základu čas zprávy."""
+    base = last_closed_before(bars, ts_event)
+    return base.ts + _MINUTE if base is not None else ts_event
+
+
 def _contaminating(
-    engine: Engine, start: dt.datetime, end: dt.datetime, moment: dt.datetime
+    engine: Engine, lower: dt.datetime, end: dt.datetime, moment: dt.datetime
 ) -> list[tuple[dt.datetime, str | None]]:
-    """Kandidáti kontaminace K1 v rozsahu karty, známí v `moment` (point-in-time)."""
+    """Kandidáti kontaminace K1 v [lower, end], známí v `moment` (point-in-time)."""
     with engine.connect() as conn:
         rows = conn.execute(
             select(news_events.c.ts_event, news_events.c.category).where(
-                news_events.c.ts_event > start,
+                news_events.c.ts_event >= lower,
                 news_events.c.ts_event <= end,
                 news_events.c.ts_ingested <= moment,
                 news_events.c.importance >= CONTAMINATION_MIN_IMPORTANCE,
@@ -333,26 +344,29 @@ def _item(
         ),
     ]
     window_end = ts_event + dt.timedelta(minutes=breaking.CARD_WINDOW_MIN)
-    contaminating = [
-        ts
-        for ts, category in others
-        if ts_event < ts < window_end and contaminates(row.category, category)
-    ]
     closed = is_market_closed(ts_event)
     window_closed = is_market_closed(window_end)
-    impact = {
-        symbol: asdict(
+    impact: dict[str, dict[str, Any]] = {}
+    for symbol, bars in series.items():
+        around = _around(bars, stamps[symbol], ts_event)
+        # Úsek okna dořízne `reactions.reaction_contaminated`; tady jen kandidáti
+        # od close základu symbolu, aby klíč cache dopadu nesl jen relevantní eventy
+        lower = _base_close(around, ts_event)
+        contaminating = [
+            ts
+            for ts, category in others
+            if lower <= ts < window_end and ts != ts_event and contaminates(row.category, category)
+        ]
+        impact[symbol] = asdict(
             cache.impact(
                 ts_event,
-                _around(bars, stamps[symbol], ts_event),
+                around,
                 at=moment,
                 other_event_ts=contaminating,
                 market_closed=closed,
                 window_closed=window_closed,
             )
         )
-        for symbol, bars in series.items()
-    }
     return {
         "id": int(row.id),
         "ts_event": ts_event.isoformat(),

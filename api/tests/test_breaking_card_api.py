@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import insert
 
+from gexlens_api.breaking_card import _around
 from gexlens_api.main import create_app
 from gexlens_api.meta_repo import MetaRepository
 from gexlens_engine.config import Settings
@@ -315,3 +316,56 @@ def test_live_mode_includes_minute_in_progress(client: TestClient, tmp_path: Pat
     (expected,) = compute_reactions(ARTICLE_TS, with_minute, windows=(5,))
     assert live_article["ret_bp"] == pytest.approx(expected.ret_bp)
     assert replay_article["ret_bp"] < live_article["ret_bp"]  # cena v okně roste
+
+
+@pytest.mark.parametrize(
+    ("offset_s", "expected"),
+    [
+        (-15, True),  # 14:30:05: po close základu (14:30:00), před zprávou
+        (-30, False),  # 14:29:50: před close základu, mimo měřený úsek
+    ],
+)
+def test_card_contamination_covers_span_from_base_close(
+    tmp_path: Path, offset_s: int, expected: bool
+) -> None:
+    """Kontaminace karty hlídá měřený úsek od close základu do konce okna (#1502 = a)."""
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}",
+    )
+    _write_bars(settings.data_dir)
+    app = create_app(settings)
+    engine = MetaRepository(settings).engine()
+    ensure_sentiment_schema(engine)
+    second = dt.timedelta(seconds=1)
+    other = FED_TS + dt.timedelta(seconds=offset_s)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_events),
+            [
+                _event(1, FED_TS, FED_TS + second, source="alpaca", tier=2, category="FED",
+                       importance=3, title="Fed's Powell says rate cuts are not imminent"),
+                _event(2, other, other + second, source="rss_news", tier=3,
+                       category="GEOPOLITICS", importance=2,
+                       title="Iran seizes tanker in Strait of Hormuz"),
+            ],
+        )  # fmt: skip
+    body = TestClient(app).get("/news/breaking", params={"at": AT.isoformat()}).json()
+    fed = next(item for item in body["items"] if item["id"] == 1)
+    assert fed["impact"]["ES"]["state"] == "fixed"
+    assert fed["impact"]["ES"]["contaminated"] is expected
+    assert fed["impact"]["NQ"]["contaminated"] is expected
+
+
+def test_around_keeps_base_bar_for_news_inside_first_minute_after_open() -> None:
+    """Zpráva v 17:00:30 CT: bar 17:00 ještě není uzavřený, základ je páteční bar (#1502)."""
+    friday = dt.datetime(2026, 10, 9, 20, 59, tzinfo=dt.UTC)
+    series = [Bar(friday, 5000.0, 5000.0, 5000.0, 5000.0, 1.0)] + [
+        Bar(SUNDAY_OPEN + dt.timedelta(minutes=n), 5010.0, 5010.0, 5010.0, 5010.0, 1.0)
+        for n in range(8)
+    ]
+    news = SUNDAY_OPEN + dt.timedelta(seconds=30)
+    around = _around(series, [bar.ts for bar in series], news)
+    assert around[0].ts == friday
+    (reaction,) = compute_reactions(news, around, windows=(5,))
+    assert reaction.ret_bp == pytest.approx(20.0)  # (5010 − 5000) / 5000, gap přes víkend

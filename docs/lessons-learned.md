@@ -372,6 +372,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-11-13 — close baru minuty zprávy jako „cena před zprávou“ (#1502).** Bar nese `ts` začátku
+  minuty, ale close je cena na jejím konci. `_last_before(t)` bral bar s `ts < t`, takže u zprávy
+  v M + s měl základ cenu z M + 1, tedy po zprávě, a okno začínalo až barem M+1. Uprostřed minuty
+  bylo 89 % reakcí. Release ISM ve 14:00:00 a headline o něm ve 14:00:40: headline měl skok už
+  v základu a vyšel −18,6 bp jako čistý vzorek místo +81,8 bp. Výchylka (ADR-0043) a výnos releasu
+  (ADR-0044) přitom měřily správně od celé minuty, takže dvě cesty k téže veličině se lišily.
+  → U minutových barů je „před okamžikem t“ jen bar uzavřený do t (`ts + 1 min ≤ t`). Než se
+  porovná čas s `ts` baru, rozhodnout, jestli jde o začátek, nebo konec jeho intervalu. Když se
+  posune začátek měření, posouvá se i úsek, který hlídá kontaminace, zralost (provizorní poslední
+  bar, ADR-0005) a spot pro režim.
 - **2026-11-12 — po probuzení ze spánku vypadal objem z cache jako čerstvý (#1774).** Mezera
   přírůstku byla definovaná jen po kontraktu: kontrakt, který v minulém cyklu objem nesl, mezeru
   nemá. Po spánku 6. 11. 08:55–15:11 UTC ale minulý cyklus byl 6 h starý a první sweep vrátil

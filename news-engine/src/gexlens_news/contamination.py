@@ -25,13 +25,23 @@ from sqlalchemy.engine import Connection, Engine
 
 from gexlens_engine.storage.sentiment import news_events, news_reactions
 from gexlens_news.bars import BARS_SUBDIR
-from gexlens_news.reaction_job import CLOSURE_LOOKAHEAD_DAYS, CONTAMINATION_MIN_IMPORTANCE
-from gexlens_news.reactions import DEFAULT_WINDOWS, contaminates, window_contaminated
+from gexlens_news.reaction_job import (
+    CLOSURE_LOOKAHEAD_DAYS,
+    CLOSURE_LOOKBACK_DAYS,
+    CONTAMINATION_MIN_IMPORTANCE,
+)
+from gexlens_news.reactions import (
+    DEFAULT_WINDOWS,
+    contaminates,
+    reaction_contaminated,
+    window_bars_start,
+)
 
 logger = logging.getLogger(__name__)
 
 #: Rozsah kontaminujících eventů po začátku oken — jako `ReactionJob._contaminating`
 CONTAMINATION_SPAN = dt.timedelta(minutes=max(DEFAULT_WINDOWS) + 1)
+_MINUTE = dt.timedelta(minutes=1)
 #: Hodinový přepočet (#1522 D): drift K1 je vidět nejvýš hodinu
 CONTAMINATION_REFRESH_EVERY = dt.timedelta(hours=1)
 #: Jak daleko zpět. Pozdní příjem je hodiny až dny (Finnhub medián ~11 h,
@@ -44,7 +54,8 @@ def _utc(value: dt.datetime) -> dt.datetime:
 
 
 class FirstBars:
-    """První obchodovaný bar ≥ čas per symbol — jen sloupec `ts_min`, cache per partice."""
+    """Časy barů per symbol (jen sloupec `ts_min`, cache per partice): první obchodovaný
+    bar po zprávě, základ a poslední bar okna — reklasifikace nepotřebuje ceny."""
 
     def __init__(self, data_dir: Path) -> None:
         self._derived = data_dir / "derived"
@@ -77,6 +88,29 @@ class FirstBars:
             index = bisect.bisect_left(stamps, moment)
             if index < len(stamps) and stamps[index] <= limit:
                 best = stamps[index] if best is None else min(best, stamps[index])
+            day += dt.timedelta(days=1)
+        return best
+
+    def last_closed_before(self, symbol: str, moment: dt.datetime) -> dt.datetime | None:
+        """`ts` základu: poslední bar uzavřený nejpozději v `moment` (jako
+        `reactions.last_closed_before`), až přes celé zavření (`ReactionJob`)."""
+        return self._latest(
+            symbol, moment - _MINUTE, moment - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS)
+        )
+
+    def last_in(self, symbol: str, lo: dt.datetime, hi: dt.datetime) -> dt.datetime | None:
+        """`ts` posledního baru v [lo, hi) — poslední bar okna; None = okno bez baru."""
+        return self._latest(symbol, hi - dt.timedelta(microseconds=1), lo)
+
+    def _latest(self, symbol: str, limit: dt.datetime, floor: dt.datetime) -> dt.datetime | None:
+        """Nejpozdější bar v [floor, limit]; maximum přes partice rozsahu (#1002)."""
+        best: dt.datetime | None = None
+        day = floor.date() - dt.timedelta(days=1)
+        while day <= limit.date() + dt.timedelta(days=1):
+            stamps = self._stamps(symbol, day)
+            index = bisect.bisect_right(stamps, limit) - 1
+            if index >= 0 and stamps[index] >= floor:
+                best = stamps[index] if best is None else max(best, stamps[index])
             day += dt.timedelta(days=1)
         return best
 
@@ -113,6 +147,22 @@ class Contaminators:
             if contaminates(category, self.categories[index])
         ]
 
+    def since(
+        self, lower: dt.datetime, category: str | None, start: dt.datetime
+    ) -> list[dt.datetime]:
+        """Kontaminující eventy v [lower, začátek + 61 min] — jako `ReactionJob._contaminating`.
+
+        `lower` = close základu (kontaminuje i event mezi základem a zprávou,
+        #1502 = a); měřený úsek okna z nich vybere `reaction_contaminated`.
+        """
+        lo = bisect.bisect_left(self.times, lower)
+        hi = bisect.bisect_right(self.times, start + CONTAMINATION_SPAN)
+        return [
+            self.times[index]
+            for index in range(lo, hi)
+            if contaminates(category, self.categories[index])
+        ]
+
 
 @dataclass(frozen=True)
 class ContaminationChange:
@@ -133,8 +183,10 @@ def recompute_contamination(
 
     Okno bez měření (NULL) zůstává NULL. Odložený řádek začíná uloženým
     otevřením po uzavírce (`closure_open_ts`, #1574), starší řádek bez něj
-    prvním barem z archivu; bez obojího (partice mezitím chybí) se nemění —
-    nic se nehádá. Kontaminuje zpráva v (zpráva, začátek + okno) (#1679).
+    prvním barem z archivu; kontaminuje zpráva v (zpráva, začátek + okno)
+    (#1679). Neodložený řádek hlídá měřený úsek od close základu do konce
+    posledního baru okna (#1502 = a), oba z časů barů archivu. Bez potřebných
+    barů (partice mezitím chybí) se řádek ani okno nemění — nic se nehádá.
     """
     changes: list[ContaminationChange] = []
     for row in reactions:
@@ -142,28 +194,47 @@ def recompute_contamination(
         if event is None:
             continue
         ts_event, category = event
+        symbol = str(row.symbol)
         start = ts_event
         if row.deferred_min:
             opened = row.closure_open_ts
             first_bar = (
                 _utc(opened)
                 if opened is not None
-                else first_bars.first_at_or_after(str(row.symbol), ts_event)
+                else first_bars.first_at_or_after(symbol, ts_event)
             )
             if first_bar is None:
                 continue
             start = first_bar
-        others = contaminators.around(ts_event, category, start)
+        deferred = start != ts_event
+        # Odložená reakce úsek od základu nepotřebuje (`window_contaminated`)
+        base_ts = ts_event if deferred else first_bars.last_closed_before(symbol, ts_event)
+        if base_ts is None:
+            continue
+        others = contaminators.since(ts_event if deferred else base_ts + _MINUTE, category, start)
+        first_minute = window_bars_start(ts_event, start)
         old = {window: row._mapping[f"cont_{window}"] for window in windows}
-        new = {
-            window: (
-                None
-                if old[window] is None
-                else window_contaminated(ts_event, start, window, others)
-            )
-            for window in windows
-        }
         normalized_old = {w: (None if v is None else bool(v)) for w, v in old.items()}
+        new: dict[int, bool | None] = {}
+        for window in windows:
+            last_ts = (
+                ts_event
+                if deferred
+                else first_bars.last_in(
+                    symbol, first_minute, first_minute + dt.timedelta(minutes=window)
+                )
+            )
+            if normalized_old[window] is None or last_ts is None:
+                new[window] = normalized_old[window]
+                continue
+            new[window] = reaction_contaminated(
+                ts_event,
+                start,
+                window,
+                base_ts=base_ts,
+                last_ts=last_ts,
+                other_event_ts=others,
+            )
         if new != normalized_old:
             changes.append(
                 ContaminationChange(int(row.event_id), str(row.symbol), normalized_old, new)
@@ -231,8 +302,10 @@ def write_contamination(
 class ContaminationJob:
     """Hodinový přepočet K1 reakcí posledních 7 dní (#1522, varianta D).
 
-    Kontaminující event reakce s `ts_event ≥ since` leží po ní (u odložené
-    reakce až do konce okna po otevření, #1679), takže stačí eventy od `since`.
+    Kontaminující event reakce s `ts_event ≥ since` leží od close jejího
+    základu (#1502 = a; u odložené reakce od zprávy do konce okna po otevření,
+    #1679). Základ leží nejvýš `CLOSURE_LOOKBACK_DAYS` před zprávou, takže
+    stačí eventy od `since` minus tolik dní.
     Zpráva z uzavírky se přepočítává 7 dní od svého času — i nejdelší uzavírka
     (víkend se svátkem, pod 4 dny) nechá po otevření přes 3 dny přepočtu.
     Přepočet je úplný jako ve skriptu: chytí pozdě zapsaný event (False → True)
@@ -264,7 +337,7 @@ class ContaminationJob:
         since = now - self._lookback
         began = time.perf_counter()
         with self._engine.connect() as conn:
-            classified = classified_events(conn, since)
+            classified = classified_events(conn, since - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS))
             reactions = reaction_rows(conn, since)
         events = {int(row.id): (_utc(row.ts_event), row.category) for row in classified}
         contaminators = Contaminators.build(

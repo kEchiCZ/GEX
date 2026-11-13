@@ -265,7 +265,7 @@ def test_truncated_deferred_premeri_useknute_okno_a_je_idempotentni(tmp_path: Pa
     """#1574: odložená reakce změřená 2 min po nedělním otevření (okno 60 useknuté)
     se přeměří celým oknem; druhý běh ji už nenajde. Celé okno se nepřeměřuje.
     Kandidát je i měření do minuty po konci okna — poslední bar mohl být
-    provizorní (`DEFERRED_SETTLE_MARGIN` jako job; 24. 10. 81 párů v 23:00:04)."""
+    provizorní (`SETTLE_MARGIN` jako job; 24. 10. 81 párů v 23:00:04)."""
     engine = make_engine(tmp_path)
     data = tmp_path / "data"
     for symbol in ("ES", "NQ"):
