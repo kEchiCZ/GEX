@@ -142,8 +142,8 @@ class LevelsRegimeReader:
 
 
 @dataclass(frozen=True)
-class MinuteRow:
-    """Minutová fáze jednoho symbolu: sloupce širokého řádku a počet oken."""
+class PhaseRow:
+    """Jedna fáze (minutová nebo denní) symbolu: sloupce širokého řádku a počet oken."""
 
     symbol: str
     values: dict[str, object]
@@ -154,7 +154,7 @@ class MinuteRow:
 class MinuteMeasurement:
     """Minutová fáze eventu: řádky změřených symbolů a jejich příznaky deferred (#339)."""
 
-    rows: list[MinuteRow]
+    rows: list[PhaseRow]
     closed_flags: list[bool]
 
 
@@ -355,7 +355,7 @@ class ReactionJob:
             rows = conn.execute(stmt).fetchall()
         return [_as_utc(row.ts_event) for row in rows if contaminates(category, row.category)]
 
-    def _daily_sessions(self, symbol: str) -> list[SessionDaily]:
+    def daily_sessions(self, symbol: str) -> list[SessionDaily]:
         """Denní agregáty Globex seancí z bars partic (#564), s cache per běh.
 
         Bary se přiřazují seanci přes `trading_session_date` (večer partice D
@@ -432,35 +432,14 @@ class ReactionJob:
         pending = self._pending_daily_events(now, limit)
         if not pending:
             return 0
-        series = {symbol: self._daily_sessions(symbol) for symbol in self._symbols}
+        series = {symbol: self.daily_sessions(symbol) for symbol in self._symbols}
         written = 0
         measured_events = 0
         measured_ids: list[int] = []
         uncomputable: list[int] = []
         for event_id, ts_event in pending:
-            rows: list[tuple[str, dict[str, object], int]] = []
-            wait_for_close = False
-            for symbol in self._symbols:
-                bars = self._bars.load_range(
-                    symbol,
-                    ts_event - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS),
-                    ts_event + dt.timedelta(days=CLOSURE_LOOKAHEAD_DAYS),
-                )
-                reactions = compute_daily_reactions(
-                    ts_event,
-                    bars,
-                    series[symbol],
-                    window_days=self._daily_window_days,
-                )
-                if not reactions:
-                    continue  # symbol bez základní ceny — trvalé, nic nepíšeme
-                if len(reactions) < len(self._daily_window_days):
-                    wait_for_close = True
-                    break
-                spot = _base_spot(bars, ts_event)
-                regime = self._regime_reader.regime_at(symbol, ts_event, spot)
-                rows.append((symbol, _phase_values(reactions, regime, now), len(reactions)))
-            if wait_for_close:
+            rows = self.measure_daily(ts_event, series, now)
+            if rows is None:
                 continue  # dočasné — nejdelší okno se uzavře v příštích dnech
             if not rows:
                 # Žádný symbol nemá základní cenu → bary pro tohle období
@@ -468,13 +447,7 @@ class ReactionJob:
                 # IBKR limit). Tombstone (#655): event se přestane vybírat.
                 uncomputable.append(event_id)
                 continue
-            with self._engine.begin() as conn:
-                for symbol, values, count in rows:
-                    # Denní fáze doplňuje řádek minutové fáze (UPDATE); řádek
-                    # ještě nemusí existovat — historický event před pokrytím
-                    # minutových barů dostává jen denní okna
-                    _write_phase(conn, event_id, symbol, values)
-                    written += count
+            written += self.write_daily(event_id, rows)
             measured_events += 1
             measured_ids.append(event_id)
         if uncomputable:
@@ -511,6 +484,57 @@ class ReactionJob:
                     "je hodinový průchod (≤ 3 dny) nebo scripts/backfill_minute_reactions.py",
                     len(measured_ids),
                 )
+        return written
+
+    def measure_daily(
+        self,
+        ts_event: dt.datetime,
+        series: Mapping[str, Sequence[SessionDaily]],
+        now: dt.datetime,
+        *,
+        bars: BarsRepository | None = None,
+    ) -> list[PhaseRow] | None:
+        """Denní fáze jednoho eventu pro všechny symboly; nic nezapisuje.
+
+        `series` = `daily_sessions` symbolů. None = některé okno ještě nejde
+        uzavřít (event počká), [] = žádný symbol nemá základní cenu. Sdílí ji
+        `_run_daily` a retro přepočet `scripts/remeasure_reactions_1502.py`.
+        """
+        source = bars if bars is not None else self._bars
+        rows: list[PhaseRow] = []
+        for symbol in self._symbols:
+            symbol_bars = source.load_range(
+                symbol,
+                ts_event - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS),
+                ts_event + dt.timedelta(days=CLOSURE_LOOKAHEAD_DAYS),
+            )
+            reactions = compute_daily_reactions(
+                ts_event,
+                symbol_bars,
+                series[symbol],
+                window_days=self._daily_window_days,
+            )
+            if not reactions:
+                continue  # symbol bez základní ceny — trvalé, nic nepíšeme
+            if len(reactions) < len(self._daily_window_days):
+                return None
+            spot = _base_spot(symbol_bars, ts_event)
+            regime = self._regime_reader.regime_at(symbol, ts_event, spot)
+            rows.append(PhaseRow(symbol, _phase_values(reactions, regime, now), len(reactions)))
+        return rows
+
+    def write_daily(self, event_id: int, rows: Sequence[PhaseRow]) -> int:
+        """Zapíše denní fázi řádků `rows` v jedné transakci; vrací počet oken.
+
+        Denní fáze doplňuje řádek minutové fáze (UPDATE); řádek ještě nemusí
+        existovat — historický event před pokrytím minutových barů dostává jen
+        denní okna.
+        """
+        written = 0
+        with self._engine.begin() as conn:
+            for row in rows:
+                _write_phase(conn, event_id, row.symbol, row.values)
+                written += row.windows
         return written
 
     def run(self, now: dt.datetime, *, limit: int = 200) -> int:
@@ -659,7 +683,7 @@ class ReactionJob:
         ]
         lower = min(floors, default=ts_event)
         others = self._contaminating(lower, category, latest)
-        rows: list[MinuteRow] = []
+        rows: list[PhaseRow] = []
         # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
         closed_flags: list[bool] = []
         for symbol, symbol_bars in loaded.items():
@@ -678,7 +702,7 @@ class ReactionJob:
             # GEX režim v čase eventu (#402) ze spotu základu (#1502)
             spot = _base_spot(symbol_bars, ts_event)
             regime = self._regime_reader.regime_at(symbol, ts_event, spot)
-            rows.append(MinuteRow(symbol, _phase_values(reactions, regime, now), len(reactions)))
+            rows.append(PhaseRow(symbol, _phase_values(reactions, regime, now), len(reactions)))
         return MinuteMeasurement(rows, closed_flags)
 
     def write_minute(
