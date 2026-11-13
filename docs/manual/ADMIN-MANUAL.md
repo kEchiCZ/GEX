@@ -906,13 +906,18 @@ nedělním otevření, sobota, neděle a pondělí proti pátku, rozpočet).
 **PNG plánu a záložní graf NQ** (`api/plan_chart.py`, `api/chart_render.py`, F4b #1744,
 ADR-0062 K1 A). Obrázek kreslí API; engine jen při startu migruje sloupec `option_plans.image_bytes` (`ensure_schema`, kap. 6). Závislost `matplotlib` má jen balík API
 (`api/pyproject.toml`), ve sdíleném image `gex-python` je i pro engine a news-engine, ty ji
-ale neimportují. Proces API ji neimportuje taky.
+ale neimportují. Proces API ji neimportuje taky. V image přidá matplotlib 3.11.2 s pillow,
+contourpy, fonttools, kiwisolver, cycler a pyparsing +95 MiB v `site-packages` (numpy už
+v image byl; `du` v kontejneru 13. 11.).
 
 - **Podproces:** `plan_chart.render_png` spustí `python -m gexlens_api.chart_render`, pošle
   mu popis grafu (JSON) na stdin a PNG čte ze stdout. Backend je Agg, nejvýš jedno kreslení
-  naráz a limit 60 s. První kreslení v novém kontejneru staví cache fontů matplotlib, lokálně
-  to trvá 8,5 s. Paměť podprocesu (+54 MB lokálně) se po skončení vrátí a pád kreslení
-  neshodí API.
+  naráz a limit 60 s. Měření v kontejneru z image `gex-python` (13. 11.,
+  `scripts/measure_matplotlib_png_1738.py --render`): jedno kreslení trvá 2,3–2,5 s včetně
+  startu interpretu a importu, špička paměti podprocesu je 145 MB (celý proces s numpy,
+  matplotlib a obrázkem). První import v novém kontejneru staví cache fontů matplotlib
+  (v kontejneru 2,2 s, na Windows 8,5 s). Paměť se po skončení podprocesu vrátí a pád
+  kreslení neshodí API.
 - **Jen uložená data:** popis grafu sestaví čisté funkce `plan_chart_spec`
   a `scenario_chart_spec`. Čtou platný plán řádku z `option_plans_store.effective_plan`
   (táž funkce jako `GET /option-plans` a vyhodnocení) a uložené 1m bary
@@ -925,7 +930,8 @@ ale neimportují. Proces API ji neimportuje taky.
   Pod grafem jsou varianty opce s kotací, časem, zdrojem, IV, deltou, modelem v TP a verdiktem.
   P&L na kontrakt je tam až po spoušti (K12 A), dál přecenění z 9:31 ET, mezery z 9:15
   a 9:31 a P5. Plán bez opce ukáže důvody a bary, úrovně nemá. Časy jsou v čase Praha.
-  Šířka je 1200 px, výška roste s počtem řádků pod grafem, PNG má ~130 kB.
+  Šířka je 1200 px, výška roste s počtem řádků pod grafem (1200 × 820 px s 9 řádky), PNG má
+  100–130 kB (103 kB v kontejneru, 108–130 kB u skutečných plánů lokálně).
 - **Záložní graf NQ** (`scenario_chart_png`) má stejný styl: bary NQ od otevření Globex seance
   do okamžiku kreslení, vstup, cíle s názvy z `rationale.targets`, cesta a úrovně NQ
   z `plan.levels_nq` plánu ke scénáři. Scénář bez plánu je ukáže bez úrovní. Volá ho Telegram

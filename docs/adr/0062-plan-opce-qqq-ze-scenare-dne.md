@@ -59,6 +59,7 @@ Měření, o která se opírají K1–K4 (partice `data/`, jen čtení; skript v
 | kotace v RTH | 23. 9. 9:44–9:48 ET medián spreadu 0,9–2,7 % | `snapshots/QQQ/20260923` |
 | snímek heatmapy NQ z frontendu | 59 s po vzniku scénáře (14:15:00 → 14:15:59 UTC) | `data/scenarios/NQ/2026-11-02/29.png` |
 | matplotlib Agg, graf 1200 × 700 px (lokálně, Windows) | +54 MB RSS, import 1,4–1,6 s (první spuštění 8,5 s), kreslení 0,2–0,3 s, PNG 40 kB | `measure_matplotlib_png_1738.py` |
+| podproces `chart_render` v kontejneru z image `gex-python` (13. 11., F4b #1744) | kreslení 2,3–2,5 s včetně startu a importu, špička RSS podprocesu 145 MB, PNG 103 kB (1200 × 820 px); import bez cache fontů 2,2 s; `site-packages` +95 MiB | `measure_matplotlib_png_1738.py --render` |
 | paměť kontejnerů 2. 11. ~22:00 SEČ | engine 1,2 GB, api 0,84 GB (strop Dockeru 5,8 GB) | `docker stats` |
 | model ceny putu 687 (`compute/gexfield.bs_price`, jedna IV 30 %) | fill 1,40 $ v 16:50 SEČ → 1,42 (+1 %); kotace 2,68/2,70 v 18:31 → 2,58 (−4 %) | skript |
 
@@ -476,7 +477,7 @@ Odvozeno pro F4b (zapsal agent 12. 11., #1744):
       nakreslí při prvním dotazu `GET /option-plans/{id}/image` a znovu jen po změně stavu:
       9:15 ET, přecenění v 9:31 ET (klíč `plan.repricing`, bod 10) a vyhodnocení (F3 #1748).
       Bary QQQ jsou do okamžiku kreslení. Odmítnuto B, kreslit s každým novým barem: každé
-      otevření Briefingu v RTH by čekalo ~2 s na podproces s +54 MB.
+      otevření Briefingu v RTH by čekalo ~2,4 s na podproces se špičkou 145 MB (kontejner 13. 11.).
     - **Popis grafu bez vzorce:** čisté funkce v API sestaví ze sloupců a JSON plánu
       (`effective_plan`, bod 10) a z uložených barů jen seznam čar, bodů a popisků. Cesta
       scénáře v cenách QQQ je vstup scénáře a cíle plánu v časech cesty (`scenario_entry`,

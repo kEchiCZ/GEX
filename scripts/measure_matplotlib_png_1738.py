@@ -13,6 +13,8 @@ přes `plan_chart.render_png`: dvakrát po sobě (první v novém prostředí st
 čas celého podprocesu včetně importu, špičku RSS podprocesu (`getrusage`, jen Linux) a PNG.
 Potřebuje repo na PYTHONPATH (`engine/src`, `api/src`, `news-engine/src`), v kontejneru
 z image `gex-python` s doinstalovaným matplotlib a psutil.
+13. 11. 2026 (kontejner `gex-python`, matplotlib 3.11.2): import 2,2 s bez cache fontů,
+podproces 2,3–2,5 s, špička RSS podprocesu 145 MB, PNG 103 kB (1200 × 820 px).
 """
 
 import io
