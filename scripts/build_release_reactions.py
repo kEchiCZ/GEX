@@ -568,7 +568,7 @@ class Sessions:
 
 
 def build_sessions(bars: pd.DataFrame, grid: Grid, asof: dt.datetime) -> Sessions:
-    """Seance z barů: settle close = poslední bar ≤ settle (vzor `ReactionJob._daily_sessions`)."""
+    """Seance z barů: settle close = poslední bar ≤ settle (vzor `ReactionJob.daily_sessions`)."""
     hours = bars["ts"].dt.floor("h")
     session_of_hour = {
         hour: trading_session_date(to_utc(pd.Timestamp(hour))) for hour in hours.unique()

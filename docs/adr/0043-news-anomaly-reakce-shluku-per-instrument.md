@@ -175,9 +175,11 @@ text), `reactions.py` (výchylka, baseline) a `preopen.py` (etapy, sklon, úrovn
   3. **Rezerva zralosti** 1 min po konci okna i u neodložených reakcí (`SETTLE_MARGIN`, dřív
      jen odložené, #1574): okno 60 min se dřív u 20 385 oken měřilo s provizorním posledním
      barem (ADR-0005).
-  4. **Retro** všech řádků s minutovou fází a přehodnocení `news_prediction_outcomes` okna 5
-     v témže běhu (`scripts/remeasure_reactions_1502.py`; zápis do PG jen se svolením
-     vlastníka, po záloze, idempotentně).
+  4. **Retro** všech řádků s minutovou i denní fází (1–10 dní) a přehodnocení
+     `news_prediction_outcomes` všech oken v témže běhu (`scripts/remeasure_reactions_1502.py`;
+     zápis do PG jen se svolením vlastníka, po záloze, idempotentně). Denní fázi a outcomes
+     oken kromě 5 přidal vlastník 13. 11. v chatu (1 = a, 2 = a); plán měl jen minutovou fázi
+     a okno 5.
 - **Důsledky:**
   - Karta Breaking: dopad je konečný v M + 5 (zpráva v 14:30:20 → 14:35:00, dřív 14:36:00).
   - Okno končí o s sekund dřív než t + w; u okna 1 min zbude po zprávě v hh:mm:50 jen 10 s.
@@ -190,6 +192,11 @@ text), `reactions.py` (výchylka, baseline) a `preopen.py` (etapy, sklon, úrovn
     kontaminaci nezávisí) a váhy se pod V2 a (a) pohnou nejvíc u ES MACRO_GROWTH
     (0,711 → 0,425, průchod V2p_mid s přehodnocením). Mega caps (#1491) dál nesplněno,
     ADR-0059 varianta A platí.
+  - Denní fáze: nový základ změní 1d u 387 341 z 528 714 řádků (medián 1,33 bp, p90 5,0 bp,
+    p99 14,1 bp) a znaménko u 7 230. Denní okna kontaminaci nemají (SPEC 5.1), mění se jen
+    výnos, rozpětí a režim. Okno, které retro nově uzná za čisté, outcome nemá a doplní ho
+    `PredictionJob.evaluate` v příštím cyklu; nově kontaminované outcome drží, váhy ho čtou
+    podle reakce (#1708).
   - Retro mění `regime_*` jen o změnu spotu: kde dnešní levels se spotem dřívějšího vzorce
     nezopakují uložený režim (levels mají retenci 90 dní, 29 526 minutových režimů je starších),
     uložený režim zůstává — data se neztratí. Změní se i režim zpráv v celou minutu (spot

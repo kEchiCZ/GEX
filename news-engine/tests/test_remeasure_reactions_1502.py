@@ -1,4 +1,4 @@
-"""Retro přepočet minutové fáze reakcí podle #1502 a přehodnocení predikcí okna 5.
+"""Retro přepočet reakcí podle #1502 (minutová i denní fáze) a přehodnocení predikcí.
 
 Skript žije ve `scripts/`, načítá se přes importlib jako ostatní skripty.
 """
@@ -14,7 +14,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, insert, select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
@@ -26,15 +26,20 @@ from gexlens_engine.storage.sentiment import (
 )
 from gexlens_news.bars import BarsRepository
 from gexlens_news.reaction_job import ReactionJob
+from gexlens_news.reactions import last_closed_before
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "remeasure_reactions_1502.py"
 DAY = dt.date(2026, 7, 28)
+#: Kalendářní dny barů od DAY: denní okno 10 obchodních dní musí jít uzavřít
+DAYS = 17
 MINUTE = dt.datetime(2026, 7, 28, 14, 30, tzinfo=dt.UTC)
 NEWS = MINUTE + dt.timedelta(seconds=40)  # uprostřed minuty: základ = close baru 14:29
 CUTOFF = dt.datetime(2026, 11, 13, 22, 5, tzinfo=dt.UTC)  # start news-engine s #1502
-OLD = dt.datetime(2026, 7, 28, 15, 35, tzinfo=dt.UTC)  # měřeno dřívějším vzorcem
+OLD = dt.datetime(2026, 8, 20, 4, 0, tzinfo=dt.UTC)  # měřeno dřívějším vzorcem
 NOW = dt.datetime(2026, 11, 13, 22, 30, tzinfo=dt.UTC)
 WINDOWS = (1, 5, 15, 60)
+DAILY_WINDOWS = (1440, 2880, 7200, 14400)
+OUTCOME_WINDOWS = (1, 5, 1440)
 
 
 def load_script() -> Any:
@@ -51,25 +56,27 @@ script = load_script()
 
 
 def write_bars(data_dir: Path, symbol: str, *, drift_bp: float) -> None:
-    """Den plochých barů; od baru 14:30 (minuta zprávy) cena o `drift_bp` výš."""
+    """Ploché bary `DAYS` dní; od baru 14:30 dne DAY (minuta zprávy) cena o `drift_bp` výš."""
     directory = data_dir / "derived" / symbol / "bars"
     directory.mkdir(parents=True, exist_ok=True)
-    start = dt.datetime.combine(DAY, dt.time(0, 0), tzinfo=dt.UTC)
-    rows = []
-    for minute in range(24 * 60):
-        ts = start + dt.timedelta(minutes=minute)
-        price = 7000.0 * (1 + drift_bp / 10_000 * (1 if ts >= MINUTE else 0))
-        rows.append(
-            {
-                "ts_min": ts,
-                "open": price,
-                "high": price + 1,
-                "low": price - 1,
-                "close": price,
-                "volume": 100.0,
-            }
-        )
-    pq.write_table(pa.Table.from_pylist(rows), directory / f"{DAY.isoformat()}.parquet")
+    for offset in range(DAYS):
+        day = DAY + dt.timedelta(days=offset)
+        start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
+        rows = []
+        for minute in range(24 * 60):
+            ts = start + dt.timedelta(minutes=minute)
+            price = 7000.0 * (1 + drift_bp / 10_000 * (1 if ts >= MINUTE else 0))
+            rows.append(
+                {
+                    "ts_min": ts,
+                    "open": price,
+                    "high": price + 1,
+                    "low": price - 1,
+                    "close": price,
+                    "volume": 100.0,
+                }
+            )
+        pq.write_table(pa.Table.from_pylist(rows), directory / f"{day.isoformat()}.parquet")
 
 
 def add_event(
@@ -96,7 +103,7 @@ def add_event(
 
 
 def old_row(event_id: int, symbol: str) -> dict[str, object]:
-    """Řádek minutové fáze, jak ho zapsal dřívější vzorec: základ po zprávě → ~0 bp."""
+    """Řádek obou fází, jak ho zapsal dřívější vzorec: základ po zprávě → ~0 bp."""
     values: dict[str, object] = {"event_id": event_id, "symbol": symbol}
     for window in WINDOWS:
         values |= {
@@ -105,9 +112,22 @@ def old_row(event_id: int, symbol: str) -> dict[str, object]:
             f"vol_z_{window}": None,
             f"cont_{window}": False,
         }
+    for window in DAILY_WINDOWS:
+        values |= {
+            f"ret_{window}": 0.0,
+            f"range_{window}": 2.0 / 7000.0 * 10_000,
+            f"cont_{window}": False,
+        }
     # ES má uložený režim; levels pro den už nejsou (retence 90 dní) — nesmí se ztratit
     regime = "positive" if symbol == "ES" else None
-    return values | {"deferred_min": False, "regime_min": regime, "computed_at_min": OLD}
+    return values | {
+        "deferred_min": False,
+        "regime_min": regime,
+        "computed_at_min": OLD,
+        "deferred_daily": False,
+        "regime_daily": regime,
+        "computed_at_daily": OLD,
+    }
 
 
 @pytest.fixture
@@ -134,12 +154,13 @@ def env(tmp_path: Path) -> tuple[Engine, Path, int]:
                 {
                     "prediction_id": int(prediction[0]),
                     "symbol": symbol,
-                    "window_min": 5,
+                    "window_min": window,
                     "realized_dir": 0,
                     "correct": False,
                     "computed_at": OLD,
                 }
                 for symbol in ("ES", "NQ")
+                for window in OUTCOME_WINDOWS
             ],
         )
     return engine, data_dir, event_id
@@ -159,10 +180,13 @@ def reaction(engine: Engine, event_id: int, symbol: str) -> dict[str, Any]:
     return dict(row)
 
 
-def outcomes(engine: Engine) -> dict[str, tuple[int, bool]]:
+def outcomes(engine: Engine) -> dict[tuple[str, int], tuple[int, bool]]:
     with engine.connect() as conn:
         rows = conn.execute(select(news_prediction_outcomes)).fetchall()
-    return {str(row.symbol): (int(row.realized_dir), bool(row.correct)) for row in rows}
+    return {
+        (str(row.symbol), int(row.window_min)): (int(row.realized_dir), bool(row.correct))
+        for row in rows
+    }
 
 
 def run(engine: Engine, data_dir: Path, *, apply: bool) -> Any:
@@ -171,48 +195,92 @@ def run(engine: Engine, data_dir: Path, *, apply: bool) -> Any:
     )
 
 
+UNCHANGED = {(symbol, window): (0, False) for symbol in ("ES", "NQ") for window in OUTCOME_WINDOWS}
+
+
 def test_dry_run_jen_spocita(env: tuple[Engine, Path, int]) -> None:
     engine, data_dir, event_id = env
     report = run(engine, data_dir, apply=False)
     assert sum(report.events.values()) == 1
-    assert sum(report.rows.values()) == 2 and sum(report.changed.values()) == 2
-    assert sum(report.flipped_5.values()) == 1  # ES 0 → +20 bp; NQ zůstává 0
+    assert report._total(report.rows, "min") == 2 and report._total(report.changed, "min") == 2
+    assert report._total(report.flipped, "min") == 1  # ES 0 → +20 bp; NQ zůstává 0
     assert sum(report.cont_5.values()) == 2  # event mezi základem a zprávou
-    assert report.checked == 1  # úzký výřez = load_range
-    assert report.outcomes_flipped == 1 and report.outcomes_written == 0
+    # Denní fáze: ES 0 → +20 bp; NQ na plochých barech beze změny
+    assert report._total(report.rows, "daily") == 2
+    assert report._total(report.changed, "daily") == 1
+    assert report._total(report.flipped, "daily") == 1
+    assert report.checked == 1  # úzký výřez = load_range v obou fázích
+    assert dict(report.outcomes_flipped) == {1: 1, 5: 1, 1440: 1}
+    assert report.outcomes_written == 0
     assert reaction(engine, event_id, "ES")["ret_5"] == 0.0
-    assert outcomes(engine) == {"ES": (0, False), "NQ": (0, False)}
+    assert reaction(engine, event_id, "ES")["ret_1440"] == 0.0
+    assert outcomes(engine) == UNCHANGED
 
 
-def test_apply_premeri_produkcni_cestou_a_je_idempotentni(
-    env: tuple[Engine, Path, int], tmp_path: Path
-) -> None:
+def test_apply_premeri_produkcni_cestou_a_je_idempotentni(env: tuple[Engine, Path, int]) -> None:
     engine, data_dir, event_id = env
     report = run(engine, data_dir, apply=True)
-    assert sum(report.rows.values()) == 2 and report.outcomes_written == 1
+    assert report._total(report.rows, "min") == 2 and report._total(report.rows, "daily") == 2
+    assert report.outcomes_written == 3 and report.sweep_written == 0
 
     # Totéž, co by změřil job s #1502 nad týmiž daty
-    expected = ReactionJob(engine, BarsRepository(data_dir)).measure_minute(
-        NEWS, "TECH", {"ES": None, "NQ": None}, NOW
+    job = ReactionJob(engine, BarsRepository(data_dir))
+    expected = job.measure_minute(NEWS, "TECH", {"ES": None, "NQ": None}, NOW).rows
+    daily = job.measure_daily(
+        NEWS, {symbol: job.daily_sessions(symbol) for symbol in ("ES", "NQ")}, NOW
     )
-    for row in expected.rows:
+    assert daily is not None
+    for row in [*expected, *daily]:
         stored = reaction(engine, event_id, row.symbol)
         for key, value in row.values.items():
-            if key in ("computed_at_min", "regime_min"):
+            if key.startswith(("computed_at_", "regime_")):
                 continue
             if isinstance(value, float):
                 assert stored[key] == pytest.approx(value), key
             else:
                 assert stored[key] == value, key
     es = reaction(engine, event_id, "ES")
-    assert es["ret_1"] == pytest.approx(20.0)
+    assert es["ret_1"] == pytest.approx(20.0) and es["ret_1440"] == pytest.approx(20.0)
     assert all(es[f"cont_{window}"] for window in WINDOWS)
-    assert outcomes(engine) == {"ES": (1, True), "NQ": (0, False)}
-    assert es["regime_min"] == "positive" and report.regime_kept == 1
-    assert reaction(engine, event_id, "NQ")["regime_min"] is None
+    assert not any(es[f"cont_{window}"] for window in DAILY_WINDOWS)
+    assert outcomes(engine) == UNCHANGED | {("ES", w): (1, True) for w in OUTCOME_WINDOWS}
+    # Uložený režim mimo retenci levels zůstává v obou fázích
+    assert es["regime_min"] == "positive" and es["regime_daily"] == "positive"
+    assert report.regime_kept == {"min": 1, "daily": 1}
+    nq = reaction(engine, event_id, "NQ")
+    assert nq["regime_min"] is None and nq["regime_daily"] is None
 
     again = run(engine, data_dir, apply=True)
     assert sum(again.events.values()) == 0 and again.outcomes_written == 0
+    assert again.sweep_seen == 6 and again.sweep_written == 0
+
+
+def test_premeri_jen_fazi_zmerenou_pred_cutoff(env: tuple[Engine, Path, int]) -> None:
+    """Minutová fáze už je z nového kódu (≥ cutoff): retro přeměří jen denní."""
+    engine, data_dir, event_id = env
+    with engine.begin() as conn:
+        conn.execute(update(news_reactions).values(computed_at_min=CUTOFF))
+    report = run(engine, data_dir, apply=True)
+    assert report._total(report.rows, "min") == 0 and report._total(report.rows, "daily") == 2
+    es = reaction(engine, event_id, "ES")
+    assert es["ret_5"] == 0.0 and es["ret_1440"] == pytest.approx(20.0)
+    # Outcomes minutových oken čtou výnos řádku, který je už z nového kódu (zde 0 bp)
+    assert outcomes(engine) == UNCHANGED | {("ES", 1440): (1, True)}
+
+
+def test_zaverecna_kontrola_opravi_prerusenou_davku(env: tuple[Engine, Path, int]) -> None:
+    """Reakce zapsané, outcomes ne (pád mezi zápisy): běh „hotovo“ je dorovná podle stavu."""
+    engine, data_dir, _ = env
+    run(engine, data_dir, apply=True)
+    with engine.begin() as conn:
+        conn.execute(
+            update(news_prediction_outcomes)
+            .where(news_prediction_outcomes.c.symbol == "ES")
+            .values(realized_dir=0, correct=False)
+        )
+    report = run(engine, data_dir, apply=True)
+    assert sum(report.events.values()) == 0 and report.sweep_written == 3
+    assert outcomes(engine) == UNCHANGED | {("ES", w): (1, True) for w in OUTCOME_WINDOWS}
 
 
 def test_cutoff_v_budoucnosti_skonci(env: tuple[Engine, Path, int]) -> None:
@@ -226,3 +294,17 @@ def test_uzky_vyrez_odmitne_jiny_rozsah(env: tuple[Engine, Path, int]) -> None:
     narrow = script.NarrowBars(script.CachedBars(data_dir))
     with pytest.raises(ValueError):
         narrow.load_range("ES", NEWS, NEWS + dt.timedelta(hours=1))
+
+
+def test_denni_vyrez_dava_totez_co_load_range(env: tuple[Engine, Path, int]) -> None:
+    """Zpráva v celou minutu i uprostřed: základ a první bar z výřezu = z plného rozsahu."""
+    _, data_dir, _ = env
+    cached = script.CachedBars(data_dir)
+    narrow = script.NarrowBars(cached)
+    lookback, lookahead = script.LOOKBACK, script.LOOKAHEAD
+    for t in (MINUTE, NEWS, MINUTE + dt.timedelta(days=3, hours=5, seconds=1)):
+        sliced = narrow.load_range("ES", t - lookback, t + lookahead)
+        full = cached.load_range("ES", t - lookback, t + lookahead)
+        assert last_closed_before(sliced, t) == last_closed_before(full, t)
+        first = next(bar for bar in full if bar.ts >= t)
+        assert next(bar for bar in sliced if bar.ts >= t) == first
