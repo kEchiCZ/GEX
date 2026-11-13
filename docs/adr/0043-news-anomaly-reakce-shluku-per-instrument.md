@@ -185,10 +185,20 @@ text), `reactions.py` (výchylka, baseline) a `preopen.py` (etapy, sklon, úrovn
     uzavírkou, tedy gap v reakci a měřený úsek přes celou uzavírku. Je to táž konvence jako
     u zprávy do `DEFERRED_GAP_MINUTES` před otevřením, která odložená není.
   - Retro mění minutovou fázi 505 340 řádků. Nad kopií produkce s retro všech řádků
-    (průchod V2p_all) je otevřených bran modelu 175 místo 177 (15 se otevře, 17 zavře),
-    přehodnocení otočí `realized_dir` u 55 682 z 280 947 outcomes (19,8 %) a váhy se pohnou
-    nejvíc u ES MACRO_GROWTH (0,711 → 0,440). Mega caps (#1491) dál nesplněno, ADR-0059
-    varianta A platí.
+    (průchod V2p_all) je otevřených bran modelu 175 místo 177 (15 se otevře, 17 zavře).
+    Přehodnocení otočí `realized_dir` okna 5 u 55 682 z 280 947 outcomes (19,8 %; na
+    kontaminaci nezávisí) a váhy se pod V2 a (a) pohnou nejvíc u ES MACRO_GROWTH
+    (0,711 → 0,425, průchod V2p_mid s přehodnocením). Mega caps (#1491) dál nesplněno,
+    ADR-0059 varianta A platí.
+  - Retro mění `regime_*` jen o změnu spotu: kde dnešní levels se spotem dřívějšího vzorce
+    nezopakují uložený režim (levels mají retenci 90 dní, 29 526 minutových režimů je starších),
+    uložený režim zůstává — data se neztratí. Změní se i režim zpráv v celou minutu (spot
+    z baru M na bar M − 1), plán bod 9 měřil jen zprávy uprostřed minuty.
+  - Zpráva po díře v barech za otevřeného trhu má základ přes celou díru, jako dřív zpráva
+    v celou minutu. Archiv 20. 7.–12. 11. 2026 nemá za otevřeného trhu žádnou díru (doplní je
+    `ibkr_hist`), takže jde o přechodný stav do doplnění; retro měří nad doplněnými bary.
+  - Nasazení news-engine a retro patří do téže pauzy: hodinový přepočet K1 mezitím počítá
+    `cont_*` novým pravidlem nad `ret_*` ze starého základu (retro je pak přepíše).
   - Kandidáti kontaminace se berou od close základu; měření 12. 11. je bralo od minuty zprávy.
     Liší se to jen u zprávy po mezeře v barech (základ starší než M − 1).
   - Mimo rozsah: výsledek signálu měřený stejnou chybou (#1796).

@@ -267,6 +267,9 @@ nekazila. Rozhodnutí vlastníka 24. 10. (#1659, varianta A):
 - **Parita (bod 7):** `ReactionJob._contaminating` i hodinový přepočet (`Contaminators.around`)
   hledají až k začátku oken + 61 min a konec okna dořízne táž `window_contaminated`. Hodinový
   přepočet bere začátek z `closure_open_ts`, starší řádek bez něj z prvního baru archivu.
+  **Od #1502** hledají oba od close základu neodložené reakce (`Contaminators.since`) a úsek
+  dořízne táž `reaction_contaminated`; základ a poslední bar okna bere hodinový přepočet
+  z časů barů archivu (`FirstBars`).
 - **Historie:** `scripts/reclassify_news_rules.py --phase contamination` (dry-run, pak ostrý běh
   po záloze PG); buckety a gate přepočte noční `ModelStatsJob`.
 

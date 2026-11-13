@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import insert
+from sqlalchemy import create_engine, insert
 
 from gexlens_api.breaking_card import _around
 from gexlens_api.main import create_app
@@ -369,3 +369,30 @@ def test_around_keeps_base_bar_for_news_inside_first_minute_after_open() -> None
     assert around[0].ts == friday
     (reaction,) = compute_reactions(news, around, windows=(5,))
     assert reaction.ret_bp == pytest.approx(20.0)  # (5010 − 5000) / 5000, gap přes víkend
+
+
+def test_news_inside_first_minute_after_open_takes_base_from_friday_close(
+    weekend_client: TestClient, tmp_path: Path
+) -> None:
+    """Zpráva v 17:00:30 CT: bar 17:00 ještě není uzavřený, endpoint dočte páteční základ
+    (`_series` přes celé zavření, #1502). Dřív by řada začínala barem 17:00."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}")
+    news = SUNDAY_OPEN + dt.timedelta(seconds=30)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_events),
+            [
+                _event(9, news, news + dt.timedelta(seconds=2), source="alpaca", tier=2,
+                       category="FED", importance=3,
+                       title="Fed's Powell says rate cuts are not imminent"),
+            ],
+        )  # fmt: skip
+    at = SUNDAY_OPEN + dt.timedelta(minutes=10)
+    # limit 1: v dotazu jen tahle zpráva, nejstarší zpráva výběru není v celou minutu
+    params = {"at": at.isoformat(), "limit": 1}
+    body = weekend_client.get("/news/breaking", params=params).json()
+    (item,) = body["items"]
+    assert item["id"] == 9
+    es = item["impact"]["ES"]
+    assert es["state"] == "fixed"
+    assert es["ret_bp"] == pytest.approx((5010.0 - 5000.0) / 5000.0 * 10_000)

@@ -105,7 +105,9 @@ def old_row(event_id: int, symbol: str) -> dict[str, object]:
             f"vol_z_{window}": None,
             f"cont_{window}": False,
         }
-    return values | {"deferred_min": False, "regime_min": None, "computed_at_min": OLD}
+    # ES má uložený režim; levels pro den už nejsou (retence 90 dní) — nesmí se ztratit
+    regime = "positive" if symbol == "ES" else None
+    return values | {"deferred_min": False, "regime_min": regime, "computed_at_min": OLD}
 
 
 @pytest.fixture
@@ -196,7 +198,7 @@ def test_apply_premeri_produkcni_cestou_a_je_idempotentni(
     for row in expected.rows:
         stored = reaction(engine, event_id, row.symbol)
         for key, value in row.values.items():
-            if key == "computed_at_min":
+            if key in ("computed_at_min", "regime_min"):
                 continue
             if isinstance(value, float):
                 assert stored[key] == pytest.approx(value), key
@@ -206,6 +208,8 @@ def test_apply_premeri_produkcni_cestou_a_je_idempotentni(
     assert es["ret_1"] == pytest.approx(20.0)
     assert all(es[f"cont_{window}"] for window in WINDOWS)
     assert outcomes(engine) == {"ES": (1, True), "NQ": (0, False)}
+    assert es["regime_min"] == "positive" and report.regime_kept == 1
+    assert reaction(engine, event_id, "NQ")["regime_min"] is None
 
     again = run(engine, data_dir, apply=True)
     assert sum(again.events.values()) == 0 and again.outcomes_written == 0

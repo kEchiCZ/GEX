@@ -7,7 +7,10 @@ před zprávou, okno od minuty zprávy (V2), kontaminace hlídá měřený úsek
 produkční cestou `ReactionJob.measure_minute` a zapíše `ReactionJob.write_minute`
 (rozsah a: všechny řádky s minutovou fází, jen symboly, které ji měly). Potom přehodnotí
 `news_prediction_outcomes` oken `OUTCOME_WINDOWS` z nového výnosu stejnou funkcí jako
-`PredictionJob.evaluate` (`prediction_job.outcome_of`, otázka 4 = a). Váhy `news_weights`
+`PredictionJob.evaluate` (`prediction_job.outcome_of`, otázka 4 = a). GEX režim (`regime_min`)
+se mění jen o změnu spotu (#1502: spot základu místo close baru minuty zprávy): kde dnešní
+levels se spotem dřívějšího vzorce nezopakují uložený režim (retence levels 90 dní), zůstává
+uložený — nejde znovu pořídit. Váhy `news_weights`
 přepočítá news-engine v příštím cyklu reakcí (à 300 s), `news_model_stats` první cyklus
 po půlnoci UTC (`ModelStatsJob`).
 
@@ -63,6 +66,7 @@ from gexlens_news.prediction_job import outcome_of  # noqa: E402
 from gexlens_news.reaction_job import (  # noqa: E402
     CLOSURE_LOOKAHEAD_DAYS,
     CLOSURE_LOOKBACK_DAYS,
+    LevelsRegimeReader,
     MinuteMeasurement,
     ReactionJob,
 )
@@ -197,6 +201,8 @@ class Report:
     flipped_5: Counter[str] = field(default_factory=Counter)
     cont_5: Counter[str] = field(default_factory=Counter)
     unmeasurable: int = 0
+    regime_kept: int = 0
+    regime_changed: int = 0
     checked: int = 0
     outcomes_seen: int = 0
     outcomes_flipped: int = 0
@@ -223,6 +229,8 @@ class Report:
             f"Řádků, které teď nejdou změřit (beze změny, zůstávají kandidáty): "
             f"{self.unmeasurable}.",
             f"Kontrola úzkého výřezu proti `load_range`: {self.checked} eventů, shoda.",
+            f"`regime_min`: jiný spotem základu {self.regime_changed}, ponechaný uložený "
+            f"(dnešní levels ho nezopakují) {self.regime_kept}.",
             f"Outcomes oken {OUTCOME_WINDOWS}: posouzeno {self.outcomes_seen}, jiný směr nebo "
             f"správnost {self.outcomes_flipped}, zapsáno {self.outcomes_written}.",
             f"Konec běhu: {self.stopped}.",
@@ -251,6 +259,33 @@ def _sign(value: object) -> int | None:
         return None
     number = float(value)  # type: ignore[arg-type]
     return 1 if number > 0 else (-1 if number < 0 else 0)
+
+
+def _old_spot(bars: Sequence[Bar], ts_event: dt.datetime) -> float | None:
+    """Spot režimu dřívějšího vzorce: close posledního baru s `ts ≤ zpráva` (bar minuty zprávy)."""
+    spot: float | None = None
+    for bar in bars:
+        if bar.ts <= ts_event:
+            spot = float(bar.close)
+        else:
+            break
+    return spot
+
+
+def retro_regime(
+    reader: LevelsRegimeReader,
+    symbol: str,
+    ts_event: dt.datetime,
+    bars: Sequence[Bar],
+    *,
+    stored: str | None,
+    measured: str | None,
+) -> str | None:
+    """Režim po retro: nový (spot základu) jen tam, kde dnešní levels zopakují uložený
+    režim se spotem dřívějšího vzorce; jinak uložený (levels mimo retenci, přepsané levels)."""
+    if stored is None or reader.regime_at(symbol, ts_event, _old_spot(bars, ts_event)) != stored:
+        return stored
+    return measured
 
 
 def _same_measurement(a: MinuteMeasurement, b: MinuteMeasurement) -> bool:
@@ -427,6 +462,7 @@ def run(
     cached = CachedBars(data_dir)
     narrow = NarrowBars(cached)
     job = ReactionJob(engine, cached, symbols=SYMBOLS)
+    regimes = LevelsRegimeReader(data_dir)
     report = Report()
     began = time.monotonic()
     after: tuple[dt.datetime, int] | None = None
@@ -464,6 +500,20 @@ def run(
                     report.unmeasurable += 1
                     continue
                 report.rows[month] += 1
+                measured = row.values.get("regime_min")
+                kept = retro_regime(
+                    regimes,
+                    symbol,
+                    ts_event,
+                    narrow.load_range(symbol, ts_event - LOOKBACK, ts_event + SPAN + LOOKAHEAD),
+                    stored=old.get("regime_min"),
+                    measured=measured if isinstance(measured, str) else None,
+                )
+                if kept != measured:
+                    report.regime_kept += 1
+                elif kept != old.get("regime_min"):
+                    report.regime_changed += 1
+                row.values["regime_min"] = kept
                 keys = [key for key in row.values if key != "computed_at_min"]
                 if not all(_same(old.get(key), row.values[key]) for key in keys):
                     report.changed[month] += 1

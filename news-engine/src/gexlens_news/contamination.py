@@ -134,7 +134,10 @@ class Contaminators:
     def around(
         self, ts: dt.datetime, category: str | None, start: dt.datetime
     ) -> list[dt.datetime]:
-        """Kontaminující eventy v (ts, začátek + 61 min] — jako `ReactionJob._contaminating`.
+        """Kontaminující eventy v (ts, začátek + 61 min] — pravidlo odložené reakce.
+
+        Hodinový přepočet od #1502 volá `since`; tohle zůstává pro měření
+        `scripts/measure_deferred_contamination.py` (#1679).
 
         `start` = začátek oken (u odložené reakce první obchodovaný bar po
         uzavírce, #1679); konec každého okna dořízne `window_contaminated`.

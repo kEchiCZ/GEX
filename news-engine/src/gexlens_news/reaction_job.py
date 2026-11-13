@@ -650,8 +650,14 @@ class ReactionJob:
         # z nich `reaction_contaminated` vybere svůj měřený úsek
         starts = [reaction_window_start(ts_event, symbol_bars) for symbol_bars in loaded.values()]
         latest = max((start for start in starts if start is not None), default=ts_event)
-        bases = [last_closed_before(symbol_bars, ts_event) for symbol_bars in loaded.values()]
-        lower = min((base.ts + _MINUTE for base in bases if base is not None), default=ts_event)
+        # Odložená reakce úsek od základu nepotřebuje (`window_contaminated` hlídá od
+        # zprávy) — jinak by se tahaly všechny eventy uzavírky před zprávou
+        floors = [
+            base.ts + _MINUTE
+            for symbol_bars, start in zip(loaded.values(), starts, strict=True)
+            if start == ts_event and (base := last_closed_before(symbol_bars, ts_event)) is not None
+        ]
+        lower = min(floors, default=ts_event)
         others = self._contaminating(lower, category, latest)
         rows: list[MinuteRow] = []
         # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)

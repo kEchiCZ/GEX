@@ -133,7 +133,7 @@ def candidates(
     Tentýž výběr jako hodinové doměření jobu (`reaction_job.minute_gaps`), jen
     bez omezení na poslední 3 dny.
     """
-    ready_before = now - dt.timedelta(minutes=max(DEFAULT_WINDOWS))
+    ready_before = now - dt.timedelta(minutes=max(DEFAULT_WINDOWS)) - SETTLE_MARGIN
     return minute_gaps(engine, symbols=symbols, ready_before=ready_before, batch=batch)
 
 
