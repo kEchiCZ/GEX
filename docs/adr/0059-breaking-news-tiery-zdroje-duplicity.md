@@ -354,7 +354,9 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
        „bez dat“, ne zmrzlé číslo.
      - Kontaminace K1 bere jen eventy známé v čase čtení (`ts_ingested ≤ at`).
      - **Konec okna:** dopad je zafixovaný od uzávěru posledního baru okna `[ts, ts + 5 min)`
-       (zpráva v 14:30:20 → 14:36:00), do té doby běží. Zpráva v poslední minutě před pauzou nebo
+       (zpráva v 14:30:20 → 14:36:00), do té doby běží. **Od #1502 (ADR-0043 dodatek 13. 11.)**
+       okno tvoří bary minut M … M+4 od minuty zprávy se základem v close baru před ní, takže
+       zpráva v 14:30:20 se zafixuje v 14:35:00; kontaminace K1 hlídá úsek od close základu. Zpráva v poslední minutě před pauzou nebo
        víkendem, po které bary nejsou nebo je reakce odložená, má stav „trh zavřený“, ne „bez
        dat“ (zavřený trh = žádná upozornění na chybějící data).
      - **Replay je přibližný v klasifikaci:** `at` filtruje příjem, kopie i bary, ale kategorie

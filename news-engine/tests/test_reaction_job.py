@@ -21,7 +21,8 @@ from gexlens_engine.storage.sentiment import (
 )
 from gexlens_news.bars import BarsRepository
 from gexlens_news.contamination import CONTAMINATION_REFRESH_LOOKBACK, ContaminationJob
-from gexlens_news.reaction_job import ReactionJob
+from gexlens_news.reaction_job import ReactionJob, _base_spot
+from gexlens_news.reactions import Bar
 
 DAY = dt.date(2026, 7, 28)
 EVENT_TS = dt.datetime(2026, 7, 28, 14, 30, tzinfo=dt.UTC)
@@ -866,3 +867,155 @@ def test_hodinovy_k1_doplni_pozde_zapsanou_zpravu_z_uzavirky(tmp_path: Path) -> 
         "ES": ALL_CONTAMINATED,
         "NQ": ALL_CONTAMINATED,
     }
+
+
+# ── #1502: základ před zprávou, kontaminace měřeného úseku (a) ──────
+
+MID_MINUTE = EVENT_TS + dt.timedelta(seconds=40)  # 14:30:40, základ = close baru 14:29
+
+
+def test_kontaminace_mezi_zakladem_a_zpravou_job_i_prepocet(tmp_path: Path) -> None:
+    """Event jiné kategorie mezi close základu (14:30:00) a zprávou kontaminuje (#1502 = a).
+
+    Hodinový přepočet (`ContaminationJob`) dá totéž co job — jinak by příznak
+    přepínal tam a zpátky. Event před close základu nekontaminuje.
+    """
+    engine, job = make_env(tmp_path)
+    event_id = add_event(engine, MID_MINUTE, importance=1, title="Zpráva", category="TECH")
+    add_event(
+        engine, EVENT_TS + dt.timedelta(seconds=20), importance=2, title="Jiná", category="FED"
+    )
+    add_event(
+        engine, EVENT_TS - dt.timedelta(seconds=10), importance=3, title="Dřív", category="FED"
+    )
+
+    job.run(NOW)
+
+    assert es_contamination(engine, event_id) == {1: True, 5: True, 15: True, 60: True}
+    assert ContaminationJob(engine, tmp_path / "data").run(NOW) == 0
+
+
+def test_pozde_zapsany_event_pred_zpravou_nastavi_kontaminaci(tmp_path: Path) -> None:
+    """Přepočet K1 bere i eventy mezi základem a zprávou, zapsané po měření (#1502 = a)."""
+    engine, job = make_env(tmp_path)
+    event_id = add_event(engine, MID_MINUTE, importance=1, title="Zpráva", category="TECH")
+    job.run(NOW)
+    assert es_contamination(engine, event_id) == {1: False, 5: False, 15: False, 60: False}
+
+    add_event(
+        engine, EVENT_TS + dt.timedelta(seconds=20), importance=2, title="Jiná", category="FED"
+    )
+    assert ContaminationJob(engine, tmp_path / "data").run(NOW + dt.timedelta(minutes=5)) == 2
+    assert es_contamination(engine, event_id) == {1: True, 5: True, 15: True, 60: True}
+
+
+def test_zprava_uprostred_minuty_ma_zaklad_pred_zpravou(tmp_path: Path) -> None:
+    """ES má drift +20 bp od baru 14:30: zpráva v 14:30:40 ho má v reakci celý (#1502 = V2).
+
+    Dřív byl základ close baru 14:30, tedy cena už po skoku, a reakce vyšla ~0 bp.
+    """
+    engine, job = make_env(tmp_path)
+    event_id = add_event(engine, MID_MINUTE, importance=1, title="Zpráva")
+    job.run(NOW)
+    by_key = {(s, w.window_min): w for s, w in reaction_windows(engine, event_id)}
+    assert by_key[("ES", 1)].ret_bp == pytest.approx(20.0)
+    assert abs(by_key[("NQ", 1)].ret_bp) < 0.01
+
+
+def test_spot_rezimu_je_close_zakladu() -> None:
+    """GEX režim reakce bere spot základu, ne close baru minuty zprávy (#1502)."""
+    series = [
+        Bar(EVENT_TS + dt.timedelta(minutes=offset), close, close, close, close, 1.0)
+        for offset, close in ((-2, 6990.0), (-1, 7000.0), (0, 7014.0), (1, 7020.0))
+    ]
+    assert _base_spot(series, MID_MINUTE) == 7000.0
+    assert _base_spot(series, EVENT_TS) == 7000.0
+    assert _base_spot(series, EVENT_TS - dt.timedelta(minutes=2)) is None
+
+
+def write_bars_without(
+    data_dir: Path, symbol: str, day: dt.date, skip: frozenset[dt.datetime] = frozenset()
+) -> None:
+    """Den plochých barů (7000) bez minut `skip` — díra v datech."""
+    directory = data_dir / "derived" / symbol / "bars"
+    directory.mkdir(parents=True, exist_ok=True)
+    start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
+    rows = [
+        {
+            "ts_min": ts,
+            "open": 7000.0,
+            "high": 7001.0,
+            "low": 6999.0,
+            "close": 7000.0,
+            "volume": 100.0,
+        }
+        for ts in (start + dt.timedelta(minutes=m) for m in range(24 * 60))
+        if ts not in skip
+    ]
+    pq.write_table(pa.Table.from_pylist(rows), directory / f"{day.isoformat()}.parquet")
+
+
+def gap_env(
+    tmp_path: Path, *days: dt.date, skip: frozenset[dt.datetime] = frozenset()
+) -> tuple[Engine, ReactionJob]:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    for symbol in ("ES", "NQ"):
+        for day in days:
+            write_bars_without(tmp_path / "data", symbol, day, skip)
+    return engine, ReactionJob(engine, BarsRepository(tmp_path / "data"))
+
+
+def assert_job_and_refresh_agree(
+    tmp_path: Path, engine: Engine, job: ReactionJob, event_id: int, now: dt.datetime
+) -> dict[int, bool]:
+    job.run(now)
+    measured = es_contamination(engine, event_id)
+    assert ContaminationJob(engine, tmp_path / "data").run(now) == 0
+    assert es_contamination(engine, event_id) == measured
+    return measured
+
+
+def test_k1_zaklad_v_predchozi_utc_partici(tmp_path: Path) -> None:
+    """Zpráva v 00:00:30: základ je bar 23:59 z partice předchozího dne (#1002, #1502)."""
+    news = dt.datetime(2026, 7, 29, 0, 0, 30, tzinfo=dt.UTC)
+    engine, job = gap_env(tmp_path, DAY, DAY + dt.timedelta(days=1))
+    event_id = add_event(engine, news, importance=1, title="Zpráva", category="TECH")
+    # Mezi close základu (00:00:00) a zprávou kontaminuje, před ním ne
+    add_event(engine, news - dt.timedelta(seconds=20), importance=2, title="Po", category="FED")
+    add_event(engine, news - dt.timedelta(seconds=40), importance=3, title="Před", category="FED")
+    assert assert_job_and_refresh_agree(tmp_path, engine, job, event_id, news + NOW_AFTER) == (
+        ALL_CONTAMINATED
+    )
+
+
+def test_k1_dira_pred_zpravou_posune_zacatek_useku(tmp_path: Path) -> None:
+    """Chybí bar 14:29: základ je bar 14:28, úsek začíná v 14:29:00 (#1502 = a)."""
+    engine, job = gap_env(tmp_path, DAY, skip=frozenset({EVENT_TS - dt.timedelta(minutes=1)}))
+    event_id = add_event(engine, MID_MINUTE, importance=1, title="Zpráva", category="TECH")
+    add_event(
+        engine, EVENT_TS - dt.timedelta(seconds=30), importance=2, title="V díře", category="FED"
+    )
+    assert assert_job_and_refresh_agree(tmp_path, engine, job, event_id, NOW) == ALL_CONTAMINATED
+
+
+def test_k1_chybejici_posledni_bar_okna_zkrati_usek(tmp_path: Path) -> None:
+    """Chybí bar 14:34: okno 5 končí barem 14:33 (14:34:00), event v 14:34:20 ho nekazí."""
+    engine, job = gap_env(tmp_path, DAY, skip=frozenset({EVENT_TS + dt.timedelta(minutes=4)}))
+    event_id = add_event(engine, MID_MINUTE, importance=1, title="Zpráva", category="TECH")
+    add_event(
+        engine,
+        EVENT_TS + dt.timedelta(minutes=4, seconds=20),
+        importance=2,
+        title="Po okně 5",
+        category="FED",
+    )
+    assert assert_job_and_refresh_agree(tmp_path, engine, job, event_id, NOW) == {
+        1: False,
+        5: False,
+        15: True,
+        60: True,
+    }
+
+
+NOW_AFTER = dt.timedelta(hours=3)

@@ -41,10 +41,11 @@ from gexlens_news.reactions import (
     DAILY_WINDOW_DAYS,
     DEFAULT_WINDOWS,
     DEFERRED_GAP_MINUTES,
-    DEFERRED_SETTLE_MARGIN,
     MIN_BASELINE_SESSIONS,
     MIN_MINUTE_SAMPLES,
     MINUTES_PER_TRADING_DAY,
+    SETTLE_MARGIN,
+    Bar,
     Reaction,
     SessionDaily,
     VolumeBaseline,
@@ -53,6 +54,7 @@ from gexlens_news.reactions import (
     compute_reactions,
     contaminates,
     immature_closure_start,
+    last_closed_before,
     reaction_window_start,
 )
 
@@ -66,6 +68,7 @@ CONTAMINATION_MIN_IMPORTANCE = 2
 CLOSURE_LOOKBACK_DAYS = 5
 # Totéž dopředu — první obchodovaný bar po víkendové zprávě (SPEC 5.1 deferred)
 CLOSURE_LOOKAHEAD_DAYS = 5
+_MINUTE = dt.timedelta(minutes=1)
 # Denní okna (#564): event je zralý, až jde uzavřít NEJDELŠÍ okno — všechna
 # denní okna se zapisují najednou (parciální zápis by rozbil pending dotaz).
 # 10 obchodních dní ≈ 14 kalendářních + rezerva na svátky.
@@ -288,7 +291,7 @@ class ReactionJob:
         cyklus — stejná past jako #655. Chybějící minutovou fázi doměřuje
         `complete_minute` (denní fáze a hodinový průchod, #1494).
         """
-        ready_before = now - dt.timedelta(minutes=max(self._windows))
+        ready_before = self._ready_before(now)
         # Odložená zpráva (#1574) měří okna od otevření po uzavírce: dokud od něj
         # neuplynulo nejdelší okno, zprávy té uzavírky nejsou zralé. Vynechají se
         # úplně — jinak by se o víkendu pro stovky zpráv četly bary každý cyklus
@@ -297,8 +300,8 @@ class ReactionJob:
         # (první bar ≥ DEFERRED_GAP_MINUTES po ní) — řez proto o tolik dřív.
         # Neodložené zprávy tam mají okno useknuté uzavírkou: ret, range i cont
         # vyjdou později na týchž barech stejně, `vol_z` jen s baseline dne měření.
-        # Zralost s rezervou jako `compute_reactions` (DEFERRED_SETTLE_MARGIN)
-        margin = int(DEFERRED_SETTLE_MARGIN.total_seconds() // 60)
+        # Zralost s rezervou jako `compute_reactions` (SETTLE_MARGIN)
+        margin = int(SETTLE_MARGIN.total_seconds() // 60)
         immature = immature_closure_start(now, max(self._windows) + margin)
         if immature is not None:
             cutoff = immature - dt.timedelta(minutes=DEFERRED_GAP_MINUTES)
@@ -321,20 +324,29 @@ class ReactionJob:
             rows = conn.execute(stmt).fetchall()
         return [(int(row.id), _as_utc(row.ts_event), row.category) for row in rows]
 
+    def _ready_before(self, now: dt.datetime) -> dt.datetime:
+        """Nejpozdější čas zprávy, jejíž nejdelší okno je v `now` uzavřené i s rezervou.
+
+        Okno končí nejpozději v čase zprávy + nejdelší okno (začíná minutou
+        zprávy, #1502); `compute_reactions` měří až `SETTLE_MARGIN` po konci.
+        """
+        return now - dt.timedelta(minutes=max(self._windows)) - SETTLE_MARGIN
+
     def _contaminating(
-        self, around: dt.datetime, category: str | None, start: dt.datetime
+        self, lower: dt.datetime, category: str | None, start: dt.datetime
     ) -> list[dt.datetime]:
         """Časy jiných významných eventů jiné kategorie, které můžou spadnout do oken.
 
-        `start` = začátek oken: čas zprávy, u odložené reakce první obchodovaný
-        bar po uzavírce. Kontaminuje zpráva v (zpráva, začátek + okno) — u odložené
-        reakce celá uzavírka i okno po otevření (#1659 = A, #1679).
+        `lower` = nejdřívější close základu symbolů (kontaminuje i event mezi
+        základem a zprávou, #1502 = a), `start` = nejpozdější začátek oken (u
+        odložené reakce první obchodovaný bar po uzavírce, #1679). Úsek každého
+        okna z nich vybere `reactions.reaction_contaminated`.
         """
         span = dt.timedelta(minutes=max(self._windows) + 1)
         until = start + span
         stmt = select(news_events.c.ts_event, news_events.c.category).where(
             and_(
-                news_events.c.ts_event > around,
+                news_events.c.ts_event >= lower,
                 news_events.c.ts_event <= until,
                 news_events.c.importance >= CONTAMINATION_MIN_IMPORTANCE,
             )
@@ -445,13 +457,8 @@ class ReactionJob:
                 if len(reactions) < len(self._daily_window_days):
                     wait_for_close = True
                     break
-                spot_at_event: float | None = None
-                for bar in bars:
-                    if bar.ts <= ts_event:
-                        spot_at_event = float(bar.close)
-                    else:
-                        break
-                regime = self._regime_reader.regime_at(symbol, ts_event, spot_at_event)
+                spot = _base_spot(bars, ts_event)
+                regime = self._regime_reader.regime_at(symbol, ts_event, spot)
                 rows.append((symbol, _phase_values(reactions, regime, now), len(reactions)))
             if wait_for_close:
                 continue  # dočasné — nejdelší okno se uzavře v příštích dnech
@@ -493,7 +500,7 @@ class ReactionJob:
                 gaps = minute_gaps(
                     self._engine,
                     symbols=self._symbols,
-                    ready_before=now - dt.timedelta(minutes=max(self._windows)),
+                    ready_before=self._ready_before(now),
                     event_ids=measured_ids,
                 )
                 written += self._complete_logged(gaps, now, "denní fáze")
@@ -536,7 +543,7 @@ class ReactionJob:
         gaps = minute_gaps(
             self._engine,
             symbols=self._symbols,
-            ready_before=now - dt.timedelta(minutes=max(self._windows)),
+            ready_before=self._ready_before(now),
             since=now - MINUTE_RETRY_LOOKBACK,
             limit=MINUTE_RETRY_LIMIT,
             # Nejnovější první: trvale neměřitelné páry na konci okna nesmí
@@ -638,11 +645,20 @@ class ReactionJob:
             )
             for symbol in self._symbols
         }
-        # Kontaminující eventy až k nejpozdějšímu začátku oken symbolů (#1679);
-        # okno každého symbolu si z nich `window_contaminated` vybere své
+        # Kontaminující eventy od nejdřívějšího close základu (#1502 = a) až
+        # k nejpozdějšímu začátku oken symbolů (#1679); okno každého symbolu si
+        # z nich `reaction_contaminated` vybere svůj měřený úsek
         starts = [reaction_window_start(ts_event, symbol_bars) for symbol_bars in loaded.values()]
         latest = max((start for start in starts if start is not None), default=ts_event)
-        others = self._contaminating(ts_event, category, latest)
+        # Odložená reakce úsek od základu nepotřebuje (`window_contaminated` hlídá od
+        # zprávy) — jinak by se tahaly všechny eventy uzavírky před zprávou
+        floors = [
+            base.ts + _MINUTE
+            for symbol_bars, start in zip(loaded.values(), starts, strict=True)
+            if start == ts_event and (base := last_closed_before(symbol_bars, ts_event)) is not None
+        ]
+        lower = min(floors, default=ts_event)
+        others = self._contaminating(lower, category, latest)
         rows: list[MinuteRow] = []
         # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
         closed_flags: list[bool] = []
@@ -659,14 +675,9 @@ class ReactionJob:
                 continue
             # `deferred` je na event stejné ve všech oknech
             closed_flags.append(reactions[0].deferred)
-            # GEX režim v čase eventu (#402): spot = poslední bar ≤ ts_event
-            spot_at_event: float | None = None
-            for bar in symbol_bars:
-                if bar.ts <= ts_event:
-                    spot_at_event = float(bar.close)
-                else:
-                    break
-            regime = self._regime_reader.regime_at(symbol, ts_event, spot_at_event)
+            # GEX režim v čase eventu (#402) ze spotu základu (#1502)
+            spot = _base_spot(symbol_bars, ts_event)
+            regime = self._regime_reader.regime_at(symbol, ts_event, spot)
             rows.append(MinuteRow(symbol, _phase_values(reactions, regime, now), len(reactions)))
         return MinuteMeasurement(rows, closed_flags)
 
@@ -777,6 +788,16 @@ def _write_phase(conn: Connection, event_id: int, symbol: str, values: dict[str,
         conn.execute(insert(news_reactions).values(event_id=event_id, symbol=symbol, **values))
     else:
         conn.execute(update(news_reactions).where(key).values(**values))
+
+
+def _base_spot(bars: Sequence[Bar], ts_event: dt.datetime) -> float | None:
+    """Spot pro GEX režim reakce = close základu, tedy cena před zprávou (#1502).
+
+    Dřív close baru minuty zprávy, u zprávy uprostřed minuty cena po zprávě.
+    `bars` seřazené podle času.
+    """
+    base = last_closed_before(bars, ts_event)
+    return float(base.close) if base is not None else None
 
 
 def _as_utc(value: dt.datetime) -> dt.datetime:

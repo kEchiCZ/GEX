@@ -38,6 +38,16 @@ from gexlens_news.predictions import (
 logger = logging.getLogger(__name__)
 
 
+def outcome_of(predicted_dir: int, ret_bp: float) -> tuple[int, bool]:
+    """Realizovaný směr a správnost predikce z výnosu okna.
+
+    Jediný zdroj pro vyhodnocení (`PredictionJob.evaluate`) i retro přehodnocení
+    po změně měření reakce (`scripts/remeasure_reactions_1502.py`).
+    """
+    realized = 1 if ret_bp > 0 else (-1 if ret_bp < 0 else 0)
+    return realized, bool(predicted_dir != 0 and predicted_dir == realized)
+
+
 class PredictionJob:
     """Predikce z klasifikace + jejich vyhodnocení proti naměřeným reakcím."""
 
@@ -127,16 +137,14 @@ class PredictionJob:
                 key = (int(row["prediction_id"]), row["symbol"], window.window_min)
                 if key in done:
                     continue
-                ret_bp = window.ret_bp
-                realized = 1 if ret_bp > 0 else (-1 if ret_bp < 0 else 0)
-                predicted_dir = row["predicted_dir"]
+                realized, correct = outcome_of(int(row["predicted_dir"]), window.ret_bp)
                 pending.append(
                     {
                         "prediction_id": int(row["prediction_id"]),
                         "symbol": row["symbol"],
                         "window_min": window.window_min,
                         "realized_dir": realized,
-                        "correct": bool(predicted_dir != 0 and predicted_dir == realized),
+                        "correct": correct,
                         "computed_at": now,
                     }
                 )

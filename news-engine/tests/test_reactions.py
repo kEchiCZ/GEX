@@ -22,14 +22,17 @@ from gexlens_news.reactions import (
     compute_reactions,
     excursion_series,
     immature_closure_start,
+    last_closed_before,
     measure_excursion,
     minute_of_day_et,
     percentile_abs,
+    reaction_contaminated,
     tod_thresholds,
     volume_z_score,
 )
 
 EVENT = dt.datetime(2026, 7, 28, 14, 30, tzinfo=dt.UTC)
+_MIN = dt.timedelta(minutes=1)
 
 
 def bars(
@@ -448,9 +451,113 @@ def test_odlozena_reakce_az_po_uzavreni_vsech_oken() -> None:
     assert len(compute_reactions(PATEK_PO_CLOSE, friday + sunday)) == 4
 
 
-def test_neodlozena_zprava_now_nezdrzi() -> None:
-    """Zpráva za běžícího trhu: okna od času zprávy, `now` po nejdelším okně je měří hned."""
+def test_neodlozena_zprava_meri_se_minutu_po_konci_okna() -> None:
+    """Zpráva za běžícího trhu: měří se až minutu po konci nejdelšího okna (#1502).
+
+    V konci okna může být poslední bar ještě provizorní kopie rozdělané minuty
+    (ADR-0005); dřív rezervu měla jen odložená reakce (#1574).
+    """
     series = bars(EVENT - dt.timedelta(minutes=1), [7000.0 + i for i in range(70)])
-    reactions = compute_reactions(EVENT, series, now=EVENT + dt.timedelta(minutes=60))
+    assert compute_reactions(EVENT, series, now=EVENT + dt.timedelta(minutes=60)) == []
+    reactions = compute_reactions(EVENT, series, now=EVENT + dt.timedelta(minutes=61))
     assert [r.window_min for r in reactions] == [1, 5, 15, 60]
     assert not any(r.deferred for r in reactions)
+    # Zpráva uprostřed minuty: okno končí v minutě zprávy + 60, rezerva od toho
+    mid = EVENT + dt.timedelta(seconds=20)
+    assert len(compute_reactions(mid, series, now=EVENT + dt.timedelta(minutes=61))) == 4
+
+
+# ── Základ a okno od minuty zprávy (#1502 = V2), kontaminace měřeného úseku (a) ──
+
+#: Bary 14:28–14:36: cena v 14:30:00 (close baru 14:29) 6000, v minutě 14:30 skok
+#: na 6030 (release v 14:30:00), pak pokles o 6 bodů za minutu. high/low = close ± 1.
+GOLDEN_START = dt.datetime(2026, 8, 5, 14, 28, tzinfo=dt.UTC)
+GOLDEN_CLOSES = [6000.0, 6000.0, 6030.0, 6024.0, 6018.0, 6012.0, 6006.0, 6000.0, 5994.0]
+RELEASE = dt.datetime(2026, 8, 5, 14, 30, tzinfo=dt.UTC)
+HEADLINE = RELEASE + dt.timedelta(seconds=40)
+
+
+def test_golden_zprava_uprostred_minuty_ma_zaklad_pred_zpravou() -> None:
+    """Golden #1502 (V2): zpráva v 14:30:40 má tentýž základ i okno jako zpráva ve 14:30:00.
+
+    Základ = close baru 14:29 (cena v 14:30:00, 6000), okno 1 = bar 14:30, okno 5 =
+    bary 14:30–14:34. Dřív měla zpráva v 14:30:40 základ close baru 14:30 (6030,
+    cena až po skoku) a okno 1 = bar 14:31: −9,95 bp místo +50 bp (jako ISM 5. 8. 2024).
+    """
+    series = bars(GOLDEN_START, GOLDEN_CLOSES)
+    release = {r.window_min: r for r in compute_reactions(RELEASE, series, windows=(1, 5))}
+    headline = {r.window_min: r for r in compute_reactions(HEADLINE, series, windows=(1, 5))}
+    assert release == headline
+    assert headline[1].ret_bp == pytest.approx(50.0)  # (6030 − 6000) / 6000
+    assert headline[5].ret_bp == pytest.approx(10.0)  # (6006 − 6000) / 6000
+    assert headline[5].range_bp == pytest.approx(26.0 / 6000.0 * 10_000)  # 6031 − 6005
+    assert not any(r.deferred or r.contaminated for r in headline.values())
+
+
+def test_golden_denni_okno_ma_zaklad_pred_zpravou() -> None:
+    """Denní okna (#564) berou tentýž základ jako minutová: close baru 14:29 (#1502)."""
+    series = bars(GOLDEN_START, GOLDEN_CLOSES)
+    session = SessionDaily(
+        day=RELEASE.date(),
+        settle_ts=dt.datetime(2026, 8, 5, 20, 0, tzinfo=dt.UTC),
+        close=6060.0,
+        high=6070.0,
+        low=5990.0,
+    )
+    (headline,) = compute_daily_reactions(HEADLINE, series, [session], window_days=(1,))
+    assert headline.ret_bp == pytest.approx(100.0)  # (6060 − 6000) / 6000
+
+
+def test_last_closed_before_bere_jen_uzavrene_bary() -> None:
+    series = bars(GOLDEN_START, GOLDEN_CLOSES)
+    for moment in (HEADLINE, RELEASE):
+        base = last_closed_before(series, moment)
+        assert base is not None and base.ts == RELEASE - _MIN
+    assert last_closed_before(series, GOLDEN_START) is None
+
+
+def test_kontaminace_hlida_mereny_usek_od_zakladu() -> None:
+    """(a): kontaminuje jiný event v [close základu, konec posledního baru okna) mimo čas zprávy."""
+    series = bars(GOLDEN_START, GOLDEN_CLOSES + [5990.0] * 20)
+
+    def flags(other: dt.datetime) -> dict[int, bool]:
+        return {
+            r.window_min: r.contaminated
+            for r in compute_reactions(HEADLINE, series, windows=(1, 5, 15), other_event_ts=[other])
+        }
+
+    # Mezi základem (14:30:00) a zprávou: hýbe cenou, kterou okno připisuje zprávě
+    assert flags(RELEASE + dt.timedelta(seconds=20)) == {1: True, 5: True, 15: True}
+    # Před close základu ani ve stejném čase jako zpráva nekontaminuje
+    assert flags(RELEASE - dt.timedelta(seconds=10)) == {1: False, 5: False, 15: False}
+    assert flags(HEADLINE) == {1: False, 5: False, 15: False}
+    # Okno 5 končí barem 14:34 (14:35:00); event ve 14:35:10 je až po něm
+    assert flags(RELEASE + dt.timedelta(minutes=5, seconds=10)) == {1: False, 5: False, 15: True}
+
+
+def test_kontaminace_od_close_starsiho_zakladu_pri_mezere() -> None:
+    """Chybí-li bar před zprávou, základ je starší bar a měřený úsek začíná jeho close."""
+    series = [bar for bar in bars(GOLDEN_START, GOLDEN_CLOSES) if bar.ts != GOLDEN_START + _MIN]
+    other = GOLDEN_START + dt.timedelta(minutes=1, seconds=30)  # 14:29:30, bar 14:29 chybí
+    (reaction,) = compute_reactions(HEADLINE, series, windows=(1,), other_event_ts=[other])
+    assert reaction.contaminated
+    assert reaction.ret_bp == pytest.approx(50.0)  # základ close baru 14:28
+
+
+def test_reaction_contaminated_odlozena_beze_zmeny() -> None:
+    """Odložená reakce hlídá dál (zpráva, začátek + okno) (#1659 = A, #1679)."""
+    news = dt.datetime(2026, 10, 17, 12, 0, tzinfo=dt.UTC)  # sobota
+    opened = dt.datetime(2026, 10, 18, 22, 0, tzinfo=dt.UTC)
+    friday_close = dt.datetime(2026, 10, 16, 20, 59, tzinfo=dt.UTC)
+    before_news = news - dt.timedelta(hours=1)
+    after_news = news + dt.timedelta(hours=1)
+
+    def contaminated(other: dt.datetime) -> bool:
+        return reaction_contaminated(
+            news, opened, 5, base_ts=friday_close, last_ts=opened, other_event_ts=[other]
+        )
+
+    assert not contaminated(before_news)
+    assert contaminated(after_news)
+    assert contaminated(opened + dt.timedelta(minutes=4))
+    assert not contaminated(opened + dt.timedelta(minutes=5))

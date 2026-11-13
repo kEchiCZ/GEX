@@ -255,8 +255,9 @@ def test_card_impact_contamination_k1() -> None:
 @pytest.mark.parametrize(
     ("ts_event", "expected"),
     [
-        (EVENT, dt.datetime(2026, 10, 8, 14, 36, tzinfo=dt.UTC)),  # bar 14:35 se uzavře v 14:36
-        (MINUTE_START, dt.datetime(2026, 10, 8, 14, 35, tzinfo=dt.UTC)),  # poslední bar 14:34
+        # Okno od minuty zprávy (#1502 = V2): bary 14:30–14:34, bar 14:34 se uzavře v 14:35
+        (EVENT, dt.datetime(2026, 10, 8, 14, 35, tzinfo=dt.UTC)),
+        (MINUTE_START, dt.datetime(2026, 10, 8, 14, 35, tzinfo=dt.UTC)),
     ],
 )
 def test_impact_fixes_when_last_window_bar_closes(
@@ -267,11 +268,11 @@ def test_impact_fixes_when_last_window_bar_closes(
 
 def test_card_impact_runs_until_last_window_bar_closes() -> None:
     bars = minute_bars(BEFORE, MINUTE_START + dt.timedelta(minutes=5))
-    at = EVENT + dt.timedelta(minutes=5, seconds=10)  # 14:35:30, bar 14:35 ještě běží
+    at = EVENT + dt.timedelta(minutes=4, seconds=10)  # 14:34:30, bar 14:34 ještě běží
     impact = breaking.card_impact(EVENT, bars, at=at, market_closed=False)
     assert impact.state == breaking.IMPACT_RUNNING
     later = breaking.card_impact(
-        EVENT, bars, at=dt.datetime(2026, 10, 8, 14, 36, tzinfo=dt.UTC), market_closed=False
+        EVENT, bars, at=dt.datetime(2026, 10, 8, 14, 35, tzinfo=dt.UTC), market_closed=False
     )
     assert later.state == breaking.IMPACT_FIXED
 

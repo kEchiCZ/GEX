@@ -12,7 +12,7 @@ export type ImpactState = 'running' | 'fixed' | 'closed' | 'no_data'
 export interface BreakingImpact {
   state: ImpactState
   elapsed_min: number
-  /** Změna ceny od posledního close před zprávou (bp) — hlavní číslo. */
+  /** Změna ceny od close poslední uzavřené minuty před zprávou (bp) — hlavní číslo. */
   ret_bp: number | null
   range_bp: number | null
   /** Výchylka ADR-0043 od minuty zprávy; null = zatím nejde změřit. */
@@ -141,10 +141,10 @@ export function delayLabel(seconds: number): string {
 /** Tooltip dopadu — odrážky a `\n` (vzor `ivRankTooltip`), ne odstavec. */
 export function impactTooltip(symbol: string, impact: BreakingImpact): string {
   const lines = [
-    `${symbol}: změna ceny od posledního close před zprávou (okno 5 min)`,
+    `${symbol}: změna ceny od začátku minuty zprávy (okno 5 min)`,
     impact.state === 'running'
       ? `• běží ${impact.elapsed_min} min, číslo se ještě mění`
-      : '• zafixováno po 5 minutách',
+      : '• zafixováno na konci 5. minuty od minuty zprávy',
   ]
   if (impact.state === 'closed') {
     lines[1] = '• zpráva přišla při zavřeném trhu; reakci na otevření ukáže feed zpráv'
@@ -153,7 +153,9 @@ export function impactTooltip(symbol: string, impact: BreakingImpact): string {
   const excursion = excursionLabel(impact)
   if (excursion) lines.push(`• výchylka (high/low) od minuty zprávy: ${excursion}`)
   if (impact.contaminated) {
-    lines.push('• ⚠ do okna spadla jiná významná zpráva — pohyb nejde přičíst jen této')
+    lines.push(
+      '• ⚠ od začátku minuty zprávy do konce okna přišla jiná významná zpráva — pohyb nejde přičíst jen této',
+    )
   }
   return lines.join('\n')
 }

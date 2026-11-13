@@ -840,12 +840,15 @@ Každá položka nese:
   Finnhub…) a ne oficiální zdroj nebo headline feed (Benzinga, kurátoři Bluesky). Štítek
   zmizí, jakmile stejnou zprávu přinese tier 1–2. Článek jde na kartu, jen když dorazil do
   **60 min od publikace**: staré články doručené se zpožděním kartu nezahlcují;
-- **dopad ES a NQ v bp:** hlavní číslo je změna ceny od posledního close před zprávou
-  (zelená nahoru, červená dolů). Vedle je **výchylka** (↑/↓ bp, high/low od minuty zprávy),
-  aby se neztratil whipsaw. Prvních 5 minut je u čísla **„běží X min“** a číslo se mění.
-  Pak je **zafixované** („5 min“) a odpovídá Δ5m, které později ukáže feed zpráv;
-- **⚠** u dopadu = do okna spadla jiná významná zpráva jiného typu, pohyb tedy nejde přičíst
-  jen téhle;
+- **dopad ES a NQ v bp:** hlavní číslo je změna ceny od začátku minuty zprávy (close
+  poslední uzavřené minuty před zprávou) do konce 5. minuty (zelená nahoru, červená dolů).
+  Zpráva v 14:30:20 tak měří 14:30:00 → 14:35:00: cena před zprávou, ne až po ní (#1502).
+  Vedle je **výchylka** (↑/↓ bp, high/low od minuty zprávy), aby se neztratil whipsaw. Do
+  konce okna je u čísla **„běží X min“** a číslo se mění. Pak je **zafixované** („5 min“)
+  a odpovídá Δ5m, které později ukáže feed zpráv;
+- **⚠** u dopadu = do měřeného úseku (od začátku minuty zprávy do konce okna) spadla jiná
+  významná zpráva jiného typu, i těsně před touto zprávou. Pohyb tedy nejde přičíst jen
+  téhle;
 - **„trh zavřený“** místo čísla, když zpráva přišla mimo obchodní dobu (nebo těsně před
   pauzou či víkendem). Reakci na otevření ukáže feed zpráv. **„bez dat“** znamená, že trh byl
   podle rozvrhu otevřený, ale cenová data po zprávě chybí (výpadek), tedy mezera, ne nula;

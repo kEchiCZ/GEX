@@ -149,3 +149,56 @@ text), `reactions.py` (výchylka, baseline) a `preopen.py` (etapy, sklon, úrovn
 - Sociální sítě jsou významné až pro posty od nasazení (starší nemají `raw.curated`).
 - Shluky v prvních ~45 min po otevření nejdou změřit (σ potřebuje 45 minutových výnosů);
   loguje se jejich počet.
+
+## Dodatek 2026-11-13: základ a okno reakce zprávy od minuty zprávy (#1502)
+
+- Stav: přijato (12. 11. 2026, vlastník v #1385 Rozhodnuto a v #1502 issuecomment-6837104631
+  a issuecomment-6837256359: V2, kontaminace a, retro a, predikce a). Měření a varianty:
+  #1502 issuecomment-6834644085.
+- **Kontext:** `news_reactions` (SPEC 5.1) brala jako základ close posledního baru s `ts < t`.
+  U zprávy v M + s je to bar M, jehož close je cena v M + 1, tedy až po zprávě; okno tvořily bary
+  M+1 … M+w. Výchylka tohoto ADR (bod 3) a výnos releasu (ADR-0044) měří od celé minuty proti
+  close minuty před ní. Uprostřed minuty bylo 576 640 ze 644 402 reakcí. Příklad: ISM 5. 8. 2024
+  ve 14:00:00 a headline ve 14:00:40 — dřív −18,6 bp jako čistý vzorek, s novým základem
+  +81,8 bp.
+- **Rozhodnutí:**
+  1. **Základ** = close posledního uzavřeného baru před zprávou (`bar.ts + 1 min ≤ t`,
+     `reactions.last_closed_before`), v minutových i denních oknech (#564). **Okno** w = bary
+     minut M … M+w−1, kde M je minuta zprávy (V2). Zpráva v celou minutu má základ i okno jako
+     dřív. Odložená reakce má okna od prvního obchodovaného baru jako dřív, mění se jen základ.
+     GEX režim reakce (`regime_*`) bere spot základu.
+  2. **Kontaminace (a):** jiný event K1 (importance ≥ 2, jiná kategorie, ADR-0045) v měřeném
+     úseku [close základu, konec posledního baru okna), kromě eventů ve stejném čase jako
+     zpráva — tedy i mezi základem a zprávou. Odložená reakce beze změny (#1659 = A, #1679).
+     Jediná funkce `reactions.reaction_contaminated` pro měření, hodinový přepočet K1 (#1522)
+     i kartu Breaking (ADR-0059 bod 8).
+  3. **Rezerva zralosti** 1 min po konci okna i u neodložených reakcí (`SETTLE_MARGIN`, dřív
+     jen odložené, #1574): okno 60 min se dřív u 20 385 oken měřilo s provizorním posledním
+     barem (ADR-0005).
+  4. **Retro** všech řádků s minutovou fází a přehodnocení `news_prediction_outcomes` okna 5
+     v témže běhu (`scripts/remeasure_reactions_1502.py`; zápis do PG jen se svolením
+     vlastníka, po záloze, idempotentně).
+- **Důsledky:**
+  - Karta Breaking: dopad je konečný v M + 5 (zpráva v 14:30:20 → 14:35:00, dřív 14:36:00).
+  - Okno končí o s sekund dřív než t + w; u okna 1 min zbude po zprávě v hh:mm:50 jen 10 s.
+  - Zpráva v první minutě po otevření (např. 17:00:30 CT) má základ v posledním baru před
+    uzavírkou, tedy gap v reakci a měřený úsek přes celou uzavírku. Je to táž konvence jako
+    u zprávy do `DEFERRED_GAP_MINUTES` před otevřením, která odložená není.
+  - Retro mění minutovou fázi 505 340 řádků. Nad kopií produkce s retro všech řádků
+    (průchod V2p_all) je otevřených bran modelu 175 místo 177 (15 se otevře, 17 zavře).
+    Přehodnocení otočí `realized_dir` okna 5 u 55 682 z 280 947 outcomes (19,8 %; na
+    kontaminaci nezávisí) a váhy se pod V2 a (a) pohnou nejvíc u ES MACRO_GROWTH
+    (0,711 → 0,425, průchod V2p_mid s přehodnocením). Mega caps (#1491) dál nesplněno,
+    ADR-0059 varianta A platí.
+  - Retro mění `regime_*` jen o změnu spotu: kde dnešní levels se spotem dřívějšího vzorce
+    nezopakují uložený režim (levels mají retenci 90 dní, 29 526 minutových režimů je starších),
+    uložený režim zůstává — data se neztratí. Změní se i režim zpráv v celou minutu (spot
+    z baru M na bar M − 1), plán bod 9 měřil jen zprávy uprostřed minuty.
+  - Zpráva po díře v barech za otevřeného trhu má základ přes celou díru, jako dřív zpráva
+    v celou minutu. Archiv 20. 7.–12. 11. 2026 nemá za otevřeného trhu žádnou díru (doplní je
+    `ibkr_hist`), takže jde o přechodný stav do doplnění; retro měří nad doplněnými bary.
+  - Nasazení news-engine a retro patří do téže pauzy: hodinový přepočet K1 mezitím počítá
+    `cont_*` novým pravidlem nad `ret_*` ze starého základu (retro je pak přepíše).
+  - Kandidáti kontaminace se berou od close základu; měření 12. 11. je bralo od minuty zprávy.
+    Liší se to jen u zprávy po mezeře v barech (základ starší než M − 1).
+  - Mimo rozsah: výsledek signálu měřený stejnou chybou (#1796).

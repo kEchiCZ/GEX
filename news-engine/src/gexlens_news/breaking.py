@@ -150,14 +150,12 @@ def theme(title: str) -> str | None:
 
 
 def fixed_at(ts_event: dt.datetime) -> dt.datetime:
-    """Kdy je 5min dopad konečný: uzávěr posledního baru okna `[ts, ts + 5 min)`.
+    """Kdy je 5min dopad konečný: uzávěr posledního baru okna, tedy bary minut M … M+4.
 
-    Zpráva v 14:30:20 má v okně bar 14:35, který se uzavře v 14:36:00; zpráva
-    v celou minutu 14:30:00 končí barem 14:34, tedy v 14:35:00.
+    Okno začíná minutou zprávy jako `reactions.compute_reactions` (#1502 = V2):
+    zpráva v 14:30:20 i v 14:30:00 končí barem 14:34, který se uzavře v 14:35:00.
     """
-    end = ts_event + dt.timedelta(minutes=CARD_WINDOW_MIN)
-    floor = end.replace(second=0, microsecond=0)
-    return end if end == floor else floor + _MINUTE
+    return ts_event.replace(second=0, microsecond=0) + dt.timedelta(minutes=CARD_WINDOW_MIN)
 
 
 @dataclass(frozen=True)

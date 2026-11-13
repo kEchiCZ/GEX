@@ -17,7 +17,8 @@ Dvě fáze nad produkční PG (dialektově neutrální — v testech SQLite):
    collector — nebo už má post s příznakem. Report vypíše počty
    i nepřeložené handly.
 2. **Kontaminace** (`contamination`): `news_reactions.cont_{1,5,15,60}` znovu
-   pravidlem K1 (`reactions.contaminates`, `window_contaminated`) nad
+   pravidlem K1 (`reactions.contaminates`, `reaction_contaminated`, od #1502 v měřeném
+   úseku od close základu) nad
    klasifikací po fázi 1 — kontaminuje jen jiný event s importance ≥ 2 a jinou
    kategorií, ve stejném rozsahu jako `ReactionJob._contaminating`
    (zpráva, začátek + okno). U deferred reakcí začíná okno prvním obchodovaným
@@ -563,7 +564,7 @@ def contamination_report(
         "## Fáze 2 — kontaminace K1 (jen jiná kategorie kontaminuje)",
         "",
         f"Řádků reakcí s minutovou fází: {len(reactions)}; změněných řádků **{len(changes)}**; "
-        f"přečteno partic barů (deferred): {reads}.",
+        f"přečteno partic barů (časy barů základu a oken): {reads}.",
         "",
     ]
     rows = []

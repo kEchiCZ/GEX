@@ -1,16 +1,25 @@
 """Měření reakce trhu na zprávu (#276, SPEC 5.1) — čisté funkce bez I/O.
 
 Pro každý event a symbol se měří okna +1/+5/+15/+60 min: návrat v bps, rozpětí
-a objemové z-score. Dvě věci jsou tu podstatnější než samotný výpočet, protože
-na nich stojí „systém se nesmí učit šum":
+a objemové z-score. **Základ** je close posledního uzavřeného baru před zprávou
+(`bar.ts + 1 min ≤ zpráva`), tedy poslední cena, kterou minutové bary před
+zprávou znají. **Okno** w tvoří bary minut M … M+w−1, kde M je minuta zprávy —
+stejně jako výchylka (ADR-0043) a výnos releasu (ADR-0044). Zpráva uprostřed
+minuty tak nemá v základu cenu po zprávě (#1502 = V2, ADR-0043 doplněk 13. 11.);
+zpráva v celou minutu má základ i okno jako dřív.
 
-* **Kontaminace** — když do okna spadne jiný event s importance ≥ 2 **jiné
-  kategorie**, nejde přiřadit pohyb jedné zprávě. Takové okno se označí a do
-  trénovacích statistik nevstupuje. Bez toho by se všem headlines z Fed day
+Dvě věci jsou tu podstatnější než samotný výpočet, protože na nich stojí
+„systém se nesmí učit šum":
+
+* **Kontaminace** — když do měřeného úseku spadne jiný event s importance ≥ 2
+  **jiné kategorie**, nejde přiřadit pohyb jedné zprávě. Takové okno se označí
+  a do trénovacích statistik nevstupuje. Bez toho by se všem headlines z Fed day
   přičetl tentýž pohyb. Event téže kategorie kontaminací není (varianta K1,
   ADR-0045): je to pokrytí téže události — řádek Benzinga „USA CPI … Vs Est“
   minutu po kalendáři CPI by jinak vyřadil z modelu 92 % reakcí na USD High
-  releasy.
+  releasy. Měřený úsek je od close základu do konce posledního baru okna, takže
+  kontaminuje i event mezi základem a zprávou (#1502 = a); odložená reakce
+  hlídá dál čas od zprávy do konce okna po otevření (#1659 = A, #1679).
 * **Deferred** — u zprávy, která přišla při zavřeném trhu (víkend, svátek), se
   okna měří od prvního obchodovaného baru, ale **základní cena zůstává poslední
   před uzavřením**, takže `ret_bp` zahrnuje gap. Přesně to je otázka „co
@@ -102,11 +111,15 @@ class Reaction:
     closure_open: dt.datetime | None = None
 
 
-def _last_before(bars: Sequence[Bar], moment: dt.datetime) -> Bar | None:
-    """Poslední bar uzavřený před `moment` — cena, než zpráva dorazila."""
+def last_closed_before(bars: Sequence[Bar], moment: dt.datetime) -> Bar | None:
+    """Poslední bar uzavřený nejpozději v `moment` (`ts + 1 min ≤ moment`) — základ reakce.
+
+    Close baru je cena na konci jeho minuty: bar minuty zprávy v M + s by nesl
+    cenu z M + 1, tedy po zprávě (#1502). `bars` seřazené podle času.
+    """
     found: Bar | None = None
     for bar in bars:
-        if bar.ts < moment:
+        if bar.ts + _MINUTE <= moment:
             found = bar
         else:
             break
@@ -184,13 +197,48 @@ def window_contaminated(
     window: int,
     other_event_ts: Sequence[dt.datetime],
 ) -> bool:
-    """Spadl do okna [start, start + window) jiný event po zprávě? (SPEC 5.1)
+    """Spadl jiný event mezi zprávu a `start + window`? Pravidlo odložené reakce.
 
-    `start` = čas zprávy, u deferred první obchodovaný bar; `other_event_ts`
-    = kontaminující eventy (`contaminates`). Sdílí ho job i reklasifikace.
+    `start` = první obchodovaný bar po uzavírce: kontaminuje zpráva v (zpráva,
+    začátek + okno), tedy zbytek uzavírky i okno po otevření (#1659 = A, #1679).
+    Neodložená reakce hlídá celý měřený úsek (`reaction_contaminated`).
+    `other_event_ts` = kontaminující eventy (`contaminates`).
     """
     end = start + dt.timedelta(minutes=window)
     return any(event_ts < other < end for other in other_event_ts)
+
+
+def window_bars_start(event_ts: dt.datetime, start: dt.datetime) -> dt.datetime:
+    """Minuta prvního baru oken: minuta zprávy, u odložené reakce první obchodovaný bar.
+
+    `start` = `reaction_window_start` (čas zprávy, u odložené první obchodovaný
+    bar). Okno w pak tvoří bary minut [začátek, začátek + w) (#1502 = V2).
+    """
+    return start if start != event_ts else event_ts.replace(second=0, microsecond=0)
+
+
+def reaction_contaminated(
+    event_ts: dt.datetime,
+    start: dt.datetime,
+    window: int,
+    *,
+    base_ts: dt.datetime,
+    last_ts: dt.datetime,
+    other_event_ts: Sequence[dt.datetime],
+) -> bool:
+    """Kontaminace okna reakce; sdílí ji měření, reklasifikace i karta Breaking.
+
+    Neodložená reakce: jiný event v měřeném úseku [close základu, konec
+    posledního baru okna), tedy i mezi základem a zprávou (#1502 = a). Event se
+    stejným časem jako zpráva nekontaminuje. `base_ts` a `last_ts` = `ts` baru
+    základu a posledního baru okna. Odložená reakce (`start` ≠ zpráva) beze
+    změny podle `window_contaminated`.
+    """
+    if start != event_ts:
+        return window_contaminated(event_ts, start, window, other_event_ts)
+    lo = base_ts + _MINUTE
+    hi = last_ts + _MINUTE
+    return any(lo <= other < hi and other != event_ts for other in other_event_ts)
 
 
 #: Krok hledání hranice uzavírky — rozvrh CME má hranice na čtvrthodinách
@@ -198,9 +246,11 @@ def window_contaminated(
 _SCHEDULE_STEP = dt.timedelta(minutes=15)
 #: Pojistka hledání: nejdelší uzavírka (víkend se svátkem) je pod 4 dny
 _SCHEDULE_HORIZON = dt.timedelta(days=5)
-#: Rezerva po konci odloženého okna (#1574): poslední bar okna může být ještě
-#: provizorní kopie rozdělané minuty (ADR-0005), měří se až minutu po konci
-DEFERRED_SETTLE_MARGIN = dt.timedelta(minutes=1)
+#: Rezerva po konci okna: poslední bar okna může být ještě provizorní kopie
+#: rozdělané minuty (ADR-0005), měří se až minutu po konci. Odložené reakce ji
+#: mají od #1574, neodložené od #1502 (20 385 oken 60 min změřených s provizorním
+#: posledním barem)
+SETTLE_MARGIN = dt.timedelta(minutes=1)
 
 
 def _quarter_floor(ts: dt.datetime) -> dt.datetime:
@@ -265,14 +315,18 @@ def compute_reactions(
 ) -> list[Reaction]:
     """Reakce ve všech oknech; prázdný seznam = není z čeho měřit (nebo ještě ne).
 
-    `bars` musí být seřazené a pokrývat okolí události (před i po).
+    `bars` musí pokrývat okolí události (před i po). Základ = close posledního
+    uzavřeného baru před zprávou, okno w = bary [M, M + w), kde M je minuta
+    zprávy, u odložené reakce minuta prvního obchodovaného baru (#1502 = V2).
     `other_event_ts` jsou časy ostatních kontaminujících eventů (importance ≥ 2
-    a jiná kategorie, `contaminates`). S `now` se nic nezměří, dokud nejdelší
-    okno od začátku neskončí (#1574): u odložené zprávy začínají okna prvním
-    obchodovaným barem, ne časem zprávy, a useknuté okno by se zapsalo natrvalo.
+    a jiná kategorie, `contaminates`) od close základu (`reaction_contaminated`).
+    S `now` se nic nezměří, dokud nejdelší okno neskončí a neuplyne
+    `SETTLE_MARGIN` (#1574, #1502): u odložené zprávy začínají okna prvním
+    obchodovaným barem, ne časem zprávy, a useknuté okno nebo provizorní poslední
+    bar by se zapsaly natrvalo.
     """
     ordered = sorted(bars, key=lambda bar: bar.ts)
-    base = _last_before(ordered, event_ts)
+    base = last_closed_before(ordered, event_ts)
     first_traded = _first_at_or_after(ordered, event_ts)
     if base is None or first_traded is None or base.close <= 0:
         return []
@@ -281,15 +335,16 @@ def compute_reactions(
     # zůstává poslední před uzavřením → ret_bp zahrnuje gap na open
     start = reaction_window_start(event_ts, ordered, deferred_gap_minutes) or event_ts
     deferred = start != event_ts
+    first_minute = window_bars_start(event_ts, start)
     if now is not None and windows:
-        end = start + dt.timedelta(minutes=max(windows))
-        if end + (DEFERRED_SETTLE_MARGIN if deferred else dt.timedelta(0)) > now:
+        end = first_minute + dt.timedelta(minutes=max(windows))
+        if end + SETTLE_MARGIN > now:
             return []  # široký řádek se zapisuje se všemi okny najednou (#998)
 
     results: list[Reaction] = []
     for window in windows:
-        end = start + dt.timedelta(minutes=window)
-        in_window = [bar for bar in ordered if start <= bar.ts < end]
+        end = first_minute + dt.timedelta(minutes=window)
+        in_window = [bar for bar in ordered if first_minute <= bar.ts < end]
         if not in_window:
             continue
         last = in_window[-1]
@@ -299,7 +354,14 @@ def compute_reactions(
             / base.close
             * 10_000
         )
-        contaminated = window_contaminated(event_ts, start, window, other_event_ts)
+        contaminated = reaction_contaminated(
+            event_ts,
+            start,
+            window,
+            base_ts=base.ts,
+            last_ts=last.ts,
+            other_event_ts=other_event_ts,
+        )
         results.append(
             Reaction(
                 window_min=window,
@@ -342,8 +404,9 @@ def compute_daily_reactions(
 
     Definice okna: **1d = nejbližší settle po události**, Nd = o N−1 seancí
     dál. Ranní zpráva má 1d ke svému dennímu close, zpráva po settle k close
-    následující seance. Základní cena = poslední bar před událostí (u zavřeného
-    trhu včetně gapu — stejná konvence jako minutová okna).
+    následující seance. Základní cena = close posledního uzavřeného baru před
+    událostí (u zavřeného trhu včetně gapu — stejná konvence jako minutová okna,
+    #1502).
 
     Vědomé odchylky od minutových oken (dokumentované v SPEC 5.1):
     * `contaminated` je vždy False — v denním horizontu spadne do okna prakticky
@@ -355,7 +418,7 @@ def compute_daily_reactions(
       seance zahrnuje i pohyb před událostí (aproximace).
     """
     ordered = sorted(bars, key=lambda bar: bar.ts)
-    base = _last_before(ordered, event_ts)
+    base = last_closed_before(ordered, event_ts)
     first_traded = _first_at_or_after(ordered, event_ts)
     if base is None or first_traded is None or base.close <= 0:
         return []
