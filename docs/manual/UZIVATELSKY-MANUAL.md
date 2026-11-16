@@ -767,6 +767,47 @@ PNG, výsledky zůstávají). Do počtu „Snímky" a limitu 1 GB patří i PNG 
 QQQ (#1744) a tlačítko smaže i je; smazaný PNG plánu se při dalším otevření
 nakreslí znovu z uložených hodnot plánu.
 
+### Plán opce QQQ — vyhodnocení a track record (#1748)
+
+Plán opce QQQ ke scénáři dne NQ (ADR-0062) engine po close vyhodnotí z toho, co se
+v seanci opravdu naměřilo: z 1m barů QQQ a minutových kotací obou kontraktů plánu.
+Vyhodnocení proběhne v 16:15 ET (22:15 SEČ, v týdnech posunu času o hodinu dřív),
+ve zkrácené seanci v 13:15 ET. Výsledek přijde do zvonku jako **Výsledek plánu opce
+QQQ**. O víkendu a ve svátek NYSE se nic nevyhodnocuje.
+
+- **Vstup A** hledá engine stejně jako plán: 5min close za úrovní, pak první 5min close
+  zpět. Od 9:35 ET do exitu, ten je 15 min před close (15:45 ET, ve zkrácené seanci
+  12:45 ET).
+- **Po vstupu:** cíl platí na dotyk (stačí, že se ho cena v minutě dotkla), SL až na
+  5min close. Po TP1 se SL posune na vstup. Co do exitu nerozhodne SL ani cíl, skončí
+  v exitu.
+- **Cena opce je naměřená, ne z modelu.** Vstup se počítá za ask v minutě spouště,
+  výstup za bid v minutě události, P&L v $ na 1 kontrakt. Výsledek má dvě čísla:
+  výstup celé pozice v TP1 a držení do TP2 se stopem na vstupu.
+- **R:R při spoušti (P3)** je z kotace téže minuty: zaplacený ask proti ceně opce při
+  SL a při TP1 z IV té kotace. Spoušť s R:R pod 2 je **vyřazeno P3**. Do obchodů se
+  nepočítá, ale její hypotetický výsledek se ukládá zvlášť, aby šlo poznat, jestli filtr
+  P3 pomáhá.
+- **Rozpočet (P4):** obchod se počítá podle pravidel, ne podle tvého nastavení. Každá
+  varianta ale nese třídu **v rozpočtu**, **nad rozpočtem** (čerpání P4 přesáhlo rozpočet
+  na obchod v Settings v době vyhodnocení), nebo **rozpočet nenastaven**. Track record
+  ukáže skupiny zvlášť, takže uvidíš, jak by dopadly obchody, které by se do rozpočtu
+  nevešly. Hodnota rozpočtu se k výsledku neukládá.
+- **Chybějící data = mezera, ne odhad.** Chybí-li bar QQQ mezi openem a rozhodnutím,
+  výsledek je **mezera** a do track recordu nejde. Chybí-li kotace v minutě spouště,
+  varianta je **bez kotace**. Chybí-li kotace v minutě výstupu, P&L té nohy zůstane
+  prázdné s důvodem.
+- **Bez vstupu** (spoušť nenastala, nebo úroveň A nebyla do 1 EM) se do track recordu
+  počítá jako „nespuštěno“, ne jako ztráta.
+- **Stíny** (vstup B a test úrovně knotem, K10 B) se vyhodnocují stejně, ale vedou se
+  zvlášť a do výsledků hlavního plánu se nepočítají.
+
+**Track record** (`GET /option-plans/stats`, karta ve Stats přijde s F5b #1749) počítá
+jen plány od první seance, kdy jsou nasazené opravy vstupů plánu (#1774, #1653 + #1599
+a #1610, Rozhodnuto 10. 11.). Dokud datum není, je track record prázdný. Plány se přesto
+vyhodnocují a zpráva ve zvonku končí větou „Do track recordu se nepočítá.“ Počítá se jen
+aktuální verze pravidel plánu a pod 30 případů je každé číslo **předběžné**.
+
 ### Technická poznámka k ukotvení
 
 Anotace se vážou na **absolutní minutu dne × cenu** — přepnutí timeframe
@@ -1467,6 +1508,7 @@ Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a je
 | **Setup detektor prodělává / se zotavil** | Denní sebekontrola: setupy symbolu za sledované okno prodělávají — alert doporučí vypnout nejhorší šablonu (`GEXLENS_SETUP_DISABLED_TEMPLATES`) nebo upravit prahy; „zotavil“ = výkonnost se vrátila nad práh | Setup detektor prodělává (zap.) / se zotavil (vyp.) |
 | **Plán opce QQQ** (`option_plan_created`, #1742) | V 9:15 ET (15:15 SEČ, v týdnech posunu času o hodinu dřív) se scénářem dne NQ long/short: plán opce QQQ 1DTE z ranního řetězu, tedy hlavní a záložní strike s bid/ask a stav („čeká na vstup A (úroveň)“, nebo „neobchodovat — důvod“, např. rozpočet nenastaven). Když ranní řetěz není úplný, scénář vznikl později nebo engine restartoval, přijde „bez opce“ s důvodem. Jen v obchodní den, při verdiktu bez převahy plán nevzniká | zatím ne (Telegram plánu přinese #1745) |
 | **Přecenění plánu opce QQQ** (`option_plan_repriced`, #1769) | V 9:31 ET (15:31 SEČ, v týdnech posunu času o hodinu dřív), po US openu: plán z 9:15 dostane nové kotace hlavní a záložní varianty (bid/ask, vedle nich ceny z 9:15). Strike, úrovně, vstup A ani stav se nemění. Když plán v 9:15 vznikl bez opce, sestaví se celý z 9:31. Když tím přejde na „čeká na vstup A“, zpráva začíná **„ZMĚNA“**. Bez nastaveného rozpočtu zůstává „neobchodovat“, a „ZMĚNA“ proto nepřijde. Když snímek po openu není úplný nebo nedorazil, přijde „přecenění se nezapsalo“ s důvodem a platí ceny z 9:15. Jen v obchodní den s plánem | zatím ne (Telegram plánu přinese #1745) |
+| **Výsledek plánu opce QQQ** (`option_plan_result`, #1748) | V 16:15 ET (22:15 SEČ, v týdnech posunu času o hodinu dřív; ve zkrácené seanci 13:15 ET): vstup A s časem a cenou, SL a průběh (SL, TP1, TP2, stop na vstupu, exit), u hlavní i záložní varianty obchod / vyřazeno P3 / bez kotace s R:R z kotace a P&L na kontrakt (výstup v TP1 a držení do TP2), „nad rozpočtem“ bez hodnoty. Jinak „bez vstupu“, „bez opce“ nebo „mezera“ s důvodem. Plán mimo track record má na konci „Do track recordu se nepočítá.“ (kap. 10) | zatím ne (Telegram plánu přinese #1745) |
 | **T6 kandidát** | Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech. Jen v obchodní den s US openem (o víkendu a svátku NYSE ne) | Kandidát vzorce T6 (vyp.) |
 | **Drift hlídka** | Čerstvá úspěšnost signálového bucketu se statisticky rozešla s historickou — model přestává platit, signály z něj ber s rezervou (detail na Stats) | Drift vzorců (vyp.) |
 | **Reakce trhu na zprávy** (`news_anomaly`) | Trh se do 5 min po shluku zpráv s aspoň jednou **významnou** zprávou pohnul mimořádně — nad 97 % výchylek v tuto denní dobu i po zohlednění volatility poslední hodiny. Jedno upozornění na shluk a instrument, ES a NQ zvlášť (viz níže) | Reakce trhu na zprávu (zap.) |

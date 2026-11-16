@@ -71,13 +71,18 @@ def _variant_text(variant: Mapping[str, Any]) -> str:
     if variant["kind"] == "bez kotace":
         return f"{name}: bez kotace při vstupu"
     rr = f"R:R {_cz(variant['rr'])}" if variant["rr"] is not None else "R:R nejde určit"
-    legs = [
-        f"{label} {_usd(leg['pnl_usd'])}"
-        for label, leg in (("TP1", variant["exit_tp1"]), ("držení", variant["exit_hold"]))
-        if leg is not None
-    ]
+    first, hold = variant["exit_tp1"], variant["exit_hold"]
+    if first is None or hold is None:
+        legs = ""
+    elif first == hold:
+        legs = f", {first['event']} {_usd(first['pnl_usd'])}"
+    else:
+        legs = (
+            f", výstup v TP1 {_usd(first['pnl_usd'])}, "
+            f"držení do {hold['event']} {_usd(hold['pnl_usd'])}"
+        )
     budget = ", nad rozpočtem" if variant["budget"] == "nad rozpočtem" else ""
-    return f"{name}: {variant['kind']} ({rr}{budget})" + (f", {', '.join(legs)}" if legs else "")
+    return f"{name}: {variant['kind']} ({rr}{budget}){legs}"
 
 
 def result_message(row: OptionPlanRow, result: Mapping[str, Any]) -> str:

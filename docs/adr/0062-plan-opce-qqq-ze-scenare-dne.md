@@ -17,9 +17,10 @@
   „A“) a spojení vstupů při vzniku plánu (K4 bod 9, odvozeno v F2b #1742). **11. 11.:**
   přecenění v 9:31 ET (K4 bod 10, odvozeno v F2c #1769) a sloupce plánu sestaveného
   v 9:31 (K4 bod 10, vlastník „A“). **12. 11.:** odběr kontraktů plánu a podkladu do close
-  (K4 bod 11, odvozeno v F1b #1747).
+  (K4 bod 11, odvozeno v F1b #1747). **16. 11.:** vyhodnocení po close a track record (K4
+  bod 13, vlastník „1. A, 2. A, 3. A“ s rozlišením obchodů nad rozpočtem, F3 #1748).
 - **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09, P1, track record a K4 bod 9
-  2026-11-10, K4 bod 10 2026-11-11, K4 bod 11 2026-11-12)
+  2026-11-10, K4 bod 10 2026-11-11, K4 bod 11 2026-11-12, K4 bod 13 2026-11-16)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
   #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
@@ -494,6 +495,46 @@ Odvozeno pro F4b (zapsal agent 12. 11., #1744):
       pak nakreslí znovu (společný limit a úklid potvrdil vlastník 12. 11., #1744, varianta A).
     - **Záložní graf NQ** kreslí bary NQ seance, vstup, cíle, cestu a úrovně NQ uložené
       v plánu ke scénáři (`plan.levels_nq`). Volá ho Telegram (F4c #1745), endpoint nemá.
+
+Odvozeno pro F3 (zapsal agent 16. 11., #1748; tři volby rozhodl vlastník v chatu 16. 11.:
+„1. A, 2. A, 3. A, ale obchody které se nevejdou do mého rozpočtu … nějak rozlišit“):
+
+13. **Vyhodnocení po close a track record** (`compute/option_plan.evaluate_option_plan`,
+    kolektor `option_plan_eval.OptionPlanCollector`, `GET /option-plans/stats`):
+    - **Začátek track recordu (vlastník: A).** Kolektor vyhodnotí každý plán, datum zápis
+      nefiltruje (bod 7). Track record počítá plány od konstanty `TRACK_RECORD_SINCE`
+      v `compute/option_plan.py` vedle `RULES_VERSION`. Dokud je `None`, je prázdný
+      a vyhodnocené plány jsou v `outside`. Datum nastaví samostatný PR po nasazení poslední
+      z oprav #1653 + #1599 a #1610. Odmítnuto B (datum v `settings`: další klíč a začátek by
+      se mohl změnit bez stopy v gitu) a C (plány před datem nevyhodnocovat: dnes by se
+      nevyhodnotilo nic a F3 by nešlo ověřit naživo).
+    - **R:R z kotace (P3, vlastník: A).** Vstup za ask v minutě spouště. Ceny při SL a TP1
+      počítá model BS s IV z kotace téže minuty v čase podle bodu 6 a K11 A. Chybí-li ask
+      nebo IV, je varianta `bez kotace`, tedy mezera mimo obchody i mimo vyřazené P3. 2. 11.
+      se syntetickou kotací se spreadem 2 % dává R:R 4,41 proti 4,61 z modelu při mid.
+      Odmítnuto B (mid nadhodnotí R:R proti ceně nákupu) a C (IV ze snímku plánu je při
+      spoušti 1–5 h stará).
+    - **Rozpočet P4 (vlastník: A s rozlišením).** Obchod = spoušť, která projde P3. Výsledek
+      nese čerpání P4 v $ na kontrakt (bod 7) a třídu podle rozpočtu ze Settings v okamžiku
+      vyhodnocení: `v rozpočtu`, `nad rozpočtem`, nebo `nenastaven`. Hodnota rozpočtu se
+      neukládá. Track record dělí obchody i vyřazené P3 podle třídy (`by_budget`), aby šlo
+      změřit, jak by dopadly obchody nad rozpočtem. Odmítnuto B (obchod jen v rozpočtu):
+      track record by měřil nastavení, ne pravidla, a bez vyplněného rozpočtu by neměl žádný
+      obchod.
+    - **Odvozeno bez otázky (agent).** Spoušť a SL se čtou na 5min close, cíl na dotyk v 1m
+      baru, takže golden 2. 11. dává TP1 v 18:31 SEČ (v 5min baru 18:30–18:35) a TP2 v 18:45.
+      V minutě se kontroluje TP1, pak TP2, pak 5min close, jako zpětné přehrání #1756. Kotace
+      události je řádek minuty, která okamžikem události končí. Záporné stáří do 10 s
+      (zpožděný vzorek F1b) se přijme a uloží. Bez kotace výstupu je P&L té nohy null.
+      Chybí-li 1m bar QQQ mezi US openem a rozhodnutím, je výsledek části `mezera` (minuta
+      mohla nést spoušť, cíl nebo SL). Brána `preliminary` (n < 30) platí v každém bloku
+      zvlášť. Výsledek do PNG plánu F3 nekreslí, PNG stavu „vyhodnoceno“ (bod 12) zatím
+      ukazuje plán bez průběhu.
+    - **Kdy a odkud:** jednou za seanci 15 min po settle v úlohách po settle pipeline NQ.
+      Bary QQQ za celou seanci od otevření Globexu (i UTC partice D−1), kotace z partice
+      seance. Výsledek se zapíše jednou (`evaluated_at IS NULL`), alert `option_plan_result`.
+      Golden: `engine/tests/golden/option_plan_result_1748.json` (plán a bary z #1741,
+      kotace syntetické, readme v datasetu).
 
 **Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
 nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test
