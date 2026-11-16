@@ -604,10 +604,16 @@ def _pricing(
     target_ts: Sequence[dt.datetime],
     exit_ts: dt.datetime,
     account_usd: float | None,
+    paid: float | None = None,
 ) -> Pricing:
-    """P3 a P4 při spoušti (K3 body 6 a 7, K11 A)."""
+    """P3 a P4 při spoušti (K3 body 6 a 7, K11 A).
+
+    `paid` = zaplacená cena opce: None = model při spoušti (plán), jinak ask naměřené kotace
+    (vyhodnocení F3, Rozhodnuto 16. 11.). Ceny při SL, TP a čerpání P4 jsou vždy z modelu.
+    """
     multiplier = EQUITY_OPTION_MULTIPLIER
-    paid = model.price(entry.price, entry.ts)
+    if paid is None:
+        paid = model.price(entry.price, entry.ts)
     horizon = _clamp(target_ts[0], entry.ts, exit_ts)
     at_stop = model.price(entry.stop, horizon)
     at_tp1 = model.price(targets[0], horizon)
@@ -1063,6 +1069,8 @@ OUTCOMES: tuple[Outcome, ...] = (
     "cíl 1 za vstupem",
 )
 BUDGETS: tuple[Budget, ...] = ("v rozpočtu", "nad rozpočtem", "nenastaven")
+#: Stavy, které track record posuzuje; mezera a bez opce se jen počítají v `by_status`
+JUDGED: tuple[ResultStatus, ...] = ("spuštěno", "bez vstupu")
 ROLES: tuple[Literal["hlavní", "záložní"], ...] = ("hlavní", "záložní")
 
 
@@ -1139,19 +1147,17 @@ class VariantResult:
     #: `obchod` (projde P3), `vyřazeno P3` (hypotetický výsledek zvlášť), `bez kotace` (mezera)
     kind: VariantKind
     entry_quote: QuoteAt | None
-    #: R:R z kotace: vstup za ask, SL a TP1 modelem s IV téže kotace (Rozhodnuto 16. 11.: A)
-    rr: float | None
-    at_stop: float | None
-    at_tp1: float | None
-    #: P4 v $ na kontrakt: ztráta při SL a čerpání na SL + 0,2 EM v exitu (K3 bod 7)
-    loss_at_stop_usd: float | None
-    drawdown_usd: float | None
+    #: P3 a P4 při spoušti (`_pricing`): `paid` = ask kotace, ceny při SL, TP a čerpání P4
+    #: z modelu s IV téže kotace (Rozhodnuto 16. 11.: A), `rr` rozhoduje P3. % účtu se nepočítá
+    pricing: Pricing | None
     #: Třída podle rozpočtu ze Settings při vyhodnocení (Rozhodnuto 16. 11.); hodnota se neukládá
     budget: Budget | None
-    #: Výstup v TP1 (bez TP1 v SL, nebo v exitu) a držení do TP2 se stopem na vstupu
+    #: Výstup v TP1 (bez TP1 v SL, nebo v exitu) a držení do TP2 se stopem na vstupu; naměřený bid
     exit_tp1: OptionExit | None
     exit_hold: OptionExit | None
     gaps: tuple[str, ...]
+    #: Štítek modelových cen v `pricing` (ceny vstupu a výstupu jsou naměřené)
+    model_label: str = MODEL_LABEL
 
 
 @dataclass(frozen=True)
@@ -1274,25 +1280,25 @@ def _variant_result(
             expiry=expiry,
             kind="bez kotace",
             entry_quote=entry_quote,
-            rr=None,
-            at_stop=None,
-            at_tp1=None,
-            loss_at_stop_usd=None,
-            drawdown_usd=None,
+            pricing=None,
             budget=None,
             exit_tp1=None,
             exit_hold=None,
             gaps=(f"{name}: kotace při vstupu ({_et(entry.ts)} ET) chybí — {what}",),
         )
-    paid, iv = row.ask, float(row.iv or 0.0)
-    model = _Model(right, strike, iv, settle_ts(expiry))
-    horizon = _clamp(target_ts[0], entry.ts, exit_ts)
-    at_stop = model.price(entry.stop, horizon)
-    at_tp1 = model.price(targets[0], horizon)
-    worst = model.price(entry.stop - side * P4_EXTRA_EM * em, exit_ts)
+    paid = row.ask
+    pricing = _pricing(
+        _Model(right, strike, float(row.iv or 0.0), settle_ts(expiry)),
+        entry,
+        side=side,
+        em=em,
+        targets=targets,
+        target_ts=target_ts,
+        exit_ts=exit_ts,
+        account_usd=None,
+        paid=paid,
+    )
     multiplier = EQUITY_OPTION_MULTIPLIER
-    rr = _rr(at_tp1 - paid, paid, at_stop)
-    drawdown = (worst - paid) * multiplier
 
     def leave(event: PathEvent) -> OptionExit:
         quote = quotes.get((*key, event.ts - MINUTE))
@@ -1313,14 +1319,10 @@ def _variant_result(
         right=right,
         strike=strike,
         expiry=expiry,
-        kind="obchod" if rr is not None and rr >= MIN_RR else "vyřazeno P3",
+        kind="obchod" if pricing.rr is not None and pricing.rr >= MIN_RR else "vyřazeno P3",
         entry_quote=entry_quote,
-        rr=rr,
-        at_stop=at_stop,
-        at_tp1=at_tp1,
-        loss_at_stop_usd=(at_stop - paid) * multiplier,
-        drawdown_usd=drawdown,
-        budget=_budget(drawdown, max_loss_usd),
+        pricing=pricing,
+        budget=_budget(pricing.drawdown_usd, max_loss_usd),
         exit_tp1=exits[0],
         exit_hold=exits[1],
         gaps=tuple(gaps),
@@ -1542,9 +1544,11 @@ def _section(parts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             ),
             "no_quote": sum(1 for p in pairs if p[1]["kind"] == "bez kotace"),
         }
+    judged = sum(1 for part in parts if part["status"] in JUDGED)
     return {
-        "plans": len(parts),
-        "preliminary": len(parts) < PRELIMINARY_N,
+        # Posouzené plány (spuštěno, bez vstupu); mezera a bez opce jen v `by_status`
+        "plans": judged,
+        "preliminary": judged < PRELIMINARY_N,
         "by_status": {
             status: sum(1 for part in parts if part["status"] == status)
             for status in RESULT_STATUSES

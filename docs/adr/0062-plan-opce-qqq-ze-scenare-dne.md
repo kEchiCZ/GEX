@@ -509,7 +509,8 @@ Odvozeno pro F3 (zapsal agent 16. 11., #1748; tři volby rozhodl vlastník v cha
       se mohl změnit bez stopy v gitu) a C (plány před datem nevyhodnocovat: dnes by se
       nevyhodnotilo nic a F3 by nešlo ověřit naživo).
     - **R:R z kotace (P3, vlastník: A).** Vstup za ask v minutě spouště. Ceny při SL a TP1
-      počítá model BS s IV z kotace téže minuty v čase podle bodu 6 a K11 A. Chybí-li ask
+      počítá model BS s IV z kotace téže minuty v čase podle bodu 6 a K11 A, táž funkce
+      jako plán (`_pricing` se zaplacenou cenou = ask; přísné R:R vedle, % účtu ne). Chybí-li ask
       nebo IV, je varianta `bez kotace`, tedy mezera mimo obchody i mimo vyřazené P3. 2. 11.
       se syntetickou kotací se spreadem 2 % dává R:R 4,41 proti 4,61 z modelu při mid.
       Odmítnuto B (mid nadhodnotí R:R proti ceně nákupu) a C (IV ze snímku plánu je při
@@ -527,8 +528,10 @@ Odvozeno pro F3 (zapsal agent 16. 11., #1748; tři volby rozhodl vlastník v cha
       události je řádek minuty, která okamžikem události končí. Záporné stáří do 10 s
       (zpožděný vzorek F1b) se přijme a uloží. Bez kotace výstupu je P&L té nohy null.
       Chybí-li 1m bar QQQ mezi US openem a rozhodnutím, je výsledek části `mezera` (minuta
-      mohla nést spoušť, cíl nebo SL). Brána `preliminary` (n < 30) platí v každém bloku
-      zvlášť. Výsledek do PNG plánu F3 nekreslí, PNG stavu „vyhodnoceno“ (bod 12) zatím
+      mohla nést spoušť, cíl nebo SL). Track record posuzuje jen `spuštěno` a `bez vstupu`,
+      `mezera` a `bez opce` jsou jen v počtu podle stavu. Brána `preliminary` (n < 30) platí
+      v každém bloku zvlášť. Podíl kotací pásma 0DTE k P1 stínu B (bod 7) výsledek
+      nekopíruje, zůstává v `plan.chain.zero_dte` a čte ho track record stínu ve Stats (F5b). Výsledek do PNG plánu F3 nekreslí, PNG stavu „vyhodnoceno“ (bod 12) zatím
       ukazuje plán bez průběhu (nález #1822).
     - **Kdy a odkud:** jednou za seanci 15 min po settle v úlohách po settle pipeline NQ.
       Bary QQQ za celou seanci od otevření Globexu (i UTC partice D−1), kotace z partice

@@ -70,7 +70,8 @@ def _variant_text(variant: Mapping[str, Any]) -> str:
     name = f"{variant['role']} {'call' if variant['right'] == 'C' else 'put'} {variant['strike']:g}"
     if variant["kind"] == "bez kotace":
         return f"{name}: bez kotace při vstupu"
-    rr = f"R:R {_cz(variant['rr'])}" if variant["rr"] is not None else "R:R nejde určit"
+    value = variant["pricing"]["rr"]
+    rr = f"R:R {_cz(value)}" if value is not None else "R:R nejde určit"
     first, hold = variant["exit_tp1"], variant["exit_hold"]
     if first is None or hold is None:
         legs = ""

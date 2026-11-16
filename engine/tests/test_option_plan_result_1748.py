@@ -144,15 +144,26 @@ def test_golden_variants_from_quotes() -> None:
         assert variant.exit_hold.pnl_usd == pytest.approx(want["pnl_hold_usd"], abs=1e-4)
         assert variant.gaps == ()
     main = result.variants[0]
+    assert main.pricing is not None and main.model_label == "model z naměřené IV"
+    pricing = main.pricing
     replay = PLAN_DATA["expected"]["fixture_iv"]["hlavní"]
     ask = GOLDEN["expected"]["main"]["variants"]["hlavní"]["ask"]
-    assert main.rr == pytest.approx((replay["at_tp1"] - ask) / (ask - replay["at_stop"]), abs=1e-3)
-    assert main.rr == pytest.approx(
+    assert pricing.paid == pytest.approx(ask, abs=1e-6)  # zaplaceno za ask kotace, ne model
+    # Ceny při SL a TP1: model s IV kotace = IV fixture, tedy stejné jako přehrání #1756
+    assert (pricing.at_stop, pricing.at_tp1) == pytest.approx(
+        (replay["at_stop"], replay["at_tp1"]), abs=1e-4
+    )
+    assert pricing.rr == pytest.approx(
+        (replay["at_tp1"] - ask) / (ask - replay["at_stop"]), abs=1e-3
+    )
+    assert pricing.rr == pytest.approx(
         GOLDEN["expected"]["main"]["variants"]["hlavní"]["rr"], abs=1e-4
     )
     # Ask je o 1 % nad mid modelu plánu, R:R z kotace je proto pod 4,61 z modelu
-    assert main.rr is not None and round(main.rr, 2) == 4.41
-    assert main.drawdown_usd is not None and round(main.drawdown_usd) == -66
+    assert pricing.rr is not None and round(pricing.rr, 2) == 4.41
+    assert pricing.rr_strict is not None and pricing.rr_strict < pricing.rr
+    assert round(pricing.drawdown_usd) == -66
+    assert pricing.loss_at_stop_pct is None and pricing.drawdown_pct is None  # účet se nečte
 
 
 def test_golden_shadows() -> None:
@@ -357,6 +368,62 @@ def test_exit_in_time() -> None:
     assert main.exit_hold.bid == pytest.approx(last.bid)
 
 
+def _long(**overrides: Any) -> dict[str, Any]:
+    """Zrcadlový long: flip 600 pod vstupem scénáře 601, cíle 605 / 607, call 610 a 611."""
+    variants = [
+        {"role": role, "right": "C", "strike": strike, "expiry": EXPIRY.isoformat()}
+        for role, strike in (("hlavní", 610.0), ("záložní", 611.0))
+    ]
+    return part(
+        direction="long",
+        scenario_entry=601.0,
+        targets=[605.0, 607.0],
+        variants=variants,
+        levels={"flip": 600.0},
+        **overrides,
+    )
+
+
+#: Long: test flipu 600 (5min close pod ním), pak první 5min close zpět nad = vstup A 14:40
+LONG_TEST_AND_ENTRY = ((600.2, 599.4, 599.6), (600.6, 599.7, 600.5))
+
+
+def test_long_call_targets_on_high_and_stop_below() -> None:
+    """Long/call: cíl na dotyk high, SL pod vstupem (extrém od testu − 0,05 EM)."""
+    path = until_exit(
+        fives(*LONG_TEST_AND_ENTRY, (605.1, 600.4, 604.0), (607.1, 603.9, 606.5)), 606.5
+    )
+    quotes = synthetic_quotes(path, (610.0, 611.0), EXPIRY, right="C")
+    result = run(path, plan=_long(), quotes=quotes)
+    assert result.entry is not None and result.entry.stop == pytest.approx(599.15)
+    assert result.outcome == "TP2"
+    assert [(e.kind, e.ts) for e in result.events] == [
+        ("vstup", dt.datetime(2026, 11, 17, 14, 40, tzinfo=UTC)),
+        ("TP1", dt.datetime(2026, 11, 17, 14, 41, tzinfo=UTC)),
+        ("TP2", dt.datetime(2026, 11, 17, 14, 46, tzinfo=UTC)),
+    ]
+    main = result.variants[0]
+    assert (main.right, main.strike, main.kind) == ("C", 610.0, "obchod")
+    assert main.pricing is not None and main.pricing.drawdown_usd < 0
+    assert main.pricing.at_stop < main.pricing.paid < main.pricing.at_tp1
+    assert main.exit_hold is not None and main.exit_hold.pnl_usd is not None
+    assert main.exit_hold.pnl_usd > 0
+
+
+def test_long_stop_loss_on_close_below() -> None:
+    path = until_exit(fives(*LONG_TEST_AND_ENTRY, (600.6, 598.9, 599.0)), 599.0)
+    quotes = synthetic_quotes(path, (610.0, 611.0), EXPIRY, right="C")
+    result = run(path, plan=_long(), quotes=quotes)
+    assert result.outcome == "SL"
+    assert (result.events[-1].ts, result.events[-1].price) == (
+        dt.datetime(2026, 11, 17, 14, 45, tzinfo=UTC),
+        599.0,
+    )
+    main = result.variants[0]
+    assert main.exit_tp1 is not None and main.exit_tp1.pnl_usd is not None
+    assert main.exit_tp1.pnl_usd < 0
+
+
 def test_tp1_then_exit() -> None:
     path = fives(*TEST_AND_ENTRY, (599.0, 594.9, 597.0))
     result = run(until_exit(path, 597.0))
@@ -392,7 +459,8 @@ def test_rejected_p3_keeps_hypothetical_result() -> None:
     assert result.outcome == "TP2"
     for variant in result.variants:
         assert variant.kind == "vyřazeno P3"
-        assert variant.rr is not None and variant.rr < 2
+        assert variant.pricing is not None
+        assert variant.pricing.rr is not None and variant.pricing.rr < 2
         assert variant.exit_hold is not None and variant.exit_hold.pnl_usd is not None
     narrow = run(path)
     assert narrow.variants[0].kind == "obchod"
@@ -408,7 +476,7 @@ def test_missing_entry_quote_is_gap() -> None:
     ]
     result = run(path, quotes=quotes)
     main, backup = result.variants
-    assert main.kind == "bez kotace" and main.rr is None and main.exit_hold is None
+    assert main.kind == "bez kotace" and main.pricing is None and main.exit_hold is None
     assert main.gaps and "kotace při vstupu" in main.gaps[0]
     assert backup.kind == "obchod"
 

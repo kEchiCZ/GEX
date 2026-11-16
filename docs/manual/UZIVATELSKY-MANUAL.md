@@ -781,11 +781,12 @@ QQQ**. O víkendu a ve svátek NYSE se nic nevyhodnocuje.
 - **Po vstupu:** cíl platí na dotyk (stačí, že se ho cena v minutě dotkla), SL až na
   5min close. Po TP1 se SL posune na vstup. Co do exitu nerozhodne SL ani cíl, skončí
   v exitu.
-- **Cena opce je naměřená, ne z modelu.** Vstup se počítá za ask v minutě spouště,
+- **Vstup a výstup opce jsou naměřené.** Vstup se počítá za ask v minutě spouště,
   výstup za bid v minutě události, P&L v $ na 1 kontrakt. Výsledek má dvě čísla:
   výstup celé pozice v TP1 a držení do TP2 se stopem na vstupu.
 - **R:R při spoušti (P3)** je z kotace téže minuty: zaplacený ask proti ceně opce při
-  SL a při TP1 z IV té kotace. Spoušť s R:R pod 2 je **vyřazeno P3**. Do obchodů se
+  SL a při TP1. Ty v okamžiku spouště změřit nejde, proto jsou z modelu s IV té kotace
+  (štítek „model z naměřené IV“). Spoušť s R:R pod 2 je **vyřazeno P3**. Do obchodů se
   nepočítá, ale její hypotetický výsledek se ukládá zvlášť, aby šlo poznat, jestli filtr
   P3 pomáhá.
 - **Rozpočet (P4):** obchod se počítá podle pravidel, ne podle tvého nastavení. Každá
@@ -794,7 +795,8 @@ QQQ**. O víkendu a ve svátek NYSE se nic nevyhodnocuje.
   ukáže skupiny zvlášť, takže uvidíš, jak by dopadly obchody, které by se do rozpočtu
   nevešly. Hodnota rozpočtu se k výsledku neukládá.
 - **Chybějící data = mezera, ne odhad.** Chybí-li bar QQQ mezi openem a rozhodnutím,
-  výsledek je **mezera** a do track recordu nejde. Chybí-li kotace v minutě spouště,
+  výsledek je **mezera**. Track record ji ukáže jen v počtu podle stavu, do posouzených
+  plánů ani obchodů nejde. Chybí-li kotace v minutě spouště,
   varianta je **bez kotace**. Chybí-li kotace v minutě výstupu, P&L té nohy zůstane
   prázdné s důvodem.
 - **Bez vstupu** (spoušť nenastala, nebo úroveň A nebyla do 1 EM) se do track recordu
