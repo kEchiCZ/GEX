@@ -529,7 +529,7 @@ Odvozeno pro F3 (zapsal agent 16. 11., #1748; tři volby rozhodl vlastník v cha
       Chybí-li 1m bar QQQ mezi US openem a rozhodnutím, je výsledek části `mezera` (minuta
       mohla nést spoušť, cíl nebo SL). Brána `preliminary` (n < 30) platí v každém bloku
       zvlášť. Výsledek do PNG plánu F3 nekreslí, PNG stavu „vyhodnoceno“ (bod 12) zatím
-      ukazuje plán bez průběhu.
+      ukazuje plán bez průběhu (nález #1822).
     - **Kdy a odkud:** jednou za seanci 15 min po settle v úlohách po settle pipeline NQ.
       Bary QQQ za celou seanci od otevření Globexu (i UTC partice D−1), kotace z partice
       seance. Výsledek se zapíše jednou (`evaluated_at IS NULL`), alert `option_plan_result`.
