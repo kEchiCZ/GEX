@@ -532,6 +532,31 @@ class OptionQuoteRow:
     quote_age_s: float | None
 
 
+def option_quotes_path(derived_dir: Path, symbol: str, day: dt.date) -> Path:
+    """Partice kotací kontraktů plánu opce (F1b #1747): den = seance plánu, ne UTC den."""
+    return derived_dir / symbol / "option_quotes" / f"{day.isoformat()}.parquet"
+
+
+def read_option_quotes(derived_dir: Path, symbol: str, day: dt.date) -> list[OptionQuoteRow]:
+    """Minutové kotace kontraktů plánu seance `day` (F1b #1747), seřazené podle minuty.
+
+    Čtenář vyhodnocení plánu (F3 #1748). Chybějící partice = žádné kotace, ne chyba;
+    řádek bez cen zůstane bez cen (mezera, ne forward-fill). Naivní čas je UTC.
+    """
+    path = option_quotes_path(derived_dir, symbol, day)
+    if not path.exists():
+        return []
+    rows: list[OptionQuoteRow] = []
+    for row in pq.read_table(path, schema=OPTION_QUOTES_SCHEMA).to_pylist():
+        ts = row["ts_min"]
+        if ts is None:
+            continue
+        ts = ts.replace(tzinfo=dt.UTC) if ts.tzinfo is None else ts.astimezone(dt.UTC)
+        rows.append(OptionQuoteRow(**{**row, "ts_min": ts}))
+    rows.sort(key=lambda row: (row.ts_min, row.expiry, row.strike, row.right))
+    return rows
+
+
 class BarLike(Protocol):
     """Strukturální podoba ibkr.underlying.Bar (storage nezávisí na ibkr vrstvě)."""
 
@@ -1414,7 +1439,7 @@ class SnapshotWriter:
 
     def option_quotes_path(self, symbol: str, day: dt.date) -> Path:
         """Partice kotací kontraktů plánu opce (F1b #1747): den = seance plánu."""
-        return self._settings.derived_dir / symbol / "option_quotes" / f"{day.isoformat()}.parquet"
+        return option_quotes_path(self._settings.derived_dir, symbol, day)
 
     def write_option_quotes(
         self, symbol: str, day: dt.date, rows: Sequence[OptionQuoteRow]

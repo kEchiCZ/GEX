@@ -3276,10 +3276,15 @@ class GatedCollector:
 def gated_collectors(
     pipeline: InstrumentPipeline, gate: asyncio.Event
 ) -> list[tuple[str, dt.datetime]]:
-    """Všech pět sběračů po settle; volatilitní režim stojí na `gate` (jako 26. 10. ~68 s)."""
+    """Všech šest sběračů po settle; volatilitní režim stojí na `gate` (jako 26. 10. ~68 s).
+
+    Vyhodnocení plánu QQQ (#1748) běží jen v pipeline NQ; tady ho test dosadí, aby hlídal
+    i jeho místo v řetězu (po scénářích, před volatilitním režimem).
+    """
     calls: list[tuple[str, dt.datetime]] = []
     pipeline.gamma_cliff = cast(Any, GatedCollector("gamma", calls))
     pipeline.scenario_collector = cast(Any, GatedCollector("scenario", calls))
+    pipeline.option_plan_collector = cast(Any, GatedCollector("plan", calls))
     pipeline.vol_regime = cast(Any, GatedCollector("vol", calls, gate))
     pipeline.em_respect = cast(Any, GatedCollector("em", calls))
     pipeline.briefing_verdicts = cast(Any, GatedCollector("verdicts", calls))
@@ -3308,23 +3313,25 @@ async def test_sberace_po_settle_cyklus_necekaji(
     await asyncio.sleep(0)
     task = pipeline._settle_jobs_task
     assert task is not None and not task.done()
-    assert calls == [("gamma", first), ("scenario", first), ("vol", first)]
+    assert calls == [("gamma", first), ("scenario", first), ("plan", first), ("vol", first)]
 
     second = first + dt.timedelta(minutes=1)
     await asyncio.wait_for(pipeline.run_minute(second), timeout=5)
     assert pipeline._settle_jobs_task is task  # běžící řetěz se nezdvojí
-    assert len(calls) == 3
+    assert len(calls) == 4
 
     gate.set()
     await task
-    assert [name for name, _ in calls] == ["gamma", "scenario", "vol", "em", "verdicts"]
+    assert [name for name, _ in calls] == ["gamma", "scenario", "plan", "vol", "em", "verdicts"]
     assert pipeline._settle_jobs_task is None
 
     third = second + dt.timedelta(minutes=1)
     await pipeline.run_minute(third)
     assert pipeline._settle_jobs_task is not None
     await pipeline._settle_jobs_task
-    assert calls[-5:] == [(name, third) for name in ("gamma", "scenario", "vol", "em", "verdicts")]
+    assert calls[-6:] == [
+        (name, third) for name in ("gamma", "scenario", "plan", "vol", "em", "verdicts")
+    ]
 
 
 async def test_sberace_po_settle_pad_neshodi_retez_a_stop_ho_zrusi(
@@ -3349,7 +3356,7 @@ async def test_sberace_po_settle_pad_neshodi_retez_a_stop_ho_zrusi(
         await pipeline.run_minute(at)
         await asyncio.sleep(0)
     assert "Gamma útes ES selhal" in caplog.text
-    assert [name for name, _ in calls] == ["scenario", "vol"]
+    assert [name for name, _ in calls] == ["scenario", "plan", "vol"]
 
     task = pipeline._settle_jobs_task
     assert task is not None

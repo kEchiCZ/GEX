@@ -8,6 +8,10 @@ Tvar odpovědi rozhodl vlastník 12. 11. (#1738, varianta B): seznam nese sloupc
 a platný plán, detail navíc celý uložený JSON `plan` (9:15, přecenění, pokrytí snímků).
 Parametr `symbol` není (varianta A): tabulka ho nemá a plán je jen pro QQQ.
 
+Track record (F3 #1748, ADR-0062 bod 7): `GET /option-plans/stats` je tenký obal
+`OptionPlansRepository.stats` podle vzoru `/scenarios/stats`: jen aktuální verze pravidel,
+plány od `TRACK_RECORD_SINCE`, brána `preliminary` v každém bloku při n < 30.
+
 PNG plánu (F4b #1744, ADR-0062 K1 A): `GET /option-plans/{id}/image` ho kreslí v krátkém
 podprocesu (`plan_chart`) z uložených hodnot plánu a uložených barů QQQ a ukládá do
 `data/scenarios/QQQ/{den}/plan-{id}-{stav}.png`. PNG je snímek stavu plánu (vlastník 12. 11.,
@@ -37,6 +41,7 @@ from gexlens_api.plan_chart import (
     render_png,
 )
 from gexlens_api.scenario_routes import SCENARIOS_SUBDIR, ImageDiskWatch
+from gexlens_engine.compute.option_plan import RULES_VERSION, TRACK_RECORD_SINCE
 from gexlens_engine.storage.option_plans_store import (
     OptionPlanRow,
     OptionPlansRepository,
@@ -104,6 +109,17 @@ def build_option_plan_router(
     def option_plans_list(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
         """Nejnovější plány podle seance a `id`."""
         return {"option_plans": [_summary(row) for row in repo().list_plans(limit)]}
+
+    @router.get("/option-plans/stats")
+    def option_plans_stats() -> dict[str, Any]:
+        """Track record plánu QQQ: hlavní plán a stíny K10 B zvlášť, obchody, vyřazené P3
+        a třídy rozpočtu (Rozhodnuto 16. 11.). Bez data začátku je prázdný (`outside` = počet
+        vyhodnocených plánů mimo něj). Registrace před `/{plan_id}`, jinak by `stats` byl id."""
+        version = RULES_VERSION
+        return {
+            "rules_version": version,
+            **repo().stats(rules_version=version, since=TRACK_RECORD_SINCE),
+        }
 
     def _stored_image(row: OptionPlanRow) -> Path | None:
         """PNG ke stavu plánu na disku, jinak None (jiný stav, smazaný úklidem, nebyl)."""

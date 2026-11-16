@@ -2,8 +2,9 @@
 
 Jeden plán na auto-scénář (`scenario_id` je unikátní). Plán je point-in-time: řádek vznikne
 jednou v 9:15 ET (K4 C) a JSON z 9:15 se zpětně nepřepisuje. Přecenění v 9:31 ET (F2c #1769)
-přidá do JSON `plan` jen klíč `repricing`, jednou. `evaluated_at` a `result` doplní
-vyhodnocení (F3 #1748), `image_path` a `image_bytes` PNG plánu (API, F4b #1744). Detail
+přidá do JSON `plan` jen klíč `repricing`, jednou. `evaluated_at` a `result` doplní jednou
+vyhodnocení po close (F3 #1748, `record_result`), `image_path` a `image_bytes` PNG plánu
+(API, F4b #1744). Track record (`stats`) počítá `compute/option_plan.track_record`. Detail
 plánu nese JSON `plan` (`compute/option_plan.plan_to_json`), sloupce slouží jen dotazům
 a vazbám a popisují aktuální stav plánu (vlastník 11. 11., #1738):
 - `status`: `sestaven` (z ranního snímku, nebo celý z 9:31 — pak `plan.repricing.plan`),
@@ -43,6 +44,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
+from gexlens_engine.compute.option_plan import track_record
 from gexlens_engine.storage.scenarios_store import scenarios_table
 
 #: Klíč přecenění v 9:31 ET v JSON `plan` (F2c #1769); jeho existence = přecenění proběhlo
@@ -267,6 +269,55 @@ class OptionPlansRepository:
                 .values(**values)
             )
         return True
+
+    def pending(self, session: dt.date) -> list[OptionPlanRow]:
+        """Plány bez výsledku ze seancí do `session` včetně (F3 #1748), podle seance a `id`."""
+        stmt = (
+            select(option_plans_table)
+            .where(option_plans_table.c.evaluated_at.is_(None))
+            .where(option_plans_table.c.day <= session)
+            .order_by(option_plans_table.c.day, option_plans_table.c.id)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [_row(row) for row in rows]
+
+    def record_result(
+        self, plan_id: int, result: dict[str, Any], evaluated_at: dt.datetime
+    ) -> bool:
+        """Výsledek vyhodnocení (F3 #1748) jednou za plán; False = plán už je vyhodnocený.
+
+        Podmínka `evaluated_at IS NULL` v témže UPDATE dělá kontrolu a zápis atomickými,
+        druhý běh (restart, souběh) nic nepřepíše. Plán z 9:15 ani přecenění se nemění.
+        """
+        with self._engine.begin() as conn:
+            written = conn.execute(
+                update(option_plans_table)
+                .where(option_plans_table.c.id == plan_id)
+                .where(option_plans_table.c.evaluated_at.is_(None))
+                .values(result=result, evaluated_at=evaluated_at)
+            )
+        if written.rowcount == 1:
+            return True
+        if self.get(plan_id) is None:
+            raise LookupError(f"option_plans #{plan_id} neexistuje")
+        return False
+
+    def stats(self, *, rules_version: int, since: dt.date | None) -> dict[str, Any]:
+        """Track record vyhodnocených plánů verze pravidel `rules_version` (F3 #1748).
+
+        Verze pravidel se nesčítají (K2 A). `since` je začátek track recordu
+        (`option_plan.TRACK_RECORD_SINCE`): vstup výpočtu, ne filtr zápisu.
+        """
+        stmt = (
+            select(option_plans_table.c.day, option_plans_table.c.result)
+            .where(option_plans_table.c.rules_version == rules_version)
+            .where(option_plans_table.c.evaluated_at.is_not(None))
+            .order_by(option_plans_table.c.day, option_plans_table.c.id)
+        )
+        with self._engine.connect() as conn:
+            rows = [(row.day, row.result) for row in conn.execute(stmt) if row.result is not None]
+        return track_record(rows, since=since)
 
     def set_image(self, plan_id: int, image_path: str | None, image_bytes: int) -> None:
         """Cesta a velikost PNG plánu (F4b #1744); None = PNG smazaný úklidem, nakreslí se znovu."""

@@ -58,6 +58,7 @@ from gexlens_engine.ibkr.scheduler import (
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.ivrank import IvRankCollector
 from gexlens_engine.mapstate import MapStateCollector
+from gexlens_engine.option_plan_eval import OptionPlanCollector
 from gexlens_engine.paper import PaperBroker
 from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
@@ -405,6 +406,8 @@ class InstrumentPipeline:
     map_state: MapStateCollector | None = None
     # Scénář dne (#1173) — vyhodnocení po termínu, jednou po settle
     scenario_collector: ScenarioCollector | None = None
+    # Plán opce QQQ (#1748) — vyhodnocení po close, jen v pipeline NQ (ADR-0062 bod 2)
+    option_plan_collector: OptionPlanCollector | None = None
     # Paper účet (#1187 fáze 1): fily orderů proti barům minuty — None = vypnuto
     paper_broker: PaperBroker | None = None
     # Verdikt dne (#1595) — engine jediný zapisovatel, okno před US openem
@@ -1451,6 +1454,11 @@ class InstrumentPipeline:
                 await self.scenario_collector.on_minute(now)
             except Exception:
                 logger.exception("Vyhodnocení scénářů %s selhalo — pokračuji", self.symbol)
+        if self.option_plan_collector is not None:
+            try:
+                await self.option_plan_collector.on_minute(now)
+            except Exception:
+                logger.exception("Vyhodnocení plánu opce QQQ selhalo — pokračuji")
         if self.vol_regime is not None:
             try:
                 await self.vol_regime.on_minute(now)

@@ -51,8 +51,7 @@ from gexlens_engine.compute.option_plan import (
     MAIN_RULES,
     MAX_LOSS_KEY,
     RULES_VERSION,
-    SHADOW_B,
-    SHADOW_WICK,
+    SHADOWS,
     AccountParams,
     OptionPlan,
     PlanRules,
@@ -97,8 +96,6 @@ ALERT_KIND = "option_plan_created"
 REPRICE_ALERT_KIND = "option_plan_repriced"
 #: Začátek zprávy přecenění, když se změní stav plánu (K4 C bod 4)
 CHANGE = "ZMĚNA"
-#: Stíny track recordu (K10 B) v `plan.shadows`; klíč = parametr pravidel
-SHADOWS: Mapping[str, PlanRules] = {"entry_b": SHADOW_B, "wick_test": SHADOW_WICK}
 #: Úrovně NQ minuty, které plán z 9:31 bere z pipeline; ONH/ONL a PD čte z barů (API)
 NQ_MINUTE_LEVELS = ("flip", "call_wall", "put_wall", "centroid")
 #: Na úrovně NQ minuty 9:31 plán čeká do 9:34 ET: cyklus minuty 9:31 je předá až po scénáři

@@ -10,9 +10,14 @@ a okno spouště do exitu. Plán vzniká v 9:15 ET se scénářem dne z ranního
 a v 9:31 ET se přecení (K4 C, F2b #1742, F2c #1769). Neúplný ranní snímek = plán v 9:15 bez
 opce a v 9:31 celý z 9:31 (K4 bod 5). Přecenění úplného plánu (`reprice_variants`) drží
 kontrakty z 9:15 a mění jen kotace, IV a model v TP1/TP2. Předá-li volající bary po
-vzniku, funkce najde spoušť vstupu A a ocení ji modelem (P3, P4). Kotace v minutě spouště
-a průběh po vstupu patří vyhodnocení (F3 #1748). Do JSON tabulky `option_plans` plán
-převede `plan_to_json` (K2 A).
+vzniku, funkce najde spoušť vstupu A a ocení ji modelem (P3, P4). Do JSON tabulky
+`option_plans` plán převede `plan_to_json` (K2 A).
+
+Vyhodnocení po close (F3 #1748, `evaluate_option_plan`) hledá spoušť toutéž funkcí nad 1m bary
+QQQ celé seance a sleduje průběh po vstupu (SL, TP1, TP2, stop na vstupu, exit). R:R při
+spoušti (P3) a čerpání P4 počítá z naměřené kotace v minutě spouště, P&L na kontrakt
+z kotací v minutách událostí (K3 bod 9, Rozhodnuto 16. 11.). Track record (`track_record`)
+počítá plány od `TRACK_RECORD_SINCE`.
 
 Hlavní plán má jen vstup A a hledá ho jednou (K6 B). Stíny track recordu (K10 B) jsou
 parametry téže funkce:
@@ -39,6 +44,7 @@ from gexlens_engine.compute.emrespect import StraddleQuote, straddle_em
 from gexlens_engine.compute.gex import GexEngine, GexInput
 from gexlens_engine.compute.gexfield import _YEAR_S, TAU_FLOOR_S, bs_price
 from gexlens_engine.compute.settle import (
+    ET_TZ,
     is_trading_session,
     settle_ts,
     trading_session_date,
@@ -598,10 +604,16 @@ def _pricing(
     target_ts: Sequence[dt.datetime],
     exit_ts: dt.datetime,
     account_usd: float | None,
+    paid: float | None = None,
 ) -> Pricing:
-    """P3 a P4 při spoušti (K3 body 6 a 7, K11 A)."""
+    """P3 a P4 při spoušti (K3 body 6 a 7, K11 A).
+
+    `paid` = zaplacená cena opce: None = model při spoušti (plán), jinak ask naměřené kotace
+    (vyhodnocení F3, Rozhodnuto 16. 11.). Ceny při SL, TP a čerpání P4 jsou vždy z modelu.
+    """
     multiplier = EQUITY_OPTION_MULTIPLIER
-    paid = model.price(entry.price, entry.ts)
+    if paid is None:
+        paid = model.price(entry.price, entry.ts)
     horizon = _clamp(target_ts[0], entry.ts, exit_ts)
     at_stop = model.price(entry.stop, horizon)
     at_tp1 = model.price(targets[0], horizon)
@@ -1025,3 +1037,546 @@ def plan_to_json(plan: OptionPlan) -> dict[str, Any]:
     out: dict[str, Any] = jsonable(plan)
     out["verdict"] = plan.verdict
     return out
+
+
+# ── vyhodnocení plánu (F3 #1748) ────────────────────────────────────
+
+#: Začátek track recordu plánu QQQ (ADR-0062 bod 7; Rozhodnuto 10. a 16. 11., #1738): první
+#: seance s nasazenými opravami vstupů plánu #1774, #1653 + #1599 a #1610. Datum je vstup
+#: `track_record`, zápis výsledků ho nefiltruje: kolektor vyhodnotí každý plán. None = datum
+#: zatím není, track record je prázdný a vyhodnocené plány jsou „mimo track record“.
+TRACK_RECORD_SINCE: dt.date | None = None
+#: Brána `preliminary`: track record pod 30 případů je předběžný (ADR-0035, ADR-0062 bod 7)
+PRELIMINARY_N = 30
+#: Stíny track recordu (K10 B) v `plan.shadows`; klíč = parametr pravidel
+SHADOWS: Mapping[str, PlanRules] = {"entry_b": SHADOW_B, "wick_test": SHADOW_WICK}
+MINUTE = dt.timedelta(minutes=1)
+
+ResultStatus = Literal["spuštěno", "bez vstupu", "bez opce", "mezera"]
+VariantKind = Literal["obchod", "vyřazeno P3", "bez kotace"]
+Budget = Literal["v rozpočtu", "nad rozpočtem", "nenastaven"]
+EventKind = Literal["vstup", "TP1", "TP2", "SL", "stop na vstupu", "exit"]
+#: Průběh po vstupu, stejné stavy jako zpětné přehrání #1756 (`manage`)
+Outcome = Literal["SL", "TP1", "TP2", "TP1→vstup", "TP1→exit", "exit", "cíl 1 za vstupem"]
+RESULT_STATUSES: tuple[ResultStatus, ...] = ("spuštěno", "bez vstupu", "bez opce", "mezera")
+OUTCOMES: tuple[Outcome, ...] = (
+    "SL",
+    "TP1",
+    "TP2",
+    "TP1→vstup",
+    "TP1→exit",
+    "exit",
+    "cíl 1 za vstupem",
+)
+BUDGETS: tuple[Budget, ...] = ("v rozpočtu", "nad rozpočtem", "nenastaven")
+#: Stavy, které track record posuzuje; mezera a bez opce se jen počítají v `by_status`
+JUDGED: tuple[ResultStatus, ...] = ("spuštěno", "bez vstupu")
+ROLES: tuple[Literal["hlavní", "záložní"], ...] = ("hlavní", "záložní")
+
+
+class QuoteLike(Protocol):
+    """Kotace kontraktu plánu v závěru minuty; tvar `storage.parquet_store.OptionQuoteRow`."""
+
+    @property
+    def ts_min(self) -> dt.datetime: ...
+
+    @property
+    def expiry(self) -> str: ...
+
+    @property
+    def strike(self) -> float: ...
+
+    @property
+    def right(self) -> str: ...
+
+    @property
+    def bid(self) -> float | None: ...
+
+    @property
+    def ask(self) -> float | None: ...
+
+    @property
+    def iv(self) -> float | None: ...
+
+    @property
+    def quote_age_s(self) -> float | None: ...
+
+
+@dataclass(frozen=True)
+class PathEvent:
+    """Událost na podkladu QQQ. Kotace opce k ní je řádek minuty, která v `ts` končí."""
+
+    kind: EventKind
+    #: Závěr minuty události: 5min close (vstup, SL, stop na vstupu), 1m bar s dotykem cíle, exit
+    ts: dt.datetime
+    #: Cena QQQ: 5min close (vstup, SL, stop na vstupu), cíl (TP), close minuty před exitem
+    price: float
+
+
+@dataclass(frozen=True)
+class QuoteAt:
+    """Naměřená kotace kontraktu v minutě události (K3 bod 9)."""
+
+    ts_min: dt.datetime
+    bid: float | None
+    ask: float | None
+    iv: float | None
+    quote_age_s: float | None
+
+
+@dataclass(frozen=True)
+class OptionExit:
+    """Výstup z opce za bid v minutě události, P&L na 1 kontrakt (K3 bod 9)."""
+
+    event: EventKind
+    ts: dt.datetime
+    bid: float | None
+    quote_age_s: float | None
+    #: None = kotace v minutě výstupu chybí (mezera, ne odhad)
+    pnl_usd: float | None
+
+
+@dataclass(frozen=True)
+class VariantResult:
+    """Varianta opce po spoušti: P3 a P4 z kotace při spoušti, P&L z kotací událostí."""
+
+    role: Literal["hlavní", "záložní"]
+    right: Literal["C", "P"]
+    strike: float
+    expiry: dt.date
+    #: `obchod` (projde P3), `vyřazeno P3` (hypotetický výsledek zvlášť), `bez kotace` (mezera)
+    kind: VariantKind
+    entry_quote: QuoteAt | None
+    #: P3 a P4 při spoušti (`_pricing`): `paid` = ask kotace, ceny při SL, TP a čerpání P4
+    #: z modelu s IV téže kotace (Rozhodnuto 16. 11.: A), `rr` rozhoduje P3. % účtu se nepočítá
+    pricing: Pricing | None
+    #: Třída podle rozpočtu ze Settings při vyhodnocení (Rozhodnuto 16. 11.); hodnota se neukládá
+    budget: Budget | None
+    #: Výstup v TP1 (bez TP1 v SL, nebo v exitu) a držení do TP2 se stopem na vstupu; naměřený bid
+    exit_tp1: OptionExit | None
+    exit_hold: OptionExit | None
+    gaps: tuple[str, ...]
+    #: Štítek modelových cen v `pricing` (ceny vstupu a výstupu jsou naměřené)
+    model_label: str = MODEL_LABEL
+
+
+@dataclass(frozen=True)
+class PlanResult:
+    """Výsledek části plánu (hlavní plán nebo stín K10 B) z naměřených barů a kotací."""
+
+    rules: str
+    status: ResultStatus
+    #: Proč bez vstupu, bez opce nebo mezera
+    reasons: tuple[str, ...]
+    entry: Entry | None
+    #: Spoušť vstupu B u stínu B, i když ji P1 vyřadí
+    trigger_b: Entry | None
+    outcome: Outcome | None
+    events: tuple[PathEvent, ...]
+    variants: tuple[VariantResult, ...]
+    #: 1m barů QQQ od US openu do rozhodnutí: uložených / očekávaných
+    bars: int
+    bars_expected: int
+
+
+def _et(ts: dt.datetime) -> str:
+    return ts.astimezone(ET_TZ).strftime("%H:%M")
+
+
+def _ts(value: object, path: str) -> dt.datetime:
+    ts = dt.datetime.fromisoformat(str(value))
+    if ts.tzinfo is None:
+        raise ValueError(f"{path}: čas bez časové zóny {value!r}")
+    return ts
+
+
+def _bare(rules: PlanRules, status: ResultStatus, reasons: Sequence[str]) -> PlanResult:
+    return PlanResult(rules.name, status, tuple(reasons), None, None, None, (), (), 0, 0)
+
+
+def no_option_result(reasons: Sequence[str]) -> PlanResult:
+    """Výsledek plánu bez opce (sloupec `status` = `bez opce`): není co ocenit."""
+    return _bare(MAIN_RULES, "bez opce", tuple(reasons) or ("bez opce",))
+
+
+def _walk(
+    entry: Entry,
+    *,
+    side: int,
+    targets: Sequence[float],
+    rth: Sequence[PathBar],
+    open_ts: dt.datetime,
+    exit_ts: dt.datetime,
+) -> tuple[Outcome, tuple[PathEvent, ...]]:
+    """Průběh po vstupu (K3 bod 5): TP na dotyk v 1m baru, SL na 5min close, po TP1 SL na vstup.
+
+    V minutě se kontroluje TP1, pak TP2, pak 5min close (končí-li v ní 5min bar), jako
+    zpětné přehrání #1756. `rth` jsou 1m bary od US openu do exitu (bez minuty, která
+    v exitu začíná). Bez rozhodnutí do exitu = výstup v exitu za close poslední minuty.
+    """
+    events = [PathEvent("vstup", entry.ts, entry.price)]
+    tp1 = targets[0]
+    tp2 = targets[1] if len(targets) > 1 else None
+    if (tp1 - entry.price) * side <= 0:
+        return "cíl 1 za vstupem", tuple(events)
+    stop, hit1, last = entry.stop, False, entry.price
+    for bar in rth:
+        if bar.ts < entry.ts:
+            continue
+        end = bar.ts + MINUTE
+        last = bar.close
+        favorable = bar.low if side < 0 else bar.high
+        if not hit1 and (favorable - tp1) * side >= 0:
+            events.append(PathEvent("TP1", end, tp1))
+            if tp2 is None:
+                return "TP1", tuple(events)
+            hit1, stop = True, entry.price
+        if hit1 and tp2 is not None and (favorable - tp2) * side >= 0:
+            events.append(PathEvent("TP2", end, tp2))
+            return "TP2", tuple(events)
+        if (end - open_ts) % BAR_SPAN == dt.timedelta(0) and (bar.close - stop) * side < 0:
+            events.append(PathEvent("stop na vstupu" if hit1 else "SL", end, bar.close))
+            return ("TP1→vstup" if hit1 else "SL"), tuple(events)
+    events.append(PathEvent("exit", exit_ts, last))
+    return ("TP1→exit" if hit1 else "exit"), tuple(events)
+
+
+def _budget(drawdown_usd: float, max_loss_usd: float | None) -> Budget:
+    """Třída P4 podle rozpočtu ze Settings; srovnání jako verdikt plánu (`_verdict`)."""
+    if max_loss_usd is None or not _positive(max_loss_usd):
+        return "nenastaven"
+    return "nad rozpočtem" if -drawdown_usd > max_loss_usd else "v rozpočtu"
+
+
+def _variant_result(
+    variant: Mapping[str, Any],
+    *,
+    entry: Entry,
+    events: Sequence[PathEvent],
+    side: int,
+    em: float,
+    targets: Sequence[float],
+    target_ts: Sequence[dt.datetime],
+    exit_ts: dt.datetime,
+    quotes: Mapping[tuple[str, float, str, dt.datetime], QuoteLike],
+    max_loss_usd: float | None,
+) -> VariantResult:
+    """P3, P4 a P&L varianty z naměřených kotací (K3 bod 9, Rozhodnuto 16. 11.)."""
+    role, right = variant["role"], variant["right"]
+    strike, expiry = float(variant["strike"]), dt.date.fromisoformat(variant["expiry"])
+    key = (expiry.strftime("%Y%m%d"), strike, right)
+    name = f"{role} {'call' if right == 'C' else 'put'} {strike:g}"
+    gaps: list[str] = []
+    row = quotes.get((*key, entry.ts - MINUTE))
+    entry_quote = (
+        QuoteAt(row.ts_min, row.bid, row.ask, row.iv, row.quote_age_s) if row is not None else None
+    )
+    if row is None or row.ask is None or not _positive(row.ask) or not _positive(row.iv):
+        what = "ask a IV" if row is not None else "řádek"
+        return VariantResult(
+            role=role,
+            right=right,
+            strike=strike,
+            expiry=expiry,
+            kind="bez kotace",
+            entry_quote=entry_quote,
+            pricing=None,
+            budget=None,
+            exit_tp1=None,
+            exit_hold=None,
+            gaps=(f"{name}: kotace při vstupu ({_et(entry.ts)} ET) chybí — {what}",),
+        )
+    paid = row.ask
+    pricing = _pricing(
+        _Model(right, strike, float(row.iv or 0.0), settle_ts(expiry)),
+        entry,
+        side=side,
+        em=em,
+        targets=targets,
+        target_ts=target_ts,
+        exit_ts=exit_ts,
+        account_usd=None,
+        paid=paid,
+    )
+    multiplier = EQUITY_OPTION_MULTIPLIER
+
+    def leave(event: PathEvent) -> OptionExit:
+        quote = quotes.get((*key, event.ts - MINUTE))
+        bid = quote.bid if quote is not None else None
+        if bid is None:
+            gaps.append(f"{name}: kotace při {event.kind} ({_et(event.ts)} ET) chybí")
+        return OptionExit(
+            event.kind,
+            event.ts,
+            bid,
+            quote.quote_age_s if quote is not None else None,
+            (bid - paid) * multiplier if bid is not None else None,
+        )
+
+    exits = (leave(events[1]), leave(events[-1])) if len(events) > 1 else (None, None)
+    return VariantResult(
+        role=role,
+        right=right,
+        strike=strike,
+        expiry=expiry,
+        kind="obchod" if pricing.rr is not None and pricing.rr >= MIN_RR else "vyřazeno P3",
+        entry_quote=entry_quote,
+        pricing=pricing,
+        budget=_budget(pricing.drawdown_usd, max_loss_usd),
+        exit_tp1=exits[0],
+        exit_hold=exits[1],
+        gaps=tuple(gaps),
+    )
+
+
+def _missing_minutes(
+    present: Collection[dt.datetime], start: dt.datetime, end: dt.datetime
+) -> tuple[int, list[dt.datetime]]:
+    expected = int((end - start) / MINUTE)
+    missing = [start + i * MINUTE for i in range(expected) if start + i * MINUTE not in present]
+    return expected, missing
+
+
+def evaluate_plan(
+    part: Mapping[str, Any],
+    *,
+    rules: PlanRules,
+    bars: Sequence[PathBar],
+    quotes: Sequence[QuoteLike],
+    max_loss_usd: float | None,
+) -> PlanResult:
+    """Výsledek části plánu (`plan_to_json`) z 1m barů QQQ seance a minutových kotací (F3).
+
+    Spoušť hledá táž funkce jako plán (`_entries` nad 5min bary od prvního 5min close po
+    vzniku do exitu, K3 bod 5, K6 B), průběh po vstupu `_walk`. Stavy:
+    - `spuštěno`: vstup a průběh do SL, TP2, stopu na vstupu, nebo exitu. Každá varianta je
+      `obchod`, `vyřazeno P3` (R:R z kotace < 2, výsledek hypotetický, K3 bod 9), nebo
+      `bez kotace` (mezera, chybí ask nebo IV v minutě spouště);
+    - `bez vstupu`: spoušť do exitu nenastala, nebo úroveň A do 1 EM není (track record
+      „nespuštěno“, ne ztráta);
+    - `bez opce`: plán bez variant;
+    - `mezera`: plánu chybí EM nebo vstup scénáře, nebo chybí 1m bar QQQ mezi US openem
+      a rozhodnutím (chybějící minuta mohla nést spoušť, cíl nebo SL). Nic se neodhaduje.
+
+    Kotace události je řádek minuty, která okamžikem události končí (vzorek v jejím závěru),
+    vstup za ask, výstup za bid. Bez kotace výstupu je P&L té nohy None s mezerou ve variantě.
+    `max_loss_usd` je rozpočet ze Settings v okamžiku vyhodnocení (třída P4, Rozhodnuto 16. 11.).
+    """
+    if part.get("rules") != rules.name:
+        raise ValueError(f"část plánu má pravidla {part.get('rules')!r}, čekala se {rules.name!r}")
+    day = dt.date.fromisoformat(part["day"])
+    if not is_trading_session(day):
+        raise ValueError(f"plán QQQ {day}: den bez obchodní seance se nevyhodnocuje (#1309)")
+    if not part["variants"]:
+        return _bare(rules, "bez opce", tuple(part["missing"]) or ("bez opce",))
+    em, scenario_entry = part["em"], part["scenario_entry"]
+    targets = tuple(float(target) for target in part["targets"])
+    if em is None or scenario_entry is None or not targets:
+        return _bare(rules, "mezera", tuple(part["missing"]) or ("plán bez EM nebo vstupu",))
+    side = 1 if part["direction"] == "long" else -1
+    created_at = _ts(part["created_at"], "plán.created_at")
+    exit_ts = _ts(part["exit_ts"], "plán.exit_ts")
+    target_ts = tuple(_ts(ts, "plán.target_ts") for ts in part["target_ts"])
+    open_ts = us_open_ts(day)
+    by_minute = {bar.ts: bar for bar in bars if open_ts <= bar.ts < exit_ts}
+    rth = [by_minute[ts] for ts in sorted(by_minute)]
+    fives = five_minute_bars(rth, open_ts, settle_ts(day))
+    p1 = GexTop(**part["p1"]) if part["p1"] is not None else None
+    entries = _entries(
+        levels={name: float(value) for name, value in part["levels"].items()},
+        side=side,
+        scenario_entry=float(scenario_entry),
+        em=float(em),
+        p1=p1,
+        window=[bar for bar in fives if created_at < bar.end < exit_ts],
+        # Konec okna bez spouště posoudí úplnost barů níž; `blocked` tak nese jen důvod
+        # „vstup A není“ (úroveň do 1 EM chybí), o kterém bary nerozhodují
+        window_done=False,
+        rules=rules,
+    )
+    if entries.blocked is not None:
+        return _bare(rules, "bez vstupu", (entries.blocked,))
+    outcome: Outcome | None = None
+    events: tuple[PathEvent, ...] = ()
+    decided = exit_ts
+    if entries.chosen is not None:
+        outcome, events = _walk(
+            entries.chosen, side=side, targets=targets, rth=rth, open_ts=open_ts, exit_ts=exit_ts
+        )
+        decided = events[-1].ts
+    expected, missing = _missing_minutes(by_minute.keys(), open_ts, decided)
+    if missing:
+        return dataclasses.replace(
+            _bare(
+                rules,
+                "mezera",
+                (
+                    f"bary QQQ: chybí {len(missing)} z {expected} minut od US openu do "
+                    f"{_et(decided)} ET (první {_et(missing[0])} ET)",
+                ),
+            ),
+            bars=expected - len(missing),
+            bars_expected=expected,
+        )
+    if entries.chosen is None or outcome is None:
+        return dataclasses.replace(
+            _bare(rules, "bez vstupu", ("bez vstupu do exitu",)),
+            trigger_b=entries.trigger_b,
+            bars=expected,
+            bars_expected=expected,
+        )
+    by_contract = {(q.expiry, float(q.strike), q.right, q.ts_min): q for q in quotes}
+    variants = tuple(
+        _variant_result(
+            variant,
+            entry=entries.chosen,
+            events=events,
+            side=side,
+            em=float(em),
+            targets=targets,
+            target_ts=target_ts,
+            exit_ts=exit_ts,
+            quotes=by_contract,
+            max_loss_usd=max_loss_usd,
+        )
+        for variant in part["variants"]
+    )
+    return PlanResult(
+        rules=rules.name,
+        status="spuštěno",
+        reasons=(),
+        entry=entries.chosen,
+        trigger_b=entries.trigger_b,
+        outcome=outcome,
+        events=events,
+        variants=variants,
+        bars=expected,
+        bars_expected=expected,
+    )
+
+
+def evaluate_option_plan(
+    main: Mapping[str, Any] | None,
+    shadows: Mapping[str, Mapping[str, Any]],
+    *,
+    reasons: Sequence[str],
+    bars: Sequence[PathBar],
+    quotes: Sequence[QuoteLike],
+    max_loss_usd: float | None,
+) -> dict[str, Any]:
+    """JSON `option_plans.result`: hlavní plán a stíny (K10 B) zvlášť, verze pravidel.
+
+    `main` a `shadows` jsou části platného plánu řádku (`effective_plan`, K4 bod 10),
+    `reasons` mezery plánu bez opce (u něj je `main` None).
+    """
+    unknown = sorted(set(shadows) - set(SHADOWS))
+    if unknown:
+        raise ValueError(f"neznámé stíny plánu {unknown}")
+    common: dict[str, Any] = {"bars": bars, "quotes": quotes, "max_loss_usd": max_loss_usd}
+    head = (
+        evaluate_plan(main, rules=MAIN_RULES, **common)
+        if main is not None
+        else no_option_result(reasons)
+    )
+    return {
+        "rules_version": RULES_VERSION,
+        "main": jsonable(head, "výsledek.main"),
+        "shadows": {
+            key: jsonable(evaluate_plan(part, rules=SHADOWS[key], **common), f"výsledek.{key}")
+            for key, part in shadows.items()
+        },
+    }
+
+
+# ── track record (F3 #1748, ADR-0062 bod 7) ─────────────────────────
+
+
+def _pnl(values: Sequence[float]) -> dict[str, Any]:
+    total = sum(values)
+    return {
+        "n": len(values),
+        "sum_usd": total,
+        "mean_usd": total / len(values) if values else None,
+        "wins": sum(1 for value in values if value > 0),
+    }
+
+
+def _group(pairs: Sequence[tuple[str, Mapping[str, Any]]], *, by_budget: bool) -> dict[str, Any]:
+    """Obchody (nebo vyřazené P3) jedné role: průběh, P&L obou výstupů, třídy rozpočtu."""
+    legs = {
+        key: [
+            float(variant[key]["pnl_usd"])
+            for _, variant in pairs
+            if variant[key] is not None and variant[key]["pnl_usd"] is not None
+        ]
+        for key in ("exit_tp1", "exit_hold")
+    }
+    out: dict[str, Any] = {
+        "n": len(pairs),
+        "preliminary": len(pairs) < PRELIMINARY_N,
+        "outcomes": {name: sum(1 for got, _ in pairs if got == name) for name in OUTCOMES},
+        "pnl_tp1": _pnl(legs["exit_tp1"]),
+        "pnl_hold": _pnl(legs["exit_hold"]),
+    }
+    if by_budget:
+        out["by_budget"] = {
+            budget: _group([pair for pair in pairs if pair[1]["budget"] == budget], by_budget=False)
+            for budget in BUDGETS
+        }
+    return out
+
+
+def _section(parts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Track record jedné části plánu (hlavní plán nebo stín) přes vyhodnocené plány."""
+    triggered = [part for part in parts if part["status"] == "spuštěno"]
+    variants: dict[str, Any] = {}
+    for role in ROLES:
+        pairs = [
+            (str(part["outcome"]), variant)
+            for part in triggered
+            for variant in part["variants"]
+            if variant["role"] == role
+        ]
+        variants[role] = {
+            "trades": _group([p for p in pairs if p[1]["kind"] == "obchod"], by_budget=True),
+            "rejected_p3": _group(
+                [p for p in pairs if p[1]["kind"] == "vyřazeno P3"], by_budget=True
+            ),
+            "no_quote": sum(1 for p in pairs if p[1]["kind"] == "bez kotace"),
+        }
+    judged = sum(1 for part in parts if part["status"] in JUDGED)
+    return {
+        # Posouzené plány (spuštěno, bez vstupu); mezera a bez opce jen v `by_status`
+        "plans": judged,
+        "preliminary": judged < PRELIMINARY_N,
+        "by_status": {
+            status: sum(1 for part in parts if part["status"] == status)
+            for status in RESULT_STATUSES
+        },
+        "variants": variants,
+    }
+
+
+def track_record(
+    results: Sequence[tuple[dt.date, Mapping[str, Any]]], *, since: dt.date | None
+) -> dict[str, Any]:
+    """Track record plánu QQQ z výsledků (seance, JSON `result`) jedné verze pravidel.
+
+    Počítají se plány od seance `since` (`TRACK_RECORD_SINCE`); None = track record zatím
+    nezačal a všechno je `outside`. Stíny K10 B jsou zvlášť a do hlavního se nepočítají.
+    Obchod = spoušť, která projde P3; vyřazené P3 nesou hypotetický výsledek zvlášť;
+    `by_budget` dělí obojí podle třídy rozpočtu (Rozhodnuto 16. 11.). Brána `preliminary`
+    platí v každém bloku při n < 30 (ADR-0035).
+    """
+    counted = [result for day, result in results if since is not None and day >= since]
+    return {
+        "since": since.isoformat() if since is not None else None,
+        "outside": len(results) - len(counted),
+        "main": _section([result["main"] for result in counted]),
+        "shadows": {
+            key: _section(
+                [result["shadows"][key] for result in counted if key in result["shadows"]]
+            )
+            for key in SHADOWS
+        },
+    }

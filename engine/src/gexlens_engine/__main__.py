@@ -32,6 +32,7 @@ from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
 from gexlens_engine.compute.option_plan import ACCOUNT_KEYS as OPTION_PLAN_ACCOUNT_KEYS
+from gexlens_engine.compute.option_plan import AccountParams
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS, SetupParams
 from gexlens_engine.compute.spot import PriceAt, SpotReading, bar_close_at, resolve_spot
@@ -109,6 +110,7 @@ from gexlens_engine.instruments import (
 from gexlens_engine.ivrank import IvRankCollector, TastyMetricsLike
 from gexlens_engine.mapstate import MapStateCollector
 from gexlens_engine.memwatch import MemoryWatch
+from gexlens_engine.option_plan_eval import OptionPlanCollector
 from gexlens_engine.option_plan_job import OptionPlanMaker, account_params
 from gexlens_engine.paper import PaperBroker
 from gexlens_engine.probes import T9ProbeCollector
@@ -949,6 +951,7 @@ async def create_pipeline(
     handover: EngineRuntime | None = None,
     on_scenario_created: Callable[[CreatedScenario], object] | None = None,
     on_minute_levels: Callable[[LevelsRow], object] | None = None,
+    option_plan_collector: OptionPlanCollector | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async.
 
@@ -1599,6 +1602,7 @@ async def create_pipeline(
             if scenarios_repository is not None and db is not None
             else None
         ),
+        option_plan_collector=option_plan_collector,
         paper_broker=(
             PaperBroker(
                 symbol=symbol,
@@ -1920,11 +1924,23 @@ async def main() -> None:
     scenario_api = ApiReader(api_base)
     option_plans_repository = OptionPlansRepository(db)
     await asyncio.to_thread(option_plans_repository.ensure_schema)
+
+    def option_plan_account() -> AccountParams:
+        return account_params(watchlist_reader.settings_map(OPTION_PLAN_ACCOUNT_KEYS))
+
     option_plan_maker = OptionPlanMaker(
         repository=option_plans_repository,
-        account=lambda: account_params(watchlist_reader.settings_map(OPTION_PLAN_ACCOUNT_KEYS)),
+        account=option_plan_account,
         scenarios=scenarios_repository,
         day_levels=lambda session: gather_day_levels(scenario_api, PLAN_CHAIN_REFERENCE, session),
+        publisher=publisher,
+    )
+    # Vyhodnocení plánu po close (F3 #1748): úlohy po settle pipeline NQ, rozpočet P4 jen pro
+    # třídu varianty (hodnota se neloguje)
+    option_plan_collector = OptionPlanCollector(
+        repository=option_plans_repository,
+        derived_dir=settings.derived_dir,
+        account=option_plan_account,
         publisher=publisher,
     )
     try:
@@ -3540,6 +3556,9 @@ async def main() -> None:
                     ),
                     on_minute_levels=(
                         option_plan_maker.on_levels if symbol == PLAN_CHAIN_REFERENCE else None
+                    ),
+                    option_plan_collector=(
+                        option_plan_collector if symbol == PLAN_CHAIN_REFERENCE else None
                     ),
                 )
                 # Předání drží subskripci a trasy D+1 až do založení (#1460)
