@@ -35,6 +35,7 @@ from gexlens_engine.storage.option_plans_store import OptionPlansRepository
 from gexlens_engine.storage.parquet_store import (
     OptionQuoteRow,
     SnapshotWriter,
+    read_bars,
     read_option_quotes,
 )
 
@@ -74,7 +75,7 @@ class Harness:
     def plan(self, day: dt.date = DAY, main: dict[str, Any] | None = None) -> int:
         self.scenario_id += 1
         main = main if main is not None else part()
-        plan = {
+        plan: dict[str, Any] = {
             "slot": "9:15",
             "reasons": [],
             "levels_nq": {},
@@ -195,7 +196,7 @@ async def test_session_read_from_globex_open_including_previous_partition(
     h.bars([*globex, *SL_PATH])
     h.quotes(DAY, SL_PATH)
     windows: list[tuple[dt.datetime, dt.datetime]] = []
-    real = plan_eval.read_bars
+    real = read_bars
 
     def spy(derived: Path, symbol: str, since: dt.datetime, until: dt.datetime) -> Any:
         windows.append((since, until))
