@@ -5,7 +5,8 @@
 # na 0 B, containerd ve VM spadl a Docker Desktop se nerozjel.
 #
 # Co se maže (vše jde znovu vyrobit buildem):
-#   1. rollback tagy `gex-*:pre-*` kromě N nejnovějších na službu,
+#   1. rollback tagy `gex-*:pre-*` i `ghcr.io/kechicz/gex-*:pre-*` kromě
+#      N nejnovějších image na jméno (každá revize je v GHCR jako `sha-*`),
 #   2. build cache starší než -CacheAgeHours,
 #   3. osiřelé (dangling) image.
 # Co se NIKDY nemaže: volumes (`pgdata` = Postgres), aktuální tagované image
@@ -21,7 +22,7 @@
 # (`register-docker-cleanup-task.ps1`, sobota ráno — trh zavřený).
 [CmdletBinding()]
 param(
-    # Kolik nejnovějších `pre-*` tagů na službu ponechat
+    # Kolik nejnovějších rollback image (`pre-*`) na jméno ponechat
     [int]$KeepTags = 3,
     # Build cache starší než tolik hodin se maže (168 = 7 dní)
     [int]$CacheAgeHours = 168,
@@ -41,17 +42,27 @@ function Write-Step($text) { Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $text"
 
 Assert-DockerReady
 
-# ── 1) Rollback tagy: nechat jen $KeepTags nejnovějších na službu ───────
+# ── 1) Rollback tagy: nechat jen $KeepTags nejnovějších image na jméno ──
 # gex-python/gex-frontend = rollback tagy od #1139 (image z GHCR); gex-engine…
 # = starší lokální jména, ať se dočistí i pozůstatky
 $services = @('gex-python', 'gex-frontend', 'gex-engine', 'gex-api', 'gex-news-engine')
 $removedTags = 0
 foreach ($svc in $services) {
-    $tags = docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' |
-        Where-Object { $_ -match "\|$([regex]::Escape($svc)):pre-" } |
-        Sort-Object -Descending |
-        ForEach-Object { $_.Split('|')[1] }
-    $old = @($tags | Select-Object -Skip $KeepTags)
+    # Lokální jméno (`gex-python:pre-*`, deploy-engine-offhours.ps1) i jméno
+    # z registru (`ghcr.io/kechicz/gex-python:pre-*`, ruční nasazení). Do #1825
+    # úklid znal jen první, druhé se hromadily po ~1,1 GB a VHDX narostl na 74 GB.
+    $rows = @(docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}|{{.ID}}' |
+        Where-Object { $_ -match "^[^|]*\|([^|]*/)?$([regex]::Escape($svc)):pre-" } |
+        Sort-Object -Descending)
+    # Počítají se image, ne tagy: engine, api a news-engine mívají na jednom
+    # image víc tagů (pre-1815-api = pre-1795-engine) a 3 tagy byly i 1 image
+    $keepIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($row in $rows) {
+        $id = $row.Split('|')[2]
+        if ($keepIds.Count -lt $KeepTags -and -not $keepIds.Contains($id)) { $keepIds.Add($id) }
+    }
+    $old = @($rows | Where-Object { -not $keepIds.Contains($_.Split('|')[2]) } |
+        ForEach-Object { $_.Split('|')[1] })
     foreach ($tag in $old) {
         if ($WhatIf) { Write-Step "WhatIf: smazal bych $tag"; continue }
         docker rmi $tag *> $null
@@ -59,7 +70,7 @@ foreach ($svc in $services) {
         else { Write-Warning "Tag $tag se nepodařilo smazat (nejspíš ho používá kontejner) — nechávám." }
     }
 }
-Write-Step "Rollback tagy: smazáno $removedTags, ponecháno ≤ $KeepTags na službu."
+Write-Step "Rollback tagy: smazáno $removedTags, ponecháno ≤ $KeepTags image na jméno."
 
 # ── 2) Build cache starší než $CacheAgeHours ─────────────────────────────
 if ($WhatIf) {
