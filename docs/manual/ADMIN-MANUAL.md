@@ -249,7 +249,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_PUSH_DAILY_CAP` | 200 | Denní strop odeslaných zpráv (0 = bez stropu); dedup per (kind, symbol, začátek textu) 10 min |
 | `GEXLENS_PUSH_SETUP_MIN_CONFIDENCE` | 0 | Minimální confidence vzniklého setupu pro push, **v procentech 0–100** (stejná škála, jakou setup posílá v alertu; do #1285 byl rozsah 0–1 a práh nic nefiltroval) |
 | *(serverová nastavení)* `option_plan_account_usd`, `option_plan_max_loss_usd` | — (bez výchozí hodnoty) | **Parametry účtu plánu opce QQQ** (ADR-0062 K2 A, #1742): velikost účtu v $ (jen pro „% účtu“) a rozpočet P4 v $ na obchod. Zápis `PUT /settings/{key}` (#1743): kladné konečné číslo v $ (smí přijít i jako text), uloží se jako číslo; `null` nebo prázdný řetězec = nenastaveno, uloží se `null` (klíč smazat nejde, jako u ostatních nastavení). Nula, záporné číslo, jiný text, bool a NaN/∞ = 422 a nic se neuloží. Platnost posuzuje jediná funkce `compute/option_plan.account_value` pro API i engine. Engine hodnoty čte v okamžiku plánu (9:15 ET, plán z 9:31 v 9:31), neplatná hodnota = nenastaveno s WARNING bez hodnoty v logu. Nenastavené = varianty `neobchodovat — rozpočet nenastaven`, tichý default není (Q3 B). Hodnota nejde do logu API ani do hlášky chyby; karta v Settings přijde s F5a #1746. Hodnoty nepatří do repa ani do issues (repo je veřejné) |
-| *(serverová nastavení)* `push_telegram_enabled`, `push_telegram_topic_<key>` | true / podle kategorie | **Hlavní vypínač a přepínače per druh upozornění** (#1284, Settings → Notifikace), jen bool — jiná hodnota nebo neznámý klíč v `PUT /settings` = 422. Jediný zdroj pravdy je tabulka `PUSH_TOPICS` v `api/src/gexlens_api/push_telegram.py`: 31 přepínačů ve dvou skupinách (`market` = Setupy a burza, `app` = Chování aplikace), každý slučuje druhy (`kind`) se stejnou dřívější kategorií `setup`/`ops`/`news`/`info`; z ní plyne výchozí hodnota (`info` vypnuto, ostatní zapnuto), výjimka z tichých hodin (`ops`) a emoji zprávy. Z tichých hodin je navíc vyjmutý přepínač s `quiet_exempt` — jen „Zprávy před otevřením po víkendu“ (`news_preopen`, #1291): aktualizace 15 min před nedělním otevřením padá na 23:45. Efektivní hodnota se počítá při čtení (`effective()`): vlastní klíč → dřívější `push_telegram_setup/ops/news/info` (#1175, už jen čtení, zápis 422) → výchozí; nic se nemigruje ani nepřepisuje. Hlavní vypínač vypnutý = na Telegram neodejde nic, hodnoty přepínačů zůstanou. Druh bez záznamu v `PUSH_TOPICS` na Telegram neodejde (WARNING v logu api jednou za druh) — nový alert = doplnit tabulku i `PUBLISHED_KINDS` v `api/tests/test_push_telegram.py`. Zdroj alertů = kanál `alerts` `LiveHub` (posluchač `TelegramPush`), takže engine, news-engine i provozní alerty api jdou jednou cestou; zvonek na přepínačích nezávisí. Odeslání běží v daemon vlákně, 3 pokusy, 4xx = chyba konfigurace bez opakování; stav a přepínače v `GET /push/status` |
+| *(serverová nastavení)* `push_telegram_enabled`, `push_telegram_topic_<key>` | true / podle kategorie | **Hlavní vypínač a přepínače per druh upozornění** (#1284, Settings → Notifikace), jen bool — jiná hodnota nebo neznámý klíč v `PUT /settings` = 422. Jediný zdroj pravdy je tabulka `PUSH_TOPICS` v `api/src/gexlens_api/push_telegram.py`: 33 přepínačů ve dvou skupinách (`market` = Setupy a burza, `app` = Chování aplikace), každý slučuje druhy (`kind`) se stejnou dřívější kategorií `setup`/`ops`/`news`/`info`; z ní plyne výchozí hodnota (`info` vypnuto, ostatní zapnuto), výjimka z tichých hodin (`ops`) a emoji zprávy. Z tichých hodin je navíc vyjmutý přepínač s `quiet_exempt` — jen „Zprávy před otevřením po víkendu“ (`news_preopen`, #1291): aktualizace 15 min před nedělním otevřením padá na 23:45. Efektivní hodnota se počítá při čtení (`effective()`): vlastní klíč → dřívější `push_telegram_setup/ops/news/info` (#1175, už jen čtení, zápis 422) → výchozí; nic se nemigruje ani nepřepisuje. Hlavní vypínač vypnutý = na Telegram neodejde nic, hodnoty přepínačů zůstanou. Druh bez záznamu v `PUSH_TOPICS` na Telegram neodejde (WARNING v logu api jednou za druh) — nový alert = doplnit tabulku i `PUBLISHED_KINDS` v `api/tests/test_push_telegram.py`. Zdroj alertů = kanál `alerts` `LiveHub` (posluchač `TelegramPush`), takže engine, news-engine i provozní alerty api jdou jednou cestou; zvonek na přepínačích nezávisí. Odeslání běží v daemon vlákně, 3 pokusy, 4xx = chyba konfigurace bez opakování; stav a přepínače v `GET /push/status`. Po textu se pošle snímek, patří-li k alertu (`sendPhoto` multipart, F4c #1745, kap. 5 „Fotky na Telegram“): stejný token, retry a důvod chyby bez URL, rozhodnutí o fotce znovu při odeslání a do denního stropu se počítá jako zpráva |
 | `GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN` | 15 | **Automatický scénář dne** (#1173 A): kolik minut před US openem (9:30 ET) engine per symbol sestaví scénář z verdiktu dne (`compute/dayverdict`). Verdikt převezme od zapisovače `DayVerdictWriter` z téže minuty (kap. 5 „Verdikty dne", #1595 d1) — API se za minutu čte jednou (`scenario_auto.gather_context`: `/candles`, `/bars`, `/instruments/{sym}/days`, `/gammacliff`, `/oidelta`, `/sentiment/state`, `/news/upcoming`; levels, tendence a tenká mapa z runtime). Jeden scénář per seance v okně [open − N, open), vznikne v **první minutě okna s úplným verdiktem** (neúplný — výpadek čtení API, chybí levels nebo tendence — ho odloží na další minutu; do #1595 jeden pokus v první minutě okna i při výpadku; při N > 15 před open − 15 min jen na pětiminutových značkách, kdy zapisovač počítá), **jen v obchodní den** (`settle.is_trading_session`: po–pá mimo svátky NYSE, ADR-0046, #1309); `source='auto'`, `rationale` = hlasy + chybějící vstupy; verdikt none/wait_news = bez scénáře (log), verdikt se uloží i tak. Snímek doplní frontend přes `PUT /scenarios/{id}/image` (jednou, jinak 409). 0 = vypnutý scénář, **ne** zápis verdiktu dne (zapisovač má vlastní kadenci). Plán opce QQQ (#1742) bere jen scénář NQ se štítkem 9:15 ET: hodnota jiná než 15 dá scénář jiné minuty a plán pak každý den vznikne bez opce („pozdní scénář“, kap. 5 „Plán opce QQQ ze scénáře dne“) |
 | *(scénáře dne, #1173)* | — | PG tabulka `scenarios` (řádek per scénář: symbol, den a čas vzniku, termín + `deadline_ts` = settle termínu, vstup, cíle, cesta, `annotation_id`, `image_path`, `image_bytes`, `evaluated_at`, `result`), snímky `data/scenarios/{sym}/{den}/{id}.png` (max 4 MB, jen PNG). API: `POST /scenarios` (jen dopředu — termín ≥ aktuální seance, do 60 dní a v obchodní den po–pá, jinak 422; `created_at` razítkuje server), `GET /scenarios?symbol=`, `GET /scenarios/{id}/image`, `GET /scenarios/stats` (`preliminary` do n < 30; automatické scénáře jen z aktuální verze pravidel verdiktu `rationale.rules_version`, v odpovědi `rules_version`, ruční vždy — #1588), `GET /scenarios/disk` (součet z DB, ne rglob), `DELETE /scenarios/images?older_than_days=N` (jen PNG, řádky zůstávají), `DELETE /scenarios/{id}`. Engine `ScenarioCollector` per symbol jednou po settle (+15 min) **obchodní seance** (o víkendu neběží, #1309): scénáře po termínu bez výsledku → bary `derived/{sym}/bars/` od `created_at` do `deadline_ts`, EM z `em_respect` seance vzniku → `result` + alert `scenario_result` (přepínač Telegramu „Scénář dne"); scénář s termínem mimo obchodní seanci (víkendové řádky z doby před #1309) se uzavře bez výsledku a bez alertu a `GET /scenarios/stats` ho nezapočítá — bez ručního zásahu do dat. Nad 1 GB snímků alert `scenario_disk` (hranově, přepínač Telegramu „Dochází místo na disku"); žádné automatické mazání. Do limitu, `GET /scenarios/disk` (`bytes`, `images`) i ručního úklidu patří i PNG plánů QQQ ve stejném adresáři (`scenario_routes.ImageDiskWatch`, F4b #1744, kap. 5) |
 | `GEXLENS_NEWS_ALPACA_KEY_ID` / `_SECRET` | — | Alpaca News API — živý stream i historický backfill (#743, #744). Stačí paper účet a **Trading API**, ne Broker API |
@@ -747,9 +747,8 @@ nejdéle do **9:16:40 ET** (hranice + 40 s + 60 s rezervy, `snapshot_deadline`).
   Hodnoty se nelogují.
 - **Uložení** jde do tabulky `option_plans` (kap. 6). Jeden plán na scénář, `create` při
   existujícím plánu nic nepřepíše. Pak přijde alert `option_plan_created` (symbol QQQ,
-  `plan_id`, `scenario_id`) do zvonku. Telegram plán zatím neposílá (F4c #1745), API proto
-  při prvním alertu zaloguje jednou WARNING „Push: druh 'option_plan_created' nemá přepínač
-  v PUSH_TOPICS“.
+  `plan_id`, `scenario_id`) do zvonku. Na Telegram jde pod přepínačem „Plán opce QQQ“
+  (`push_telegram_topic_option_plan`) s fotkou plánu a popiskem (F4c #1745, kap. 5).
 
 Log enginu:
 
@@ -815,8 +814,8 @@ se v 9:31 sestaví celý.
   9:31 hned zapíše „engine startoval po 9:31 ET — snímek přecenění se v tomto běhu
   nedohání“. Plán s už zapsaným přeceněním nemění.
 - **Alert** `option_plan_repriced` jde do zvonku (symbol QQQ, `plan_id`, `scenario_id`, `ts`
-  9:31 ET, po restartu čas startu). Telegram ho registruje až F4c #1745. API do té doby
-  zaloguje jednou WARNING „Push: druh 'option_plan_repriced' nemá přepínač v PUSH_TOPICS“.
+  9:31 ET, po restartu čas startu). Na Telegram jde pod přepínačem „Plán opce QQQ“, fotka
+  jen u plánu sestaveného celého v 9:31 (F4c #1745, kap. 5).
 
 Log enginu:
 
@@ -949,9 +948,8 @@ v #1738).
 - **Zápis:** `option_plans.result` a `evaluated_at` jednou (`record_result`, UPDATE
   s podmínkou `evaluated_at IS NULL`), druhý běh ani restart nic nezmění. Vadný JSON plánu
   nebo partice = ERROR s tracebackem, výsledek se nezapíše a plán se zkusí po dalším close.
-  Alert `option_plan_result` (symbol QQQ, `plan_id`, `scenario_id`) jde do zvonku. Telegram
-  ho zatím neposílá (F4c #1745), API proto zaloguje jednou WARNING „Push: druh
-  'option_plan_result' nemá přepínač v PUSH_TOPICS“.
+  Alert `option_plan_result` (symbol QQQ, `plan_id`, `scenario_id`) jde do zvonku a pod
+  přepínačem „Plán opce QQQ“ na Telegram, bez fotky (F4c #1745).
 - **Track record** (`GET /option-plans/stats`, kap. 7) počítá jen plány od
   `compute/option_plan.TRACK_RECORD_SINCE`, tedy od první seance s nasazenými #1774,
   #1653 + #1599 a #1610 (Rozhodnuto 10. a 16. 11.). Dokud je `None`, vyhodnotí se každý plán,
@@ -1012,9 +1010,9 @@ v image byl; `du` v kontejneru 13. 11.).
 - **Záložní graf NQ** (`scenario_chart_png`) má stejný styl: bary NQ od otevření Globex seance
   do okamžiku kreslení, vstup, cíle s názvy z `rationale.targets`, cesta a úrovně NQ
   z `plan.levels_nq` plánu ke scénáři. Scénář bez plánu je ukáže bez úrovní. Volá ho Telegram
-  (F4c #1745), když heatmapa z aplikace nedorazí; endpoint nemá.
+  (F4c #1745), když heatmapa z aplikace nedorazí do 3 min; endpoint nemá a neukládá se.
 - **Snímek stavu plánu** (vlastník 12. 11., #1738, varianta A): `GET /option-plans/{id}/image`
-  (kap. 7) PNG nakreslí při prvním dotazu a uloží do
+  (kap. 7) nebo fotka plánu na Telegram (F4c #1745) PNG nakreslí při prvním dotazu a uloží do
   `data/scenarios/QQQ/{den}/plan-{id}-{stav}.png`. Stav (`plan_chart.image_state`) je `0915`,
   `0931` po přecenění (klíč `plan.repricing`) a `vyhodnoceno` po vyhodnocení (F3 #1748).
   Znovu se kreslí jen po změně stavu, PNG předchozího stavu se smaže, jinak se čte z disku.
@@ -1032,6 +1030,50 @@ v logu. Testy: `test_option_plan_image.py` (popis grafu na golden plánu 2. 11.,
 v 9:31, plán bez opce, záložní graf NQ, chyba a časový limit podprocesu, kreslení
 matplotlibem, které se bez matplotlib přeskočí, snímek stavu, úklid, společný limit)
 a `test_option_plans_store.py` (migrace `image_bytes`).
+
+**Fotky na Telegram** (`api/push_photos.py`, `api/push_telegram.py`, F4c #1745,
+ADR-0062 K4 bod 14). Rozsah rozhodl vlastník 16. 11. (#1738 Rozhodnuto,
+„1. B, 2. A, 3. A, 4. A“).
+
+- **Tok:** `TelegramPush.handle` (posluchač kanálu `alerts`) rozhodne o textu a ve vlákně
+  odeslání pošle text, pak se zeptá zdroje fotek `push_photos.AlertPhotos`, jestli k alertu
+  patří snímek (`Photo`: PNG s popiskem, nebo důvod, proč PNG není). Fotka jde `sendPhoto`
+  multipart (`photo` = PNG, `chat_id`, `caption` do 1 024 znaků) se stejným tokenem z `.env`,
+  3 pokusy a 4xx bez opakování, limit 30 s na pokus.
+- **Pojistky fotky (1 B):** o fotce se rozhoduje znovu ve chvíli odeslání
+  (`TelegramPush.decide_photo`): hlavní vypínač a přepínač druhu, tiché hodiny, dedup
+  10 min podle jména snímku (`scenario-{id}.png`, `plan-{id}-{stav}.png`) a denní strop,
+  do kterého se fotka počítá jako zpráva (`sent_today` v `GET /push/status`). Text, který
+  neodešel (přepínač, tiché hodiny, dedup, strop), fotku vůbec nespustí.
+- **Scénář dne NQ (4 A, jen NQ):** po `scenario_created` čeká API až 3 min
+  (`IMAGE_WAIT_S`, krok 5 s čtením řádku `scenarios`) na heatmapu z aplikace
+  (`PUT /scenarios/{id}/image`). Když dorazí, jde ze souboru snímku, jinak se nakreslí
+  záložní graf NQ `plan_chart.scenario_chart_png` s úrovněmi z plánu QQQ ke scénáři
+  (neukládá se). Heatmapa, která přijde až po záložním grafu, se už neposílá. Scénář ES
+  fotku nemá.
+- **Plán opce QQQ (2 A):** při `option_plan_created` vždy, při `option_plan_repriced` jen
+  u plánu sestaveného celého v 9:31 (`plan.repricing.plan`, `push_photos.rebuilt_at_reprice`),
+  k `option_plan_result` ne (PNG stavu „vyhodnoceno“ zatím neukazuje průběh, #1822). PNG
+  jde přes `option_plan_routes.PlanImages`, tutéž instanci jako `GET /option-plans/{id}/image`:
+  nakreslí se jednou ke stavu, uloží se do `data/scenarios/QQQ/…` a `image_bytes`
+  a endpoint ho pak čte z disku.
+- **Popisek plánu (3 A, `push_photos.plan_caption`):** jen uložené hodnoty platného plánu
+  (`effective_plan`): plán a slot, směr a opce, vstup A od úrovně (5min close), TP1/TP2,
+  exit v ET a v čase Praha, „SL a R:R při spoušti vstupu A“ (K12 A) a stav. Parametry účtu,
+  rozpočet ani „% účtu“ nenese. Engine ani text zvonku se nemění.
+- **Selhání:** snímek, který nejde nakreslit, přečíst nebo odeslat, nahradí text
+  „📷 Snímek se nepodařilo poslat — důvod“ s popiskem pod ním. Důvod je chyba kreslení
+  (`ChartRenderError`, 500 z `PlanImages`), typ výjimky sítě s počtem pokusů nebo
+  `HTTP 4xx: description` z odpovědi Bot API, nikdy text výjimky httpx (nese URL s tokenem).
+  V logu API je WARNING „Push: snímek … se nepodařilo poslat — …“ (WARNING je v logu vidět,
+  INFO zatím ne, #1818).
+
+Ověření: `GET /push/status` po 15:15 SEČ v den s plánem: `last_error` null a `sent_today`
+vyšší o 4 (text a fotka scénáře NQ, text a fotka plánu); `option_plans.image_path`
+plánu dne vyplněné; v logu API žádné WARNING „snímek … se nepodařilo poslat“. Testy:
+`test_push_telegram.py` (multipart, pojistky fotky, selhání viditelně, token v textu
+ani logu) a `test_push_photos.py` (heatmapa do 3 min, záložní graf po 3 min, ES bez fotky,
+plán při vzniku a sestavený v 9:31, popisek bez parametrů účtu).
 
 ## 6. Datové formáty a persistence
 
