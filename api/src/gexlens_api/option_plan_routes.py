@@ -18,7 +18,8 @@ podprocesu (`plan_chart`) z uložených hodnot plánu a uložených barů QQQ a 
 #1738, varianta A): nakreslí se při prvním dotazu a znovu jen po změně stavu
 (`plan_chart.image_state`: 9:15, přecenění 9:31, vyhodnocení), jinak se čte z disku. Velikost
 jde do `image_bytes` a do společného hlídání místa se snímky scénářů (#1173). Selhání kreslení
-je 500 s důvodem v odpovědi i v logu, nikdy prázdný obrázek.
+je 500 s důvodem v odpovědi i v logu, nikdy prázdný obrázek. Kreslení a uložení drží
+`PlanImages`, který sdílí endpoint s fotkou plánu na Telegram (F4c #1745).
 """
 
 import datetime as dt
@@ -78,32 +79,120 @@ def _summary(row: OptionPlanRow) -> dict[str, Any]:
     }
 
 
-def build_option_plan_router(
-    repository_factory: Callable[[], OptionPlansRepository],
-    data_dir: Path,
-    derived_dir: Path,
-    disk_watch: ImageDiskWatch | None = None,
-    *,
-    now: Any = None,
-) -> APIRouter:
-    """`repository_factory` vrací úložiště nad sdíleným PG (lazy: app se sestavuje i bez DB).
+class PlanImageError(RuntimeError):
+    """PNG plánu nejde vrátit; `status` je HTTP kód endpointu, zpráva nese důvod."""
 
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+class PlanImages:
+    """PNG plánu QQQ k jeho stavu: z disku, nebo nakreslený teď a uložený (F4b #1744).
+
+    Jediná cesta k PNG plánu pro endpoint `GET /option-plans/{id}/image` i pro fotku
+    na Telegram (F4c #1745): PNG ke stavu se nakreslí jednou, jde do `image_bytes`
+    a do hlídání místa, ať se k němu dostane kdokoli dřív.
+
+    `repository_factory` vrací úložiště nad sdíleným PG (lazy: app se sestavuje i bez DB),
     `data_dir` je kořen PNG (`data/scenarios/…`), `derived_dir` partice barů QQQ,
     `disk_watch` hlídání místa sdílené se snímky scénářů (None = bez hlídání, testy).
     """
-    router = APIRouter(tags=["option-plans"])
-    clock = now or (lambda: dt.datetime.now(dt.UTC))
-    cache: list[OptionPlansRepository] = []
-    # Kontrola „PNG ke stavu už je“ a kreslení jsou atomické: souběžné dotazy nekreslí dvakrát
-    image_lock = threading.Lock()
 
-    def repo() -> OptionPlansRepository:
-        if not cache:
-            repository = repository_factory()
+    def __init__(
+        self,
+        repository_factory: Callable[[], OptionPlansRepository],
+        data_dir: Path,
+        derived_dir: Path,
+        disk_watch: ImageDiskWatch | None = None,
+        *,
+        now: Any = None,
+    ) -> None:
+        self._factory = repository_factory
+        self._data_dir = data_dir
+        self._derived_dir = derived_dir
+        self._disk_watch = disk_watch
+        self._clock = now or (lambda: dt.datetime.now(dt.UTC))
+        self._cache: list[OptionPlansRepository] = []
+        # Kontrola „PNG ke stavu už je“ a kreslení jsou atomické: souběžné dotazy (endpoint,
+        # Telegram) nekreslí dvakrát
+        self._image_lock = threading.Lock()
+
+    def repo(self) -> OptionPlansRepository:
+        if not self._cache:
+            repository = self._factory()
             # Tabulku zakládá engine (F2b #1742); tady jen pro start API před enginem a testy
             repository.ensure_schema()
-            cache.append(repository)
-        return cache[0]
+            self._cache.append(repository)
+        return self._cache[0]
+
+    def path(self, plan_id: int) -> Path:
+        """PNG plánu k jeho stavu; `PlanImageError` 404 bez plánu, 500 při selhání kreslení."""
+        row = self.repo().get(plan_id)
+        if row is None:
+            raise PlanImageError(404, f"Plán opce {plan_id} neexistuje")
+        target = self._stored(row)
+        if target is None:
+            with self._image_lock:
+                row = self.repo().get(plan_id)
+                if row is None:
+                    raise PlanImageError(404, f"Plán opce {plan_id} neexistuje")
+                target = self._stored(row) or self._draw(row)
+        return target
+
+    def _stored(self, row: OptionPlanRow) -> Path | None:
+        """PNG ke stavu plánu na disku, jinak None (jiný stav, smazaný úklidem, nebyl)."""
+        relative = image_relative_path(row)
+        if row.image_path != relative.as_posix():
+            return None
+        target = self._data_dir / relative
+        return target if target.exists() else None
+
+    def _draw(self, row: OptionPlanRow) -> Path:
+        relative = image_relative_path(row)
+        try:
+            bars = read_plan_bars(row, self._derived_dir, self._clock())
+            png = render_png(plan_chart_spec(row, bars))
+        except ChartRenderError as exc:
+            logger.error(
+                "PNG plánu QQQ #%s (stav %s) se nenakreslil: %s", row.id, image_state(row), exc
+            )
+            raise PlanImageError(500, f"Kreslení PNG plánu {row.id} selhalo: {exc}") from exc
+        except Exception as exc:
+            # Čtení barů nebo popis z JSON plánu (vadná partice, nečekaný tvar): důvod
+            # do odpovědi i do logu s tracebackem, ne holé 500
+            logger.exception("PNG plánu QQQ #%s: popis grafu selhal", row.id)
+            reason = f"{type(exc).__name__}: {exc}"
+            raise PlanImageError(500, f"Kreslení PNG plánu {row.id} selhalo: {reason}") from exc
+        target = self._data_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_suffix(".tmp")
+        partial.write_bytes(png)
+        os.replace(partial, target)
+        self.repo().set_image(row.id, relative.as_posix(), len(png))
+        if row.image_path and row.image_path != relative.as_posix():
+            # PNG předchozího stavu (9:15 po přecenění) je odvozený, ne data uživatele
+            previous = self._data_dir / row.image_path
+            try:
+                previous.unlink(missing_ok=True)
+            except OSError:
+                logger.exception("PNG plánu QQQ %s nešel smazat", previous)
+        if self._disk_watch is not None:
+            self._disk_watch.check()
+        logger.info(
+            "PNG plánu QQQ #%s (stav %s): %d B, barů %d",
+            row.id,
+            image_state(row),
+            len(png),
+            len(bars),
+        )
+        return target
+
+
+def build_option_plan_router(images: PlanImages) -> APIRouter:
+    """Seznam, detail, track record a PNG plánu; PNG jde přes `images` sdílené s Telegramem."""
+    router = APIRouter(tags=["option-plans"])
+    repo = images.repo
 
     @router.get("/option-plans")
     def option_plans_list(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
@@ -121,67 +210,13 @@ def build_option_plan_router(
             **repo().stats(rules_version=version, since=TRACK_RECORD_SINCE),
         }
 
-    def _stored_image(row: OptionPlanRow) -> Path | None:
-        """PNG ke stavu plánu na disku, jinak None (jiný stav, smazaný úklidem, nebyl)."""
-        relative = image_relative_path(row)
-        if row.image_path != relative.as_posix():
-            return None
-        target = data_dir / relative
-        return target if target.exists() else None
-
-    def _draw(row: OptionPlanRow) -> Path:
-        relative = image_relative_path(row)
-        try:
-            bars = read_plan_bars(row, derived_dir, clock())
-            png = render_png(plan_chart_spec(row, bars))
-        except ChartRenderError as exc:
-            logger.error(
-                "PNG plánu QQQ #%s (stav %s) se nenakreslil: %s", row.id, image_state(row), exc
-            )
-            raise HTTPException(500, f"Kreslení PNG plánu {row.id} selhalo: {exc}") from exc
-        except Exception as exc:
-            # Čtení barů nebo popis z JSON plánu (vadná partice, nečekaný tvar): důvod
-            # do odpovědi i do logu s tracebackem, ne holé 500
-            logger.exception("PNG plánu QQQ #%s: popis grafu selhal", row.id)
-            reason = f"{type(exc).__name__}: {exc}"
-            raise HTTPException(500, f"Kreslení PNG plánu {row.id} selhalo: {reason}") from exc
-        target = data_dir / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_suffix(".tmp")
-        partial.write_bytes(png)
-        os.replace(partial, target)
-        repo().set_image(row.id, relative.as_posix(), len(png))
-        if row.image_path and row.image_path != relative.as_posix():
-            # PNG předchozího stavu (9:15 po přecenění) je odvozený, ne data uživatele
-            previous = data_dir / row.image_path
-            try:
-                previous.unlink(missing_ok=True)
-            except OSError:
-                logger.exception("PNG plánu QQQ %s nešel smazat", previous)
-        if disk_watch is not None:
-            disk_watch.check()
-        logger.info(
-            "PNG plánu QQQ #%s (stav %s): %d B, barů %d",
-            row.id,
-            image_state(row),
-            len(png),
-            len(bars),
-        )
-        return target
-
     @router.get("/option-plans/{plan_id}/image")
     def option_plan_image(plan_id: int) -> FileResponse:
         """PNG plánu k jeho stavu: z disku, nebo nakreslený teď (snímek stavu plánu)."""
-        row = repo().get(plan_id)
-        if row is None:
-            raise HTTPException(404, f"Plán opce {plan_id} neexistuje")
-        target = _stored_image(row)
-        if target is None:
-            with image_lock:
-                row = repo().get(plan_id)
-                if row is None:
-                    raise HTTPException(404, f"Plán opce {plan_id} neexistuje")
-                target = _stored_image(row) or _draw(row)
+        try:
+            target = images.path(plan_id)
+        except PlanImageError as exc:
+            raise HTTPException(exc.status, str(exc)) from exc
         return FileResponse(target, media_type="image/png")
 
     @router.get("/option-plans/{plan_id}")
