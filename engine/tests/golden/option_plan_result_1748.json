@@ -1,0 +1,31 @@
+{
+ "description": "Golden vyhodnocení plánu opce QQQ 2. 11. 2026 (F3 #1748, ADR-0062 K9 A). Plán v 9:31 ET a bary jsou z option_plan_1741.json (bary NQ v RTH dělené poměrem 41,311, plán z rekonstruovaného řetězu 1DTE s IV fixture 30 %).",
+ "readme": [
+  "Bary QQQ v RTH ani kotace kontraktů plánu se 2. 11. nesbíraly (odběr F1b #1747 běží od 12. 11.), takže kotace jsou SYNTETICKÉ podle quote_rule.",
+  "Syntetická kotace minuty: mid = Black–Scholes (gexfield.bs_price) z close 1m baru QQQ téže minuty, strike, IV quote_rule.iv a času od závěru minuty do settle expirace 3. 11.; bid = bid_factor × mid, ask = ask_factor × mid (spread 2 %), IV = quote_rule.iv, stáří quote_rule.age_s.",
+  "Časy a ceny podkladu (vstup, TP1, TP2) jsou z AC #1748 a nezávisí na testovaném modulu: TP1 = první 1m bar po vstupu s low ≤ 691,994 (17:30 UTC, low 691,40), TP2 = první další s low ≤ 690,590 (17:44 UTC, low 690,52).",
+  "R:R hlavní varianty z kotace = (at_tp1 − ask) / (ask − at_stop) s at_tp1 a at_stop ze zpětného přehrání #1756 (option_plan_1741.json, expected.fixture_iv), protože IV kotace = IV fixture.",
+  "P&L = (bid v minutě výstupu − ask v minutě vstupu) × 100 spočítané přímo z quote_rule, ne testovaným modulem."
+ ],
+ "quote_rule": {"iv": 0.30, "bid_factor": 0.99, "ask_factor": 1.01, "age_s": 1.0},
+ "max_loss_usd": 150.0,
+ "expected": {
+  "main": {
+   "status": "spuštěno",
+   "outcome": "TP2",
+   "entry": {"kind": "A", "ts": "2026-11-02T15:35:00+00:00", "price": 697.9852, "stop": 699.6594},
+   "events": [
+    ["vstup", "2026-11-02T15:35:00+00:00", 697.9852],
+    ["TP1", "2026-11-02T17:31:00+00:00", 691.9941],
+    ["TP2", "2026-11-02T17:45:00+00:00", 690.5901]
+   ],
+   "bars": 195,
+   "variants": {
+    "hlavní": {"strike": 687, "kind": "obchod", "ask": 1.193352, "rr": 4.407336, "bid_tp1": 2.626852, "bid_hold": 2.982565, "pnl_tp1_usd": 143.350004, "pnl_hold_usd": 178.921303},
+    "záložní": {"strike": 686, "kind": "obchod", "ask": 1.019408, "bid_tp1": 2.299741, "bid_hold": 2.622717, "pnl_tp1_usd": 128.033293, "pnl_hold_usd": 160.330857}
+   }
+  },
+  "entry_b": {"trigger_b": {"ts": "2026-11-02T14:35:00+00:00", "price": 694.95, "stop": 698.51}, "entry_ts": "2026-11-02T15:35:00+00:00"},
+  "wick_test": {"entry_ts": "2026-11-02T15:35:00+00:00"}
+ }
+}
