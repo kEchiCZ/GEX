@@ -240,3 +240,37 @@ def test_plan_bez_opce_po_obou_snimcich(client: TestClient, plans: OptionPlansRe
     effective = client.get(f"/option-plans/{plan_id}").json()["effective"]
     assert (effective["slot"], effective["main"], effective["shadows"]) == ("9:15", None, {})
     assert (effective["reasons"], effective["repricing_reasons"]) == (gap_915, gap_931)
+
+
+def test_track_record_bez_data_zacatku(client: TestClient, plans: OptionPlansRepository) -> None:
+    """F3 #1748: bez `TRACK_RECORD_SINCE` je track record prázdný, vyhodnocené plány v `outside`."""
+    plan_id = plans.create(
+        scenario_id=41,
+        day=MONDAY,
+        created_at=AT_915,
+        rules_version=1,
+        verdict="čeká",
+        status="sestaven",
+        plan={"slot": "9:15", "reasons": [], "levels_nq": {}, "main": None, "shadows": {}},
+    )
+    assert plan_id is not None
+    result = {
+        "rules_version": 1,
+        "main": {"status": "bez vstupu", "variants": [], "outcome": None},
+        "shadows": {},
+    }
+    assert plans.record_result(plan_id, result, AT_915 + dt.timedelta(hours=7))
+    response = client.get("/option-plans/stats")
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["rules_version"], body["since"], body["outside"]) == (1, None, 1)
+    assert body["main"]["plans"] == 0 and body["main"]["preliminary"] is True
+    trades = body["main"]["variants"]["hlavní"]["trades"]
+    assert trades["n"] == 0 and set(trades["by_budget"]) == {
+        "v rozpočtu",
+        "nad rozpočtem",
+        "nenastaven",
+    }
+    assert set(body["shadows"]) == {"entry_b", "wick_test"}
+    # Detail plánu dál podle id; `stats` není id
+    assert client.get(f"/option-plans/{plan_id}").json()["result"] == result
