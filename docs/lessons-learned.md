@@ -16,6 +16,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-11-16 — VHDX Dockeru narostl z 33 na 74 GB za 4 týdny a disk D: měl 7,6 GB volných, protože úklid hledal rollback tagy podle starého jména (#1825).**
+  Od #1139 se image stahují z GHCR a ruční nasazení tagují `ghcr.io/kechicz/gex-python:pre-*`.
+  `docker-cleanup.ps1` ale vybíral regexem `\|gex-python:pre-`, takže je nikdy neviděl. Mazal jen
+  pozůstatky lokálních jmen a hlásil „Úklid hotov, místo v pořádku“ i při VHDX 70 GB, zatímco
+  19 image po ~1,1 GB zůstalo. Kompaktace to
+  zakryla: vrací jen místo volné uvnitř VHDX, a když úklid nic nesmazal, neměla co vrátit. Odhalil
+  to až alert `disk_low` a rozpad `docker system df -v` (UNIQUE SIZE na image). → Úklid podle
+  jména se po přejmenování image tiše vypne. Při změně jména nebo registru image se prohledá každé
+  místo, které podle jména vybírá (`grep -rn 'gex-python' scripts/`). Rostoucí VHDX při „místo
+  v pořádku“ je signál ke kontrole výběru, ne klid.
+
 - **2026-11-10 — job ve vlákně zastavil smyčku asyncio na 4–8,7 s, protože `to_pylist()` časového sloupce drží GIL (#1695).**
   Pátý výskyt vzorce „minutový cyklus“ (po #1337, #1646, #1701, #1713), druhý s GIL po #1701.
   FA validace a kalibrace ρ po finalitě OI běžely přes `asyncio.to_thread`, a dávka OI druhého
