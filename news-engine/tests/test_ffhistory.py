@@ -178,10 +178,12 @@ def test_surprise_z_needs_minimum_samples(tmp_path: Path) -> None:
 # ── Backfill a refresh ─────────────────────────────────────────────
 
 
-def days_json_for(entry: dict[str, object]) -> str:
+def days_json_for(*entries: dict[str, object]) -> str:
     import json
 
-    return json.dumps([{"date": "Mon", "dateline": entry["dateline"], "events": [entry]}])
+    return json.dumps(
+        [{"date": "Mon", "dateline": entries[0]["dateline"], "events": list(entries)}]
+    )
 
 
 def test_backfill_writes_and_is_idempotent(tmp_path: Path) -> None:
@@ -204,6 +206,55 @@ def test_backfill_writes_and_is_idempotent(tmp_path: Path) -> None:
         engine, weeks=2, today=dt.date(2026, 7, 29), fetch=fake_fetch, sleep=lambda _s: None
     )
     assert again.written == 0  # idempotence
+
+
+def test_backfill_keeps_two_releases_of_same_series_in_one_day(tmp_path: Path) -> None:
+    """#1298: dvě hodnoty téže řady v jeden den se uloží obě, update actual najde každou.
+
+    Tvar ze stránky dec15.2025: dohánějící NFP za říjen ve 13:29 bez forecastu
+    a aktuální za listopad ve 13:30. Dřív se druhý zahodil na `dedup_hash`.
+    """
+    engine = make_db(tmp_path)
+    catch_up = {
+        "id": 151490,
+        "name": "Non-Farm Employment Change",
+        "currency": "USD",
+        "dateline": 1765891740,  # 2025-12-16 13:29 UTC
+        "impactName": "high",
+        "forecast": "",
+        "previous": "119K",
+        "actual": "-105K",
+    }
+    current = {
+        **catch_up,
+        "id": 151491,
+        "dateline": 1765891800,  # 2025-12-16 13:30 UTC
+        "forecast": "50K",
+        "previous": "-105K",
+        "actual": "64K",
+    }
+
+    def fake_fetch(_week: str) -> str:
+        return page(days_json_for(catch_up, current))
+
+    stats = run_backfill(
+        engine, weeks=1, today=dt.date(2025, 12, 17), fetch=fake_fetch, sleep=lambda _s: None
+    )
+    assert stats.written == 2
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(news_events.c.ts_event, news_events.c.forecast, news_events.c.actual).order_by(
+                news_events.c.ts_event
+            )
+        ).fetchall()
+    assert [(r.ts_event.minute, r.forecast, r.actual) for r in rows] == [
+        (29, None, pytest.approx(-105_000)),
+        (30, pytest.approx(50_000), pytest.approx(64_000)),
+    ]
+    again = run_backfill(
+        engine, weeks=1, today=dt.date(2025, 12, 17), fetch=fake_fetch, sleep=lambda _s: None
+    )
+    assert again.written == 0
 
 
 def test_backfill_survives_failed_week(tmp_path: Path) -> None:

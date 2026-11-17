@@ -205,7 +205,9 @@ def calendar_release_time(engine: Engine, title: str, day: dt.date) -> dt.dateti
 
     Hranice dne se počítají v ET, ne posunem o 24 h — den přechodu letního času
     má 23 nebo 25 h. Víc řádků téhož titulku (přeplánovaný release) → naposledy
-    zapsaný, ten nese aktuální rozvrh kalendáře.
+    zapsaný, ten nese aktuální rozvrh kalendáře. Dva releasy téže řady zapsané
+    naráz (dohánění po shutdownu, FF dohánějící uvádí o minutu dřív, #1298) →
+    pozdější čas, to je čas aktuálního releasu.
     """
     start = dt.datetime.combine(day, dt.time(), tzinfo=ET_TZ).astimezone(dt.UTC)
     end = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(), tzinfo=ET_TZ).astimezone(
@@ -220,7 +222,9 @@ def calendar_release_time(engine: Engine, title: str, day: dt.date) -> dt.dateti
             news_events.c.ts_event >= start,
             news_events.c.ts_event < end,
         )
-        .order_by(news_events.c.ts_ingested.desc(), news_events.c.id.desc())
+        .order_by(
+            news_events.c.ts_ingested.desc(), news_events.c.ts_event.desc(), news_events.c.id.desc()
+        )
         .limit(1)
     )
     with engine.connect() as conn:

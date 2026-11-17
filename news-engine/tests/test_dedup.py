@@ -173,6 +173,28 @@ def test_daily_recurring_title_stays_a_new_event() -> None:
     assert result.duplicates == 0
 
 
+def test_two_releases_of_same_series_in_one_day_stay_apart(tmp_path: Path) -> None:
+    """#1298: FF uvedl dohánějící NFP 16. 12. 2025 ve 13:29 a aktuální ve 13:30.
+
+    Rolling okno ani `dedup_hash` je nesmí sloučit — dřív zůstal jen první
+    a aktuální release chyběl. Opakovaný fetch téhož kalendáře je dál duplicita.
+    """
+    writer, inner = make_writer(tmp_path)
+    title = "USD Non-Farm Employment Change"
+    catch_up = dt.datetime(2025, 12, 16, 13, 29, tzinfo=dt.UTC)
+    calendar = [
+        event(title, "forexfactory", at=catch_up, kind="scheduled"),
+        event(title, "forexfactory", at=catch_up + dt.timedelta(minutes=1), kind="scheduled"),
+    ]
+    assert writer.write(calendar) == 2
+    assert writer.write(calendar) == 0
+    # Nový proces: okno z DB, bez něj by opakovaný fetch prošel jen přes UNIQUE
+    restarted = DedupingWriter(inner, window_minutes=10)
+    restarted.prime_from_db(catch_up)
+    assert restarted.write(calendar) == 0
+    assert inner.count() == 2
+
+
 # ── Fuzzy vrstva (#274) ────────────────────────────────────────────
 # Titulky v testech jsou skutečné páry z provozních dat 28.–29. 7. 2026,
 # na kterých byl práh J ≥ 0.9 změřen (ADR-0016).

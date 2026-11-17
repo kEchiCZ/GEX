@@ -182,6 +182,28 @@ def test_den_kalendare_se_ohranicuje_v_et(engine: Engine) -> None:
     assert calendar_release_time(engine, "USD JOLTS Job Openings", dt.date(2026, 11, 5)) == evening
 
 
+def test_dva_releasy_rady_v_jeden_den_vrati_pozdejsi(engine: Engine) -> None:
+    """#1298: dohánějící NFP 13:29 a aktuální 13:30 zapsané naráz → čas aktuálního."""
+    catch_up = dt.datetime(2025, 12, 16, 13, 29, tzinfo=dt.UTC)
+    current = catch_up + dt.timedelta(minutes=1)
+    NewsWriter(engine).write(
+        [
+            NewsEvent(
+                ts_event=ts,
+                ts_ingested=catch_up - dt.timedelta(days=5),
+                source="forexfactory",
+                source_uid=f"USD|Non-Farm Employment Change|{ts.isoformat()}",
+                kind="scheduled",
+                title="USD Non-Farm Employment Change",
+            )
+            # Pozdější release zapsaný první: rozhoduje čas, ne pořadí zápisu
+            for ts in (current, catch_up)
+        ]
+    )
+    found = calendar_release_time(engine, "USD Non-Farm Employment Change", dt.date(2025, 12, 16))
+    assert found == current
+
+
 async def test_restart_v_jiny_den_nezmeni_ts_event_ani_dedup_hash(engine: Engine) -> None:
     _ff(engine, "USD Non-Farm Employment Change", dt.datetime(2026, 10, 2, 12, 30, tzinfo=dt.UTC))
     writer = NewsWriter(engine)

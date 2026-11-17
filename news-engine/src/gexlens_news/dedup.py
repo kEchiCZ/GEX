@@ -24,6 +24,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from gexlens_engine.compute.newstext import SCHEDULED_KIND, scheduled_key
 from gexlens_news.model import NewsEvent, normalize_title
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,12 @@ class RollingDeduplicator:
         Den (na rozdíl od `dedup_hash`) záměrně **není** součástí: story přes
         půlnoc je pořád tatáž story a rolling okno ji má sloučit. Datum řeší
         až `dedup_hash` jako pojistka proti opakovanému fetchi.
+
+        Výjimka je položka kalendáře: tatáž řada ve dvou časech jsou dva
+        releasy (#1298), klíč nese minutu releasu jako její `dedup_hash`.
         """
+        if event.kind == SCHEDULED_KIND:
+            return scheduled_key(event.title, event.ts_event)
         return normalize_title(event.title)
 
     def _prune(self, now: dt.datetime) -> None:
@@ -122,7 +128,7 @@ class RollingDeduplicator:
                 first_source=event.source,
                 first_ingested=event.ts_ingested,
                 kind=event.kind,
-                tokens=frozenset(key.split()),
+                tokens=frozenset(normalize_title(event.title).split()),
                 dedup_hash=event.dedup_hash,
             )
 
@@ -171,7 +177,7 @@ class RollingDeduplicator:
                     first_source=event.source,
                     first_ingested=event.ts_ingested,
                     kind=event.kind,
-                    tokens=frozenset(key.split()),
+                    tokens=frozenset(normalize_title(event.title).split()),
                     dedup_hash=event.dedup_hash,
                 )
                 result.events.append(event)

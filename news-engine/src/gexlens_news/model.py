@@ -11,8 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from gexlens_engine.compute.marketclock import is_market_closed as _is_market_closed
-from gexlens_engine.compute.newstext import dedup_hash as _dedup_hash
-from gexlens_engine.compute.newstext import normalize_title
+from gexlens_engine.compute.newstext import event_dedup_hash, normalize_title
 
 #: Původ `ts_event` zdroje tier 1 v `raw.ts_source` (ADR-0059 bod 5): čas položky
 #: ve feedu, čas releasu z kalendáře (BLS), nebo čas prvního stažení, když
@@ -71,13 +70,13 @@ class NewsEvent:
 
     @property
     def dedup_hash(self) -> str:
-        """Klíč pro idempotentní zápis (SPEC 3.3).
+        """Klíč pro idempotentní zápis (SPEC 3.3); u kalendáře s minutou releasu (#1298).
 
         Implementace je sdílená s enginem (`compute.newstext`), protože broker
         headlines z ticku 292 zapisuje engine (#291) — dvě implementace by
         znamenaly tutéž story v DB dvakrát.
         """
-        return _dedup_hash(self.title, self.ts_event)
+        return event_dedup_hash(self.kind, self.title, self.ts_event)
 
 
 __all__ = ["NewsEvent", "RawItem", "normalize_title"]
