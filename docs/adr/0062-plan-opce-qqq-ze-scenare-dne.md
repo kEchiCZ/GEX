@@ -18,9 +18,10 @@
   přecenění v 9:31 ET (K4 bod 10, odvozeno v F2c #1769) a sloupce plánu sestaveného
   v 9:31 (K4 bod 10, vlastník „A“). **12. 11.:** odběr kontraktů plánu a podkladu do close
   (K4 bod 11, odvozeno v F1b #1747). **16. 11.:** vyhodnocení po close a track record (K4
-  bod 13, vlastník „1. A, 2. A, 3. A“ s rozlišením obchodů nad rozpočtem, F3 #1748).
+  bod 13, vlastník „1. A, 2. A, 3. A“ s rozlišením obchodů nad rozpočtem, F3 #1748) a fotky
+  na Telegram (K4 bod 14, vlastník „1. B, 2. A, 3. A, 4. A“, F4c #1745).
 - **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09, P1, track record a K4 bod 9
-  2026-11-10, K4 bod 10 2026-11-11, K4 bod 11 2026-11-12, K4 bod 13 2026-11-16)
+  2026-11-10, K4 bod 10 2026-11-11, K4 bod 11 2026-11-12, K4 body 13 a 14 2026-11-16)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
   #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
@@ -538,6 +539,35 @@ Odvozeno pro F3 (zapsal agent 16. 11., #1748; tři volby rozhodl vlastník v cha
       seance. Výsledek se zapíše jednou (`evaluated_at IS NULL`), alert `option_plan_result`.
       Golden: `engine/tests/golden/option_plan_result_1748.json` (plán a bary z #1741,
       kotace syntetické, readme v datasetu).
+
+Odvozeno pro F4c (zapsal agent 16. 11., #1745; čtyři volby rozhodl vlastník v chatu 16. 11.:
+„1. B, 2. A, 3. A, 4. A“, #1738 Rozhodnuto):
+
+14. **Fotky na Telegram** (`api/push_photos.py`, `api/push_telegram.py`, Q2b, K1 A):
+    - **Pojistky fotky (vlastník: B).** O fotce se rozhoduje znovu ve chvíli odeslání:
+      přepínač, tiché hodiny, dedup podle jména snímku a denní strop, do kterého se počítá
+      jako zpráva. Fotka se spustí jen po textu, který pojistkami prošel (i když ho
+      Telegram nepřijal: fotka nese vlastní popisek). Odmítnuto A (fotka jen
+      s rozhodnutím textu): přepínač vypnutý během čekání na heatmapu by fotku nezastavil.
+    - **Přepínač a fotky plánu (vlastník: A).** Jeden přepínač „Plán opce QQQ“ pro
+      `option_plan_created`, `option_plan_repriced` a `option_plan_result` (vzor „Scénář dne“),
+      texty jako ve zvonku. Fotka při vzniku vždy, při přecenění jen u plánu bez opce z 9:15
+      sestaveného celý v 9:31 (fotka z 9:15 opci nemá), k výsledku ne, protože PNG stavu
+      „vyhodnoceno“ zatím neukazuje průběh (#1822). PNG plánu jde přes tutéž cestu jako
+      `GET /option-plans/{id}/image` (bod 12), takže se ke stavu nakreslí jednou. Odmítnuto
+      B (fotka při každém přecenění, denně druhá skoro stejná) a C (tři přepínače).
+    - **Popisek plánu (vlastník: A).** API ho sestaví z uložených hodnot platného plánu:
+      směr a opce, vstup A od úrovně (5min close), TP1/TP2, exit a „SL a R:R při spoušti
+      vstupu A“ (K6 B: vstup B hlavní plán nemá; K12 A: SL a R:R až při spoušti, živě F3b
+      #1757). Parametry účtu ani „% účtu“ nenese, engine a text zvonku se nemění. Odmítnuto
+      B (rozšířit text v enginu: nasazení enginu kvůli textu) a C (TP a exit jen v obrázku).
+    - **Scénář ES (vlastník: A).** Fotka jen ke scénáři NQ, ES dál jen text. Odmítnuto B:
+      ES nemá plán QQQ, záložní graf by byl bez úrovní.
+    - **Odvozeno bez otázky (agent).** Na heatmapu z aplikace se čeká 3 min od alertu
+      čtením řádku scénáře po 5 s. Heatmapa, která přijde po záložním grafu, se už
+      neposílá. Záložní graf NQ se neukládá. Snímek, který nejde nakreslit, přečíst nebo
+      odeslat, nahradí text „Snímek se nepodařilo poslat — důvod“ s popiskem. Důvod nikdy
+      nenese text výjimky httpx, ten obsahuje URL s tokenem.
 
 **Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
 nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test

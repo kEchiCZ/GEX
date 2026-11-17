@@ -28,6 +28,14 @@ Pravidla:
 - Token a chat id jen z `.env`; hlavička ani log token nikdy nenesou,
   URL s tokenem se do logu nepíše (Telegram ho má v cestě).
 - Odeslání běží v daemon vlákně mimo publish — WS klienti nečekají na síť.
+
+Fotky (F4c #1745, ADR-0062 Q2b): po textu alertu se zeptá zdroj fotek
+(`push_photos.AlertPhotos`), jestli k alertu patří snímek, a pošle ho `sendPhoto`
+(multipart) se stejným tokenem, retry a bez URL v logu. Fotka se rozhoduje znovu
+v okamžiku odeslání (vlastník 16. 11., #1738: 1 B): přepínač, tiché hodiny, dedup
+podle jména snímku a denní strop, do kterého se počítá jako zpráva. Snímek, který
+nejde nakreslit nebo odeslat, ohlásí text „Snímek se nepodařilo poslat — důvod“
+(žádné tiché vynechání).
 """
 
 import datetime as dt
@@ -46,10 +54,18 @@ from gexlens_engine.compute.setups import CUMDELTA_PRINTS
 logger = logging.getLogger(__name__)
 
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_PHOTO_URL = "https://api.telegram.org/bot{token}/sendPhoto"
 REQUEST_TIMEOUT_S = 5.0
+#: Upload snímku (heatmapa až ~600 kB) potřebuje víc než text
+PHOTO_TIMEOUT_S = 30.0
 RETRIES = 3
 DEDUP_WINDOW_S = 600.0
 MESSAGE_MAX_CHARS = 900
+#: Limit popisku fotky v Bot API (`sendPhoto` caption)
+CAPTION_MAX_CHARS = 1024
+#: Délka důvodu chyby z odpovědi Telegramu (`description`)
+REASON_MAX_CHARS = 200
+PHOTO_MARK = "📷"
 #: Délka klíče v PG tabulce `settings` (String(64), engine storage/meta.py)
 SETTING_KEY_MAX_CHARS = 64
 
@@ -200,7 +216,24 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         "Automatický scénář dne a jeho vyhodnocení.",
         (
             "Vznik scénáře před US openem (směr, cíle, termín)",
+            "Ke scénáři NQ fotka: heatmapa z otevřené aplikace, když dorazí do 3 min,"
+            " jinak serverový graf NQ",
             "Výsledek po termínu: verdikt, cíl 1/2, max. odchylka",
+        ),
+    ),
+    PushTopic(
+        "option_plan",
+        "market",
+        "setup",
+        ("option_plan_created", "option_plan_repriced", "option_plan_result"),
+        "Plán opce QQQ",
+        "Plán opce QQQ 1DTE ke scénáři dne NQ: vznik, přecenění po openu a výsledek.",
+        (
+            "Vznik v 9:15 ET s fotkou plánu: směr, vstup A, TP1/TP2 a exit v popisku",
+            "SL a R:R až při spoušti vstupu A",
+            "Přecenění v 9:31 ET; „ZMĚNA“, když se změní stav plánu. Fotka jen u plánu"
+            " sestaveného až v 9:31",
+            "Výsledek po close z naměřených kotací, bez fotky",
         ),
     ),
     PushTopic(
@@ -618,17 +651,63 @@ class PushOptions:
         )
 
 
-def format_message(payload: dict[str, Any]) -> str:
+@dataclass(frozen=True)
+class Photo:
+    """Snímek k alertu (F4c #1745): PNG s popiskem, nebo důvod, proč PNG není.
+
+    `filename` je jméno souboru v Telegramu a zároveň klíč dedupu fotky. Popisek se při
+    selhání pošle v textu s důvodem (vlastník 16. 11., #1738: 3 A).
+    """
+
+    filename: str
+    caption: str
+    png: bytes | None = field(default=None, repr=False)
+    error: str | None = None
+
+
+#: Zdroj fotek: k alertu vrátí snímek, nebo None (k alertu snímek nepatří). Smí blokovat
+#: (čekání na heatmapu z aplikace), běží ve vlákně odeslání.
+PhotoSource = Callable[[dict[str, Any]], Photo | None]
+
+
+def _head(payload: dict[str, Any]) -> str:
     kind = str(payload.get("kind", "alert"))
     symbol = str(payload.get("symbol") or "").strip()
-    text = str(payload.get("message") or "").strip()
     topic = KIND_TOPIC.get(kind)
     prefix = CATEGORY_PREFIX[topic.category] if topic is not None else "ℹ️"
     head = f"{prefix} GEXLens"
     if symbol and symbol != "*":
         head += f" · {symbol}"
+    return head
+
+
+def format_message(payload: dict[str, Any]) -> str:
+    kind = str(payload.get("kind", "alert"))
+    text = str(payload.get("message") or "").strip()
+    head = _head(payload)
     body = f"{head}\n{text}" if text else f"{head}\n{kind}"
     return body[:MESSAGE_MAX_CHARS]
+
+
+def photo_failure_message(payload: dict[str, Any], photo: Photo, reason: str) -> str:
+    """Text místo snímku: důvod hned pod hlavičkou (zkrácení ho neusekne), pak popisek."""
+    lines = [_head(payload), f"{PHOTO_MARK} Snímek se nepodařilo poslat — {reason}"]
+    if photo.caption:
+        lines.append(photo.caption)
+    return "\n".join(lines)[:MESSAGE_MAX_CHARS]
+
+
+def _rejection(response: httpx.Response) -> str:
+    """Důvod odmítnutí z odpovědi Bot API (`description`); token v ní není."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    description = body.get("description") if isinstance(body, dict) else None
+    reason = f"HTTP {response.status_code}"
+    if description:
+        reason += f": {str(description)[:REASON_MAX_CHARS]}"
+    return reason
 
 
 class TelegramPush:
@@ -642,12 +721,14 @@ class TelegramPush:
         post: Callable[..., httpx.Response] | None = None,
         clock: Callable[[], float] = time.time,
         run_in_thread: bool = True,
+        photos: PhotoSource | None = None,
     ) -> None:
         self._options = options
         self._settings_reader = settings_reader
         self._post = post
         self._clock = clock
         self._run_in_thread = run_in_thread
+        self._photos = photos
         self._quiet = parse_quiet_hours(options.quiet_hours)
         self._tz = ZoneInfo(options.timezone)
         self._lock = threading.Lock()
@@ -743,6 +824,26 @@ class TelegramPush:
                 and float(confidence) < self._options.setup_min_confidence
             ):
                 return f"setup: confidence {confidence} < práh"
+        key = (kind, str(payload.get("symbol") or ""), str(payload.get("message") or "")[:80])
+        return self._admit(topic, key)
+
+    def decide_photo(self, payload: dict[str, Any], photo: Photo) -> str | None:
+        """Fotka se rozhoduje znovu v okamžiku odeslání (vlastník 16. 11., #1738: 1 B).
+
+        Přepínač druhu, tiché hodiny, dedup podle jména snímku a denní strop jako u textu;
+        fotka se do stropu počítá jako zpráva. None = odejde.
+        """
+        if not self._options.configured:
+            return "bez tokenu/chat id"
+        kind = str(payload.get("kind") or "")
+        topic = KIND_TOPIC.get(kind)
+        if topic is None:
+            return "neznámý druh"
+        key = (kind, str(payload.get("symbol") or ""), f"{PHOTO_MARK} {photo.filename}")
+        return self._admit(topic, key)
+
+    def _admit(self, topic: PushTopic, key: tuple[str, str, str]) -> str | None:
+        """Přepínače, tiché hodiny, dedup a denní strop; při průchodu rezervuje místo."""
         master, topics = effective(self._read_settings())
         if not master:
             return "Telegram vypnut"
@@ -752,7 +853,6 @@ class TelegramPush:
         local = dt.datetime.fromtimestamp(now, self._tz)
         if not topic.ignores_quiet_hours and in_quiet_hours(local.time(), self._quiet):
             return "tiché hodiny"
-        key = (kind, str(payload.get("symbol") or ""), str(payload.get("message") or "")[:80])
         with self._lock:
             last = self._recent.get(key)
             if last is not None and now - last < DEDUP_WINDOW_S:
@@ -780,35 +880,81 @@ class TelegramPush:
             return
         text = format_message(payload)
         if self._run_in_thread:
-            threading.Thread(target=self._send, args=(text,), daemon=True).start()
+            threading.Thread(target=self._deliver, args=(text, payload), daemon=True).start()
         else:
-            self._send(text)
+            self._deliver(text, payload)
+
+    def _deliver(self, text: str, payload: dict[str, Any]) -> None:
+        """Text alertu, pak snímek, patří-li k němu (ve vlákně odeslání)."""
+        self._send(text)
+        if self._photos is not None:
+            self._deliver_photo(payload)
+
+    def _deliver_photo(self, payload: dict[str, Any]) -> None:
+        kind = str(payload.get("kind") or "")
+        assert self._photos is not None
+        try:
+            photo = self._photos(payload)
+        except Exception as exc:  # noqa: BLE001 — chyba zdroje fotky nesmí zůstat tichá
+            logger.exception("Push: snímek k alertu %s se nepodařilo připravit", kind)
+            photo = Photo(filename=f"{kind}.png", caption="", error=f"{type(exc).__name__}: {exc}")
+        if photo is None:
+            return
+        reason = self.decide_photo(payload, photo)
+        if reason is not None:
+            logger.debug("Push snímku přeskočen (%s): %s", reason, photo.filename)
+            return
+        if photo.png is None:
+            error: str | None = photo.error or "snímek chybí"
+        else:
+            error = self._send_photo(photo)
+        if error is not None:
+            logger.warning("Push: snímek %s se nepodařilo poslat — %s", photo.filename, error)
+            self._send(photo_failure_message(payload, photo, error))
 
     def _send(self, text: str) -> bool:
-        post = self._post or httpx.post
-        url = TELEGRAM_URL.format(token=self._options.token)
         body = {"chat_id": self._options.chat_id, "text": text, "disable_web_page_preview": True}
+        url = TELEGRAM_URL.format(token=self._options.token)
+        return self._request(url, timeout=REQUEST_TIMEOUT_S, json=body) is None
+
+    def _send_photo(self, photo: Photo) -> str | None:
+        """`sendPhoto` multipart; None = odesláno, jinak důvod bez URL a tokenu."""
+        assert photo.png is not None
+        data = {"chat_id": self._options.chat_id, "caption": photo.caption[:CAPTION_MAX_CHARS]}
+        files = {"photo": (photo.filename, photo.png, "image/png")}
+        url = TELEGRAM_PHOTO_URL.format(token=self._options.token)
+        return self._request(url, timeout=PHOTO_TIMEOUT_S, data=data, files=files)
+
+    def _request(self, url: str, **kwargs: Any) -> str | None:
+        """POST na Bot API s opakováním; None = 200, jinak důvod (bez URL — nese token)."""
+        post = self._post or httpx.post
+        reason = "neodesláno"
         for attempt in range(1, RETRIES + 1):
             try:
-                response = post(url, json=body, timeout=REQUEST_TIMEOUT_S)
+                response = post(url, **kwargs)
             except httpx.HTTPError as exc:
-                self.last_error = f"{type(exc).__name__}"
+                # Text výjimky httpx může nést URL s tokenem — dál jde jen typ
+                reason = f"{type(exc).__name__} po {attempt} z {RETRIES} pokusů"
+                self.last_error = type(exc).__name__
                 logger.warning(
                     "Push Telegram pokus %d/%d: %s", attempt, RETRIES, type(exc).__name__
                 )
-                time.sleep(min(2.0 * attempt, 5.0))
+                if attempt < RETRIES:
+                    time.sleep(min(2.0 * attempt, 5.0))
                 continue
             if response.status_code == 200:
                 with self._lock:
                     self.last_sent_at = self._clock()
                     self.last_error = None
-                return True
-            # 4xx = chyba konfigurace (token, chat id) — opakovat nemá smysl
+                return None
+            # 4xx = chyba konfigurace nebo obsahu (token, chat id, PNG) — opakovat nemá smysl
+            reason = _rejection(response)
             self.last_error = f"HTTP {response.status_code}"
             logger.error(
                 "Push Telegram odmítnut: HTTP %d %.200s", response.status_code, response.text
             )
             if 400 <= response.status_code < 500:
-                return False
-            time.sleep(min(2.0 * attempt, 5.0))
-        return False
+                return reason
+            if attempt < RETRIES:
+                time.sleep(min(2.0 * attempt, 5.0))
+        return reason

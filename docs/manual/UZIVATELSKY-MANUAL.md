@@ -751,7 +751,10 @@ cíl 2 ne), **mimo** (cíl 1 ne). Kde to vidíš: **Briefing → Scénář dne**
 medián odchylky — brána n ≥ 30 jako u verdiktu dne; automatické jen z aktuální
 verze pravidel verdiktu, stejně jako Verdikt dne — sekce verzi vypíše, např.
 „(v3)“, #1632), alert ve zvonku
-(a Telegramu) při vzniku i po vyhodnocení.
+(a Telegramu) při vzniku i po vyhodnocení. Ke scénáři **NQ** přijde na Telegram
+po textu i **fotka** (#1745): heatmapa z otevřené aplikace, když dorazí do 3 minut
+od vzniku scénáře, jinak serverový graf NQ (bary seance, vstup, cíle, cesta a úrovně
+NQ z plánu QQQ). Scénář ES chodí jen textem.
 
 Zásady: scénář vzniká **jen dopředu** — na živém dni (v replay minulého dne
 tlačítko není) a vyhodnocuje se výhradně z barů po jeho vzniku; nic se
@@ -773,7 +776,8 @@ Plán opce QQQ ke scénáři dne NQ (ADR-0062) engine po close vyhodnotí z toho
 v seanci opravdu naměřilo: z 1m barů QQQ a minutových kotací obou kontraktů plánu.
 Vyhodnocení proběhne v 16:15 ET (22:15 SEČ, v týdnech posunu času o hodinu dřív),
 ve zkrácené seanci v 13:15 ET. Výsledek přijde do zvonku jako **Výsledek plánu opce
-QQQ**. O víkendu a ve svátek NYSE se nic nevyhodnocuje.
+QQQ** a na Telegram (přepínač Plán opce QQQ, bez fotky). O víkendu a ve svátek NYSE
+se nic nevyhodnocuje.
 
 - **Vstup A** hledá engine stejně jako plán: 5min close za úrovní, pak první 5min close
   zpět. Od 9:35 ET do exitu, ten je 15 min před close (15:45 ET, ve zkrácené seanci
@@ -1447,7 +1451,8 @@ Telegram. V Settings → **Notifikace (Telegram)**:
   neodejde nic, ani výpadky a noční údržba; přepínače pod ním zešednou, jejich
   hodnoty ale zůstanou uložené.
 - **Setupy a burza** — ve výchozím stavu zapnuté: Nový setup, Brzda ztráty,
-  Konec zkoušky setupu, Paper účet, Scénář dne, Reakce trhu na zprávu, Zprávy před otevřením po
+  Konec zkoušky setupu, Paper účet, Scénář dne, Plán opce QQQ, Reakce trhu na zprávu, Zprávy
+  před otevřením po
   víkendu, Očekávaný pohyb před releasem, Koncentrace opčního objemu, Kalendář
   expirací, Setup detektor prodělává; vypnuté (chodí často nebo jsou
   jen informační): Cena u GEX úrovně, Kandidát vzorce T6, Setup detektor se
@@ -1473,7 +1478,22 @@ Tiché hodiny 23:00–06:00 (lokálně): provozní přepínače (ve výchozím s
 v Chování aplikace a Setup detektor prodělává) chodí i v nich, ostatní ne —
 s jedinou výjimkou **Zprávy před otevřením po víkendu**: aktualizace 15 minut
 před nedělním otevřením padá na 23:45 a ráno by už nebyla k ničemu.
-Duplicitní alert do 10 min se neposílá, denní strop 200. Nastavení bota
+Duplicitní alert do 10 min se neposílá, denní strop 200.
+
+**Fotky (#1745):** ke scénáři dne NQ a k plánu opce QQQ přijde po textu
+i obrázek. Plán QQQ ho má při vzniku v 15:15 SEČ vždy, s popiskem pod fotkou:
+směr a opce, vstup A od úrovně (5min close), TP1/TP2 v cenách QQQ, čas exitu
+a „SL a R:R při spoušti vstupu A“ (SL a R:R plán zná až při spoušti). Popisek
+nenese velikost účtu ani rozpočet. Při přecenění v 15:31 SEČ přijde fotka jen
+tehdy, když plán v 15:15 vznikl bez opce a sestavil se celý až po openu; k večernímu
+výsledku fotka nechodí. Fotka se řídí stejným přepínačem, tichými hodinami,
+dedupem a denním stropem jako text a posuzuje se znovu ve chvíli odeslání:
+když mezitím začnou tiché hodiny nebo přepínač vypneš, nepřijde. Do denního
+stropu se počítá jako další zpráva. Když se snímek nepodaří nakreslit nebo
+odeslat, přijde místo něj text **„📷 Snímek se nepodařilo poslat — důvod“**
+a pod ním popisek, nikdy jen tiché vynechání.
+
+Nastavení bota
 (přihlašovací údaje, chat id) dělá správce v `.env` — bez něj Settings ukážou
 „Telegram bot není nastaven". **Když se přihlásíš na mobilu k IBKR**, engine
 jede z tastytrade. Do mechaniky v6 CumΔ stojí: setupy s potvrzením tokem (T1,
@@ -1508,9 +1528,9 @@ Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a je
 | **Chyba subskripce** | TWS opakovaně odmítla data konkrétních kontraktů (error 354 „not subscribed"); alert vypíše, o které kontrakty jde. Ojedinělé výskyty se nehlásí — ty patří ke krátkým výpadkům farem a data se vrátí sama. Když alert přijde, zkontroluj subskripce v Market Data Subscription Manager. Jde vypnout v Settings → Alerty | IBKR odmítá market data (zap.) |
 | **Konkurenční relace** | Stejný IBKR účet je přihlášený jinde (mobilní aplikace, Client Portal, druhá TWS) a přetahuje si market data. IBKR povoluje jen jednu aktivní market-data relaci na subskripci, takže data můžou vypadávat — pomůže odhlásit účet z ostatních míst. Sdílení dat s paper účtem tohle **neřeší**: sdílí se oprávnění, ne kapacita relace | IBKR přihlášen jinde (zap.) |
 | **Setup detektor prodělává / se zotavil** | Denní sebekontrola: setupy symbolu za sledované okno prodělávají — alert doporučí vypnout nejhorší šablonu (`GEXLENS_SETUP_DISABLED_TEMPLATES`) nebo upravit prahy; „zotavil“ = výkonnost se vrátila nad práh | Setup detektor prodělává (zap.) / se zotavil (vyp.) |
-| **Plán opce QQQ** (`option_plan_created`, #1742) | V 9:15 ET (15:15 SEČ, v týdnech posunu času o hodinu dřív) se scénářem dne NQ long/short: plán opce QQQ 1DTE z ranního řetězu, tedy hlavní a záložní strike s bid/ask a stav („čeká na vstup A (úroveň)“, nebo „neobchodovat — důvod“, např. rozpočet nenastaven). Když ranní řetěz není úplný, scénář vznikl později nebo engine restartoval, přijde „bez opce“ s důvodem. Jen v obchodní den, při verdiktu bez převahy plán nevzniká | zatím ne (Telegram plánu přinese #1745) |
-| **Přecenění plánu opce QQQ** (`option_plan_repriced`, #1769) | V 9:31 ET (15:31 SEČ, v týdnech posunu času o hodinu dřív), po US openu: plán z 9:15 dostane nové kotace hlavní a záložní varianty (bid/ask, vedle nich ceny z 9:15). Strike, úrovně, vstup A ani stav se nemění. Když plán v 9:15 vznikl bez opce, sestaví se celý z 9:31. Když tím přejde na „čeká na vstup A“, zpráva začíná **„ZMĚNA“**. Bez nastaveného rozpočtu zůstává „neobchodovat“, a „ZMĚNA“ proto nepřijde. Když snímek po openu není úplný nebo nedorazil, přijde „přecenění se nezapsalo“ s důvodem a platí ceny z 9:15. Jen v obchodní den s plánem | zatím ne (Telegram plánu přinese #1745) |
-| **Výsledek plánu opce QQQ** (`option_plan_result`, #1748) | V 16:15 ET (22:15 SEČ, v týdnech posunu času o hodinu dřív; ve zkrácené seanci 13:15 ET): vstup A s časem a cenou, SL a průběh (SL, TP1, TP2, stop na vstupu, exit), u hlavní i záložní varianty obchod / vyřazeno P3 / bez kotace s R:R z kotace a P&L na kontrakt (výstup v TP1 a držení do TP2), „nad rozpočtem“ bez hodnoty. Jinak „bez vstupu“, „bez opce“ nebo „mezera“ s důvodem. Plán mimo track record má na konci „Do track recordu se nepočítá.“ (kap. 10) | zatím ne (Telegram plánu přinese #1745) |
+| **Plán opce QQQ** (`option_plan_created`, #1742) | V 9:15 ET (15:15 SEČ, v týdnech posunu času o hodinu dřív) se scénářem dne NQ long/short: plán opce QQQ 1DTE z ranního řetězu, tedy hlavní a záložní strike s bid/ask a stav („čeká na vstup A (úroveň)“, nebo „neobchodovat — důvod“, např. rozpočet nenastaven). Když ranní řetěz není úplný, scénář vznikl později nebo engine restartoval, přijde „bez opce“ s důvodem. Jen v obchodní den, při verdiktu bez převahy plán nevzniká. Na Telegram s fotkou plánu a popiskem (vstup A, TP1/TP2, exit, #1745) | Plán opce QQQ (zap.) |
+| **Přecenění plánu opce QQQ** (`option_plan_repriced`, #1769) | V 9:31 ET (15:31 SEČ, v týdnech posunu času o hodinu dřív), po US openu: plán z 9:15 dostane nové kotace hlavní a záložní varianty (bid/ask, vedle nich ceny z 9:15). Strike, úrovně, vstup A ani stav se nemění. Když plán v 9:15 vznikl bez opce, sestaví se celý z 9:31. Když tím přejde na „čeká na vstup A“, zpráva začíná **„ZMĚNA“**. Bez nastaveného rozpočtu zůstává „neobchodovat“, a „ZMĚNA“ proto nepřijde. Když snímek po openu není úplný nebo nedorazil, přijde „přecenění se nezapsalo“ s důvodem a platí ceny z 9:15. Jen v obchodní den s plánem. Fotka na Telegram jen u plánu sestaveného celého v 9:31 | Plán opce QQQ (zap.) |
+| **Výsledek plánu opce QQQ** (`option_plan_result`, #1748) | V 16:15 ET (22:15 SEČ, v týdnech posunu času o hodinu dřív; ve zkrácené seanci 13:15 ET): vstup A s časem a cenou, SL a průběh (SL, TP1, TP2, stop na vstupu, exit), u hlavní i záložní varianty obchod / vyřazeno P3 / bez kotace s R:R z kotace a P&L na kontrakt (výstup v TP1 a držení do TP2), „nad rozpočtem“ bez hodnoty. Jinak „bez vstupu“, „bez opce“ nebo „mezera“ s důvodem. Plán mimo track record má na konci „Do track recordu se nepočítá.“ (kap. 10). Na Telegram bez fotky | Plán opce QQQ (zap.) |
 | **T6 kandidát** | Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech. Jen v obchodní den s US openem (o víkendu a svátku NYSE ne) | Kandidát vzorce T6 (vyp.) |
 | **Drift hlídka** | Čerstvá úspěšnost signálového bucketu se statisticky rozešla s historickou — model přestává platit, signály z něj ber s rezervou (detail na Stats) | Drift vzorců (vyp.) |
 | **Reakce trhu na zprávy** (`news_anomaly`) | Trh se do 5 min po shluku zpráv s aspoň jednou **významnou** zprávou pohnul mimořádně — nad 97 % výchylek v tuto denní dobu i po zohlednění volatility poslední hodiny. Jedno upozornění na shluk a instrument, ES a NQ zvlášť (viz níže) | Reakce trhu na zprávu (zap.) |

@@ -58,8 +58,9 @@ from gexlens_api.heatmap import (
 from gexlens_api.live import LiveHub, TooManyChannels, TooManySubscribers, parse_channels
 from gexlens_api.meta_repo import MetaRepository
 from gexlens_api.news_explain import ExplainOptions
-from gexlens_api.option_plan_routes import build_option_plan_router
+from gexlens_api.option_plan_routes import PlanImages, build_option_plan_router
 from gexlens_api.paper_routes import build_paper_router
+from gexlens_api.push_photos import AlertPhotos
 from gexlens_api.push_telegram import PushOptions, TelegramPush
 from gexlens_api.scenario_routes import ImageDiskWatch, build_scenario_router
 from gexlens_api.security import (
@@ -305,11 +306,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     live_hub = LiveHub()
     meta_repository = MetaRepository(settings)
     alert_engine = AlertEngine(live_hub)
-    # Push na Telegram (#1175, #1284): posluchač kanálu alerts, hlavní vypínač
-    # a přepínače per druh ze serverových nastavení; bez údajů bota v .env jen loguje
-    telegram_push = TelegramPush(PushOptions.from_settings(settings), meta_repository.settings_all)
-    live_hub.alert_listeners.append(telegram_push.handle)
-    app_push = telegram_push
     # OI archiv (PG, lazy) — ΔOI vs. předchozí den v /replay balíku
     oi_repository_ref: list[OIEodRepository] = []
 
@@ -395,11 +391,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     # Plán opce QQQ ke scénáři dne (ADR-0062, #1743): tabulku plní engine, API ji čte
     # a ukládá jen PNG plánu (F4b #1744)
-    app.include_router(
-        build_option_plan_router(
-            option_plans_repository, settings.data_dir, settings.derived_dir, image_disk
-        )
+    plan_images = PlanImages(
+        option_plans_repository, settings.data_dir, settings.derived_dir, image_disk
     )
+    app.include_router(build_option_plan_router(plan_images))
+    # Push na Telegram (#1175, #1284): posluchač kanálu alerts, hlavní vypínač
+    # a přepínače per druh ze serverových nastavení; bez údajů bota v .env jen loguje.
+    # Fotky scénáře NQ a plánu QQQ (F4c #1745) jdou přes PNG plánu sdílené s endpointem.
+    # httpx na INFO vypisuje plnou URL Bot API i s tokenem; API dnes INFO nevypisuje
+    # (#1818), ale token nesmí do logu ani po změně úrovně (vzor news-engine, S10 #362)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    telegram_push = TelegramPush(
+        PushOptions.from_settings(settings),
+        meta_repository.settings_all,
+        photos=AlertPhotos(
+            scenarios_repository, plan_images, settings.data_dir, settings.derived_dir
+        ),
+    )
+    live_hub.alert_listeners.append(telegram_push.handle)
+    app_push = telegram_push
 
     # Paper účet (#1187 fáze 1): ordery + risk vrstva (blokuje), fily dělá engine
     def paper_repository() -> PaperRepository:

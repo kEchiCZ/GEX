@@ -3,6 +3,7 @@
 import datetime as dt
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -16,6 +17,8 @@ from gexlens_api.push_telegram import (
     PUSH_MASTER_KEY,
     PUSH_SETTING_KEYS,
     PUSH_TOPICS,
+    Photo,
+    PhotoSource,
     PushOptions,
     PushTopic,
     TelegramPush,
@@ -41,6 +44,9 @@ PUBLISHED_KINDS = frozenset(
         "paper",
         "scenario_created",
         "scenario_result",
+        "option_plan_created",
+        "option_plan_repriced",
+        "option_plan_result",
         "t6_candidate",
         "level_proximity",
         "vol_concentration",
@@ -92,10 +98,14 @@ SCRIPT_KINDS = frozenset({"vhdx_compact", "deploy_rollback"})
 def _legacy_category(kind: str) -> str:
     """Dřívější `category_of` (#1175) bez mrtvého `broker` — kotva pro „nic se nepřevrátí"."""
     # setup_stage (#1323, konec zkoušky v Knihovně) vznikl po #1175 — patří k setupům
+    # option_plan_* (#1742, #1769, #1748; přepínač F4c #1745) — plán opce QQQ ke scénáři dne
     if kind in (
         "setup",
         "scenario_result",
         "scenario_created",
+        "option_plan_created",
+        "option_plan_repriced",
+        "option_plan_result",
         "risk_brake",
         "paper",
         "setup_stage",
@@ -156,10 +166,11 @@ class FakePost:
 
 
 def _push(
-    post: FakePost,
+    post: Callable[..., httpx.Response],
     *,
     clock: float = _at(12),
     stored: dict[str, Any] | None = None,
+    photos: PhotoSource | None = None,
     **options: Any,
 ) -> TelegramPush:
     opts = PushOptions(token="t", chat_id="42", **options)
@@ -170,6 +181,7 @@ def _push(
         post=post,
         clock=lambda: state["now"],
         run_in_thread=False,
+        photos=photos,
     )
     push.set_clock = lambda value: state.__setitem__("now", value)  # type: ignore[attr-defined]
     return push
@@ -183,7 +195,7 @@ def test_kazdy_druh_prave_jeden_prepinac() -> None:
     assert sum(len(topic.kinds) for topic in PUSH_TOPICS) == len(KIND_TOPIC)  # žádný dvakrát
     # broker je druh zprávy v kanálu news, retro_pass jde také kanálem news
     assert "broker" not in KIND_TOPIC and "retro_pass" not in KIND_TOPIC
-    assert len(PUSH_TOPICS) == 32
+    assert len(PUSH_TOPICS) == 33
     assert all(len(topic.setting) <= 64 for topic in PUSH_TOPICS)
     assert {topic.key for topic in PUSH_TOPICS if not topic.bell} == {"maintenance"}
 
@@ -236,7 +248,7 @@ def test_setting_keys_jen_master_a_topic() -> None:
         for key in PUSH_SETTING_KEYS
     )
     assert "push_telegram_news" not in PUSH_SETTING_KEYS
-    assert len(PUSH_SETTING_KEYS) == 33
+    assert len(PUSH_SETTING_KEYS) == len(PUSH_TOPICS) + 1 == 34
 
 
 # ── Dědění a efektivní stav ────────────────────────────────────────
@@ -262,7 +274,7 @@ def test_dedeni_z_kategorii() -> None:
         "news_feed",
     }
     assert len(info) == 10  # 4 v „Setupy a burza", 6 v „Chování aplikace"
-    assert setup == {"setup", "risk_brake", "setup_stage", "paper", "scenario"}
+    assert setup == {"setup", "risk_brake", "setup_stage", "paper", "scenario", "option_plan"}
 
     _, topics = effective({"push_telegram_news": False})
     assert {k for k, on in topics.items() if not on} == news | info
@@ -527,3 +539,218 @@ def test_release_preview_zpravy_vychozi_zapnuto() -> None:
     help_lines = topic.help_lines()
     assert help_lines[0].startswith("60 a 15 min před CPI")
     assert "• Ve zvonku: release_preview" in help_lines
+
+
+# ── Fotky (F4c #1745): sendPhoto, pojistky při odeslání, viditelné selhání ──
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 32
+PLAN_ALERT = {
+    "kind": "option_plan_created",
+    "symbol": "QQQ",
+    "message": "Plán QQQ #2 ke scénáři dne #39 (PUT, 9:15 ET): hlavní put 659",
+    "plan_id": 2,
+    "scenario_id": 39,
+}
+
+
+class RoutedPost:
+    """Mock httpx.post: `sendMessage` vrací 200, `sendPhoto` podle nastavení."""
+
+    def __init__(self, photo_status: int = 200, photo_error: Exception | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._photo_status = photo_status
+        self._photo_error = photo_error
+
+    def __call__(self, url: str, **kwargs: Any) -> httpx.Response:
+        self.calls.append({"url": url, **kwargs})
+        if url.endswith("/sendPhoto"):
+            if self._photo_error is not None:
+                raise self._photo_error
+            if self._photo_status != 200:
+                return httpx.Response(
+                    self._photo_status,
+                    json={"ok": False, "description": "Bad Request: IMAGE_PROCESS_FAILED"},
+                )
+        return httpx.Response(200, json={"ok": True})
+
+    def texts(self) -> list[str]:
+        return [call["json"]["text"] for call in self.calls if call["url"].endswith("/sendMessage")]
+
+    def photos(self) -> list[dict[str, Any]]:
+        return [call for call in self.calls if call["url"].endswith("/sendPhoto")]
+
+
+def _photo(**values: Any) -> Photo:
+    fields: dict[str, Any] = {"filename": "plan-2-0915.png", "caption": "Plán QQQ #2", "png": PNG}
+    return Photo(**(fields | values))
+
+
+def test_prepinac_planu_opce_qqq() -> None:
+    """Vlastník 16. 11. (#1738: 2 A): jeden přepínač pro vznik, přecenění i výsledek plánu."""
+    topic = KIND_TOPIC["option_plan_created"]
+    assert (topic.key, topic.group, topic.category, topic.default) == (
+        "option_plan",
+        "market",
+        "setup",
+        True,
+    )
+    assert topic.kinds == ("option_plan_created", "option_plan_repriced", "option_plan_result")
+    assert not topic.ignores_quiet_hours
+    assert "• SL a R:R až při spoušti vstupu A" in topic.help_lines()
+
+
+def test_fotka_jde_po_textu_multipart(caplog: pytest.LogCaptureFixture) -> None:
+    post = RoutedPost()
+    sources: list[dict[str, Any]] = []
+
+    def photos(payload: dict[str, Any]) -> Photo:
+        sources.append(payload)
+        return _photo(caption="Plán QQQ #2 · 16. 11.\nTP1 668,27")
+
+    push = _push(post, photos=photos)
+    with caplog.at_level(logging.DEBUG):
+        push.handle(dict(PLAN_ALERT))
+    assert [call["url"].rsplit("/", 1)[1] for call in post.calls] == ["sendMessage", "sendPhoto"]
+    (photo,) = post.photos()
+    assert photo["files"] == {"photo": ("plan-2-0915.png", PNG, "image/png")}
+    assert photo["data"] == {"chat_id": "42", "caption": "Plán QQQ #2 · 16. 11.\nTP1 668,27"}
+    assert photo["timeout"] == 30.0 and "json" not in photo
+    assert sources == [PLAN_ALERT]
+    assert push.status()["sent_today"] == 2  # fotka se do stropu počítá jako zpráva
+    assert "bott" not in caplog.text  # URL s tokenem („bot" + token „t") v logu není
+
+
+def test_bez_fotky_jen_text() -> None:
+    post = RoutedPost()
+    push = _push(post, photos=lambda _payload: None)
+    push.handle({"kind": "option_plan_result", "symbol": "QQQ", "message": "výsledek"})
+    assert post.texts() == ["🎯 GEXLens · QQQ\nvýsledek"] and post.photos() == []
+
+
+def test_fotka_rozhoduje_tiche_hodiny_pri_odeslani() -> None:
+    """1 B: text ve 22:58 odejde, fotka po 3 min čekání ve 23:01 už ne."""
+    post = RoutedPost()
+    holder: dict[str, TelegramPush] = {}
+
+    def photos(_payload: dict[str, Any]) -> Photo:
+        holder["push"].set_clock(_at(23, 1))  # type: ignore[attr-defined]
+        return _photo()
+
+    holder["push"] = _push(post, clock=_at(22, 58), photos=photos)
+    holder["push"].handle(dict(PLAN_ALERT))
+    assert len(post.texts()) == 1 and post.photos() == []
+    assert holder["push"].decide_photo(PLAN_ALERT, _photo()) == "tiché hodiny"
+
+
+def test_fotka_prepinac_vypnuty_pred_odeslanim() -> None:
+    post = RoutedPost()
+    stored: dict[str, Any] = {}
+
+    def photos(_payload: dict[str, Any]) -> Photo:
+        stored["push_telegram_topic_option_plan"] = False
+        return _photo()
+
+    push = TelegramPush(
+        PushOptions(token="t", chat_id="42"),
+        lambda: dict(stored),
+        post=post,
+        clock=lambda: _at(15, 15),
+        run_in_thread=False,
+        photos=photos,
+    )
+    push.handle(dict(PLAN_ALERT))
+    assert len(post.texts()) == 1 and post.photos() == []
+
+
+def test_fotka_dedup_podle_jmena_snimku() -> None:
+    post = RoutedPost()
+    calls: list[str] = []
+
+    def photos(payload: dict[str, Any]) -> Photo:
+        calls.append(str(payload["message"]))
+        return _photo()
+
+    push = _push(post, photos=photos)
+    push.handle(dict(PLAN_ALERT))
+    push.handle(dict(PLAN_ALERT))  # tentýž alert: text je duplicita, na fotku se ani nečeká
+    push.handle({**PLAN_ALERT, "message": "jiný text, týž snímek"})
+    assert len(post.texts()) == 2 and len(post.photos()) == 1
+    assert len(calls) == 2
+    push.set_clock(_at(12, 11))  # type: ignore[attr-defined]
+    push.handle({**PLAN_ALERT, "message": "po 11 min"})
+    assert len(post.photos()) == 2  # dedup fotky platí 10 min jako u textu
+
+
+def test_fotka_denni_strop() -> None:
+    post = RoutedPost()
+    push = _push(post, photos=lambda _payload: _photo(), daily_cap=1)
+    push.handle(dict(PLAN_ALERT))
+    assert len(post.texts()) == 1 and post.photos() == []
+    assert push.decide_photo(PLAN_ALERT, _photo(filename="jiny.png")) == "denní strop"
+
+
+def test_snimek_bez_png_je_text_s_duvodem() -> None:
+    post = RoutedPost()
+    failed = _photo(png=None, caption="Plán QQQ #2\nTP1 668,27", error="kreslení selhalo")
+    push = _push(post, photos=lambda _payload: failed)
+    push.handle(dict(PLAN_ALERT))
+    assert post.photos() == []
+    assert post.texts()[1] == (
+        "🎯 GEXLens · QQQ\n📷 Snímek se nepodařilo poslat — kreslení selhalo\n"
+        "Plán QQQ #2\nTP1 668,27"
+    )
+
+
+def test_odmitnuta_fotka_je_text_s_duvodem_bez_opakovani() -> None:
+    post = RoutedPost(photo_status=400)
+    push = _push(post, photos=lambda _payload: _photo())
+    push.handle(dict(PLAN_ALERT))
+    assert len(post.photos()) == 1  # 4xx se neopakuje
+    assert post.texts()[1].splitlines()[1] == (
+        "📷 Snímek se nepodařilo poslat — HTTP 400: Bad Request: IMAGE_PROCESS_FAILED"
+    )
+    assert push.last_error is None  # text o selhání odešel
+
+
+def test_vypadek_site_fotky_bez_tokenu_v_textu_a_logu(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Text výjimky httpx nese URL s tokenem — do zprávy ani logu nesmí."""
+    monkeypatch.setattr("gexlens_api.push_telegram.time.sleep", lambda _s: None)
+    secret = "fake-token-123"
+    url = f"https://api.telegram.org/bot{secret}/sendPhoto"
+    post = RoutedPost(photo_error=httpx.ConnectError(f"spojení s {url} selhalo"))
+    push = TelegramPush(
+        PushOptions(token=secret, chat_id="42"),
+        lambda: {},
+        post=post,
+        clock=lambda: _at(15, 15),
+        run_in_thread=False,
+        photos=lambda _payload: _photo(),
+    )
+    with caplog.at_level(logging.DEBUG):
+        push.handle(dict(PLAN_ALERT))
+    assert len(post.photos()) == 3  # retry jako u textu
+    failure = post.texts()[1]
+    assert "Snímek se nepodařilo poslat — ConnectError po 3 z 3 pokusů" in failure
+    assert secret not in failure and secret not in caplog.text
+
+
+def test_chyba_zdroje_fotky_neni_tiche_vynechani() -> None:
+    post = RoutedPost()
+
+    def photos(_payload: dict[str, Any]) -> Photo:
+        raise RuntimeError("PG nedostupné")
+
+    push = _push(post, photos=photos)
+    push.handle(dict(PLAN_ALERT))
+    assert post.texts()[1] == (
+        "🎯 GEXLens · QQQ\n📷 Snímek se nepodařilo poslat — RuntimeError: PG nedostupné"
+    )
+
+
+def test_popisek_fotky_zkracen_na_limit() -> None:
+    post = RoutedPost()
+    push = _push(post, photos=lambda _payload: _photo(caption="x" * 2000))
+    push.handle(dict(PLAN_ALERT))
+    assert len(post.photos()[0]["data"]["caption"]) == 1024
