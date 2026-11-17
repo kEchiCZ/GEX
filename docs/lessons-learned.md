@@ -383,6 +383,15 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-11-17 — dedup klíč s dnem zahodil druhý release téže řady v jeden den (#1298).** `dedup_hash`
+  = titulek + den platil i pro kalendář FF, takže dohánějící NFP 16. 12. 2025 13:29 a aktuální 13:30
+  (stejně PPI, Core PCE, JOLTS po shutdownu, ADP Weekly každý týden) skončily na `ON CONFLICT DO
+  NOTHING` a aktuální release s forecastem v DB chyběl (dry-run: 172 položek od 2023, 12 USD High). Klíč s minutou
+  sám nestačil: FF po zveřejnění posouvá čas položky i ve widget feedu (103 řádků za 3,5 měsíce)
+  a z posunu by byl druhý řádek. Denní klíč tenhle posun do té doby tiše pohlcoval.
+  → Identitu záznamu odvodit od toho, co zdroj skutečně garantuje, a ověřit na datech obě chyby:
+  sloučení dvou různých položek i rozdělení jedné posunuté. Když zdroj nemá stabilní id, párovat
+  ve skupině proti celému snímku zdroje (posun 1:1), ne jen jemnějším klíčem.
 - **2026-11-13 — close baru minuty zprávy jako „cena před zprávou“ (#1502).** Bar nese `ts` začátku
   minuty, ale close je cena na jejím konci. `_last_before(t)` bral bar s `ts < t`, takže u zprávy
   v M + s měl základ cenu z M + 1, tedy po zprávě, a okno začínalo až barem M+1. Uprostřed minuty
