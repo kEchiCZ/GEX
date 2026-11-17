@@ -391,10 +391,11 @@ def test_chybejici_plan_je_duvod(env: Env) -> None:
 def test_app_preda_telegramu_zdroj_fotek(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Zapojení v `create_app`: Telegram dostane `AlertPhotos` nad PNG plánu endpointu."""
     from gexlens_api import main
+    from gexlens_api.push_telegram import TelegramPush
     from gexlens_engine.config import Settings
 
     seen: dict[str, Any] = {}
-    real = main.TelegramPush
+    real = TelegramPush
 
     def spy(*args: Any, **kwargs: Any) -> Any:
         seen.update(kwargs)
