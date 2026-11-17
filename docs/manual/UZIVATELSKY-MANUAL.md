@@ -776,7 +776,8 @@ Plán opce QQQ ke scénáři dne NQ (ADR-0062) engine po close vyhodnotí z toho
 v seanci opravdu naměřilo: z 1m barů QQQ a minutových kotací obou kontraktů plánu.
 Vyhodnocení proběhne v 16:15 ET (22:15 SEČ, v týdnech posunu času o hodinu dřív),
 ve zkrácené seanci v 13:15 ET. Výsledek přijde do zvonku jako **Výsledek plánu opce
-QQQ**. O víkendu a ve svátek NYSE se nic nevyhodnocuje.
+QQQ** a na Telegram (přepínač Plán opce QQQ, bez fotky). O víkendu a ve svátek NYSE
+se nic nevyhodnocuje.
 
 - **Vstup A** hledá engine stejně jako plán: 5min close za úrovní, pak první 5min close
   zpět. Od 9:35 ET do exitu, ten je 15 min před close (15:45 ET, ve zkrácené seanci

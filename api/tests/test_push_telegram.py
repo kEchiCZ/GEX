@@ -248,7 +248,7 @@ def test_setting_keys_jen_master_a_topic() -> None:
         for key in PUSH_SETTING_KEYS
     )
     assert "push_telegram_news" not in PUSH_SETTING_KEYS
-    assert len(PUSH_SETTING_KEYS) == 33
+    assert len(PUSH_SETTING_KEYS) == len(PUSH_TOPICS) + 1 == 34
 
 
 # ── Dědění a efektivní stav ────────────────────────────────────────
@@ -274,7 +274,7 @@ def test_dedeni_z_kategorii() -> None:
         "news_feed",
     }
     assert len(info) == 10  # 4 v „Setupy a burza", 6 v „Chování aplikace"
-    assert setup == {"setup", "risk_brake", "setup_stage", "paper", "scenario"}
+    assert setup == {"setup", "risk_brake", "setup_stage", "paper", "scenario", "option_plan"}
 
     _, topics = effective({"push_telegram_news": False})
     assert {k for k, on in topics.items() if not on} == news | info

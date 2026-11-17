@@ -546,7 +546,8 @@ Odvozeno pro F4c (zapsal agent 16. 11., #1745; čtyři volby rozhodl vlastník v
 14. **Fotky na Telegram** (`api/push_photos.py`, `api/push_telegram.py`, Q2b, K1 A):
     - **Pojistky fotky (vlastník: B).** O fotce se rozhoduje znovu ve chvíli odeslání:
       přepínač, tiché hodiny, dedup podle jména snímku a denní strop, do kterého se počítá
-      jako zpráva. Fotka se spustí jen po textu, který odešel. Odmítnuto A (fotka jen
+      jako zpráva. Fotka se spustí jen po textu, který pojistkami prošel (i když ho
+      Telegram nepřijal: fotka nese vlastní popisek). Odmítnuto A (fotka jen
       s rozhodnutím textu): přepínač vypnutý během čekání na heatmapu by fotku nezastavil.
     - **Přepínač a fotky plánu (vlastník: A).** Jeden přepínač „Plán opce QQQ“ pro
       `option_plan_created`, `option_plan_repriced` a `option_plan_result` (vzor „Scénář dne“),

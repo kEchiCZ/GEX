@@ -397,7 +397,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(build_option_plan_router(plan_images))
     # Push na Telegram (#1175, #1284): posluchač kanálu alerts, hlavní vypínač
     # a přepínače per druh ze serverových nastavení; bez údajů bota v .env jen loguje.
-    # Fotky scénáře NQ a plánu QQQ (F4c #1745) jdou přes PNG plánu sdílené s endpointem
+    # Fotky scénáře NQ a plánu QQQ (F4c #1745) jdou přes PNG plánu sdílené s endpointem.
+    # httpx na INFO vypisuje plnou URL Bot API i s tokenem; API dnes INFO nevypisuje
+    # (#1818), ale token nesmí do logu ani po změně úrovně (vzor news-engine, S10 #362)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     telegram_push = TelegramPush(
         PushOptions.from_settings(settings),
         meta_repository.settings_all,

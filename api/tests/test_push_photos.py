@@ -10,6 +10,7 @@ K9 A: vstup A od flipu 698,21, TP1 691,99, TP2 690,59). Čísla účtu jsou smy�
 import dataclasses
 import datetime as dt
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -400,6 +401,8 @@ def test_app_preda_telegramu_zdroj_fotek(tmp_path: Path, monkeypatch: pytest.Mon
         return real(*args, **kwargs)
 
     monkeypatch.setattr(main, "TelegramPush", spy)
+    for name in ("httpx", "httpcore"):
+        monkeypatch.setattr(logging.getLogger(name), "level", logging.NOTSET)
     main.create_app(
         Settings(
             data_dir=tmp_path / "data",
@@ -407,3 +410,6 @@ def test_app_preda_telegramu_zdroj_fotek(tmp_path: Path, monkeypatch: pytest.Mon
         )
     )
     assert isinstance(seen["photos"], AlertPhotos)
+    # URL s tokenem bota by httpx vypsal na INFO — v API je jeho logger na WARNING
+    assert logging.getLogger("httpx").level == logging.WARNING
+    assert logging.getLogger("httpcore").level == logging.WARNING

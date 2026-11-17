@@ -1065,11 +1065,14 @@ ADR-0062 K4 bod 14). Rozsah rozhodl vlastník 16. 11. (#1738 Rozhodnuto,
   „📷 Snímek se nepodařilo poslat — důvod“ s popiskem pod ním. Důvod je chyba kreslení
   (`ChartRenderError`, 500 z `PlanImages`), typ výjimky sítě s počtem pokusů nebo
   `HTTP 4xx: description` z odpovědi Bot API, nikdy text výjimky httpx (nese URL s tokenem).
+  Loggery `httpx` a `httpcore` drží `create_app` na WARNING: httpx na INFO vypisuje plnou
+  URL Bot API i s tokenem (vzor news-engine, S10 #362).
   V logu API je WARNING „Push: snímek … se nepodařilo poslat — …“ (WARNING je v logu vidět,
   INFO zatím ne, #1818).
 
 Ověření: `GET /push/status` po 15:15 SEČ v den s plánem: `last_error` null a `sent_today`
-vyšší o 4 (text a fotka scénáře NQ, text a fotka plánu); `option_plans.image_path`
+vyšší aspoň o 4 (text a fotka scénáře NQ, text a fotka plánu; text scénáře ES a další
+alerty přidají); `option_plans.image_path`
 plánu dne vyplněné; v logu API žádné WARNING „snímek … se nepodařilo poslat“. Testy:
 `test_push_telegram.py` (multipart, pojistky fotky, selhání viditelně, token v textu
 ani logu) a `test_push_photos.py` (heatmapa do 3 min, záložní graf po 3 min, ES bez fotky,
