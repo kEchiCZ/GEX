@@ -385,3 +385,25 @@ def test_chyba_kresleni_planu_vrati_popisek_a_duvod(
 def test_chybejici_plan_je_duvod(env: Env) -> None:
     photo = env.photos(_alert("option_plan_created", symbol="QQQ", plan_id=999))
     assert photo is not None and photo.png is None and photo.error == "plán v databázi není"
+
+
+def test_app_preda_telegramu_zdroj_fotek(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Zapojení v `create_app`: Telegram dostane `AlertPhotos` nad PNG plánu endpointu."""
+    from gexlens_api import main
+    from gexlens_engine.config import Settings
+
+    seen: dict[str, Any] = {}
+    real = main.TelegramPush
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(main, "TelegramPush", spy)
+    main.create_app(
+        Settings(
+            data_dir=tmp_path / "data",
+            database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.db'}",
+        )
+    )
+    assert isinstance(seen["photos"], AlertPhotos)
