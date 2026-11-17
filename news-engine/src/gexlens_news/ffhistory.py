@@ -41,6 +41,7 @@ from sqlalchemy.engine import Engine
 from gexlens_engine.storage.sentiment import news_events
 from gexlens_news.classifier import classify_category, scheduled_importance
 from gexlens_news.collectors.forexfactory import _SYMBOLS_BY_COUNTRY, parse_number
+from gexlens_news.ffcalendar import drop_rescheduled, match_feed, rows_for_feed
 from gexlens_news.http import read_limited_cffi
 from gexlens_news.model import NewsEvent, normalize_title
 from gexlens_news.store import NewsWriter
@@ -168,26 +169,38 @@ def fetch_week(week: str, *, timeout_s: float = 30.0) -> str:
         response.close()  # type: ignore[no-untyped-call]
 
 
-def update_actuals(engine: Engine, events: list[NewsEvent]) -> int:
+def update_actuals(
+    engine: Engine, events: list[NewsEvent], *, until: dt.datetime | None = None
+) -> int:
     """Doplní actual/forecast/previous eventům, které už v DB jsou.
 
     Backfill i refresh potkají eventy založené živým collectorem (bez
     `actual`, ADR-0013) — insert je zahodí na dedup_hash, hodnoty se proto
     doplňují updatem. Přepisuje se jen NULL `actual`: pozdější revize čísel
     nemá měnit, na čem už mohly stavět reakce a klasifikace.
+
+    Řádek se hledá párováním skupiny „řada + den“ (`ffcalendar`, #1298): podle
+    FF `id`, minuty releasu, a u posunu 1:1 je to řádek s původním časem.
+    `events` proto musí být celá stránka týdne; `until` omezí update na
+    proběhlé releasy, párování ale vidí i budoucí položky.
     """
     updated = 0
     with engine.begin() as conn:
-        for event in events:
-            if event.actual is None:
-                continue
-            result = conn.execute(
-                update(news_events)
-                .where(news_events.c.dedup_hash == event.dedup_hash)
-                .where(news_events.c.actual.is_(None))
-                .values(actual=event.actual, forecast=event.forecast, previous=event.previous)
-            )
-            updated += result.rowcount or 0
+        matches = match_feed(events, rows_for_feed(conn, events))
+        for match in matches.values():
+            pairs = list(match.matched)
+            if (moved := match.rescheduled) is not None:
+                pairs.append((moved[1], moved[0]))
+            for event, row in pairs:
+                if event.actual is None or (until is not None and event.ts_event > until):
+                    continue
+                result = conn.execute(
+                    update(news_events)
+                    .where(news_events.c.id == row.id)
+                    .where(news_events.c.actual.is_(None))
+                    .values(actual=event.actual, forecast=event.forecast, previous=event.previous)
+                )
+                updated += result.rowcount or 0
     return updated
 
 
@@ -297,7 +310,8 @@ def run_backfill(
                         events.append(event)
         stats["fetched"] += 1
         stats["seen"] += len(events)
-        stats["written"] += writer.write(events)
+        # Posunutý čas uloženého řádku není nový release (#1298)
+        stats["written"] += writer.write(drop_rescheduled(engine, events)[0])
         stats["actuals"] += update_actuals(engine, events)
         logger.info("Backfill %s: %d eventů", week, len(events))
         sleep(throttle_s)
@@ -396,12 +410,12 @@ class FfActualRefreshJob:
                 for entry in day.get("events") or []:
                     if isinstance(entry, dict):
                         event = normalize_entry(entry, fetched_at=now)
-                        # Jen proběhlé eventy — budoucí actual mít nemohou
-                        if event is not None and event.ts_event <= now:
+                        if event is not None:
                             events.append(event)
         if not events:
             return 0
-        updated = update_actuals(self._engine, events)
+        # Jen proběhlé eventy (budoucí actual mít nemohou); párování posunů vidí celý týden
+        updated = update_actuals(self._engine, events, until=now)
         if updated:
             recompute_surprise_z(self._engine)
             logger.info("Refresh actual: doplněno %d hodnot", updated)

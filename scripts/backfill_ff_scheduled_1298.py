@@ -18,6 +18,7 @@ v `news_events` jen první a druhý se zahodil. Od #1298 nese klíč minutu rele
    Jeden nespárovaný řádek a jedna položka = **přeplánovaný release** (živý sběr uložil
    čas, který FF později posunul): nezapisuje se nic, report ho vypíše. Víc nespárovaných
    na obou stranách = nejasné, také jen v reportu. Řádky se nemažou ani nepřepisují.
+   Párování je sdílené s živým zápisem a refreshem actual (`gexlens_news.ffcalendar`).
    Po zápisu `ffhistory.recompute_surprise_z` (celý přepočet, idempotentní).
 
 Reakce, klasifikaci a predikce nových řádků doplní běžící news-engine (`ReactionJob`
@@ -46,7 +47,7 @@ import argparse
 import datetime as dt
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,10 +64,14 @@ from gexlens_engine.compute.newstext import (  # noqa: E402
     SCHEDULED_KIND,
     dedup_hash,
     event_dedup_hash,
-    normalize_title,
-    scheduled_key,
 )
 from gexlens_engine.storage.sentiment import news_events  # noqa: E402
+from gexlens_news.ffcalendar import (  # noqa: E402
+    CalendarRow,
+    calendar_group,
+    load_rows,
+    match_feed,
+)
 from gexlens_news.ffhistory import (  # noqa: E402
     FetchPage,
     extract_days,
@@ -86,11 +91,6 @@ HIGH_IMPACT = "high"
 
 def _utc(value: dt.datetime) -> dt.datetime:
     return value.astimezone(dt.UTC) if value.tzinfo else value.replace(tzinfo=dt.UTC)
-
-
-def _group(title: str, ts_event: dt.datetime) -> tuple[str, dt.date]:
-    """Identita starého klíče: řada + den UTC."""
-    return normalize_title(title), _utc(ts_event).date()
 
 
 # ── 1) Rehash ──────────────────────────────────────────────────────
@@ -163,7 +163,7 @@ def rehash(engine: Engine, *, apply: bool, revert: bool = False) -> RehashReport
     for row in rows:
         ts = _utc(row.ts_event)
         if revert:
-            group = _group(row.title, ts)
+            group = calendar_group(row.title, ts)
             if group in first_of_group:
                 # Doplněný druhý release téhož dne si nechá klíč s minutou
                 target = event_dedup_hash(row.kind, row.title, ts)
@@ -186,14 +186,6 @@ def rehash(engine: Engine, *, apply: bool, revert: bool = False) -> RehashReport
 # ── 2) Backfill ────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class DbRow:
-    id: int
-    title: str
-    ts_event: dt.datetime
-    ff_id: str | None
-
-
 @dataclass
 class BackfillReport:
     weeks: int = 0
@@ -201,7 +193,7 @@ class BackfillReport:
     history: int = 0
     db_rows: int = 0
     missing: list[NewsEvent] = field(default_factory=list)
-    rescheduled: list[tuple[DbRow, NewsEvent]] = field(default_factory=list)
+    rescheduled: list[tuple[CalendarRow, NewsEvent]] = field(default_factory=list)
     unclear: list[tuple[tuple[str, dt.date], int, int]] = field(default_factory=list)
     db_only: int = 0
     written: int = 0
@@ -245,91 +237,20 @@ def cached_fetch(
     return get
 
 
-def _db_rows(engine: Engine, start: dt.datetime, end: dt.datetime) -> list[DbRow]:
-    stmt = select(
-        news_events.c.id, news_events.c.title, news_events.c.ts_event, news_events.c.raw
-    ).where(
-        news_events.c.source == FF_SOURCE,
-        news_events.c.kind == SCHEDULED_KIND,
-        news_events.c.ts_event >= start,
-        news_events.c.ts_event <= end,
-    )
-    with engine.connect() as conn:
-        rows = conn.execute(stmt).fetchall()
-    out = []
-    for row in rows:
-        raw = row.raw if isinstance(row.raw, dict) else {}
-        ff_id = raw.get("id")
-        out.append(
-            DbRow(
-                id=int(row.id),
-                title=str(row.title),
-                ts_event=_utc(row.ts_event),
-                ff_id=str(ff_id) if ff_id is not None else None,
-            )
-        )
-    return out
-
-
-def match_group(
-    history: Sequence[NewsEvent], db: Sequence[DbRow]
-) -> tuple[list[NewsEvent], list[NewsEvent], list[DbRow]]:
-    """Spáruje skupinu „řada + den“: vrací (nespárovaná historie, …, nespárované řádky DB).
-
-    Nejdřív podle FF `id`, pak podle minuty releasu. Prostřední prvek = spárované položky
-    historie (pro report se nepoužívá, drží čitelnost testu).
-    """
-    rest_db = list(db)
-    unmatched: list[NewsEvent] = []
-    matched: list[NewsEvent] = []
-    for event in history:
-        ff_id = event.raw.get("id")
-        hit = next(
-            (r for r in rest_db if ff_id is not None and r.ff_id == str(ff_id)),
-            None,
-        ) or next(
-            (
-                r
-                for r in rest_db
-                if scheduled_key(r.title, r.ts_event) == scheduled_key(event.title, event.ts_event)
-            ),
-            None,
-        )
-        if hit is None:
-            unmatched.append(event)
-        else:
-            rest_db.remove(hit)
-            matched.append(event)
-    return unmatched, matched, rest_db
-
-
 def plan_backfill(
-    history: Iterable[NewsEvent], db: Iterable[DbRow], report: BackfillReport
+    history: Iterable[NewsEvent], db: Iterable[CalendarRow], report: BackfillReport
 ) -> list[NewsEvent]:
     """Položky historie k zápisu; přeplánované a nejasné skupiny jen do reportu."""
-    by_group_h: dict[tuple[str, dt.date], dict[str, NewsEvent]] = defaultdict(dict)
-    for event in history:
-        # Táž položka dvakrát (týž klíč) je jeden release
-        by_group_h[_group(event.title, event.ts_event)].setdefault(
-            scheduled_key(event.title, event.ts_event), event
-        )
-    by_group_db: dict[tuple[str, dt.date], list[DbRow]] = defaultdict(list)
-    for row in db:
-        by_group_db[_group(row.title, row.ts_event)].append(row)
-
     to_write: list[NewsEvent] = []
-    for group in sorted(set(by_group_h) | set(by_group_db), key=lambda g: (g[1], g[0])):
-        events = sorted(by_group_h.get(group, {}).values(), key=lambda e: e.ts_event)
-        unmatched, _, rest_db = match_group(events, by_group_db.get(group, []))
-        if not unmatched:
-            report.db_only += len(rest_db)
-            continue
-        if not rest_db:
-            to_write.extend(unmatched)
-        elif len(unmatched) == 1 and len(rest_db) == 1:
-            report.rescheduled.append((rest_db[0], unmatched[0]))
+    for group, match in match_feed(history, db).items():
+        if not match.unmatched:
+            report.db_only += len(match.rows_left)
+        elif not match.rows_left:
+            to_write.extend(match.unmatched)
+        elif (moved := match.rescheduled) is not None:
+            report.rescheduled.append(moved)
         else:
-            report.unclear.append((group, len(unmatched), len(rest_db)))
+            report.unclear.append((group, len(match.unmatched), len(match.rows_left)))
     report.missing = to_write
     return to_write
 
@@ -374,7 +295,8 @@ def backfill(
             report.weeks_failed.append(f"{week} (0 položek)")
         log(f"  {week}: {count} položek")
     report.history = len(history)
-    db = _db_rows(engine, first_ts, now)
+    with engine.connect() as conn:
+        db = load_rows(conn, first_ts, now)
     report.db_rows = len(db)
     to_write = plan_backfill(history, db, report)
     if apply and to_write:
@@ -459,6 +381,11 @@ def format_report(rehashed: RehashReport, filled: BackfillReport | None, *, appl
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Konzole Windows (cp1250) neumí „→“ z reportu: výstup v UTF-8, jinak by po `--apply`
+    # spadl tisk reportu až po zápisu
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--db", default=None, help="SQLAlchemy URL (jinak z prostředí)")
     parser.add_argument("--apply", action="store_true", help="zapsat (jinak dry-run jen čtením)")

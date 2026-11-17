@@ -72,6 +72,10 @@ class NewsWriter:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
+    @property
+    def engine(self) -> Engine:
+        return self._engine
+
     def write(self, events: Sequence[NewsEvent]) -> int:
         if not events:
             return 0
