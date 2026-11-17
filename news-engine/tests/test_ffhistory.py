@@ -1,6 +1,7 @@
 """Golden testy historického FF kalendáře a surprise_z (#277, ADR-0018)."""
 
 import datetime as dt
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ from gexlens_news.ffhistory import (
     update_actuals,
     week_param,
 )
-from gexlens_news.model import RawItem
+from gexlens_news.model import NewsEvent, RawItem
 from gexlens_news.store import NewsWriter
 
 NOW = dt.datetime(2026, 7, 29, 12, 0, tzinfo=dt.UTC)
@@ -178,10 +179,12 @@ def test_surprise_z_needs_minimum_samples(tmp_path: Path) -> None:
 # ── Backfill a refresh ─────────────────────────────────────────────
 
 
-def days_json_for(entry: dict[str, object]) -> str:
+def days_json_for(*entries: dict[str, object]) -> str:
     import json
 
-    return json.dumps([{"date": "Mon", "dateline": entry["dateline"], "events": [entry]}])
+    return json.dumps(
+        [{"date": "Mon", "dateline": entries[0]["dateline"], "events": list(entries)}]
+    )
 
 
 def test_backfill_writes_and_is_idempotent(tmp_path: Path) -> None:
@@ -204,6 +207,55 @@ def test_backfill_writes_and_is_idempotent(tmp_path: Path) -> None:
         engine, weeks=2, today=dt.date(2026, 7, 29), fetch=fake_fetch, sleep=lambda _s: None
     )
     assert again.written == 0  # idempotence
+
+
+def test_backfill_keeps_two_releases_of_same_series_in_one_day(tmp_path: Path) -> None:
+    """#1298: dvě hodnoty téže řady v jeden den se uloží obě, update actual najde každou.
+
+    Tvar ze stránky dec15.2025: dohánějící NFP za říjen ve 13:29 bez forecastu
+    a aktuální za listopad ve 13:30. Dřív se druhý zahodil na `dedup_hash`.
+    """
+    engine = make_db(tmp_path)
+    catch_up = {
+        "id": 151490,
+        "name": "Non-Farm Employment Change",
+        "currency": "USD",
+        "dateline": 1765891740,  # 2025-12-16 13:29 UTC
+        "impactName": "high",
+        "forecast": "",
+        "previous": "119K",
+        "actual": "-105K",
+    }
+    current = {
+        **catch_up,
+        "id": 151491,
+        "dateline": 1765891800,  # 2025-12-16 13:30 UTC
+        "forecast": "50K",
+        "previous": "-105K",
+        "actual": "64K",
+    }
+
+    def fake_fetch(_week: str) -> str:
+        return page(days_json_for(catch_up, current))
+
+    stats = run_backfill(
+        engine, weeks=1, today=dt.date(2025, 12, 17), fetch=fake_fetch, sleep=lambda _s: None
+    )
+    assert stats.written == 2
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(news_events.c.ts_event, news_events.c.forecast, news_events.c.actual).order_by(
+                news_events.c.ts_event
+            )
+        ).fetchall()
+    assert [(r.ts_event.minute, r.forecast, r.actual) for r in rows] == [
+        (29, None, pytest.approx(-105_000)),
+        (30, pytest.approx(50_000), pytest.approx(64_000)),
+    ]
+    again = run_backfill(
+        engine, weeks=1, today=dt.date(2025, 12, 17), fetch=fake_fetch, sleep=lambda _s: None
+    )
+    assert again.written == 0
 
 
 def test_backfill_survives_failed_week(tmp_path: Path) -> None:
@@ -241,6 +293,56 @@ def test_update_actuals_fills_only_missing(tmp_path: Path) -> None:
     with engine.connect() as conn:
         row = conn.execute(select(news_events.c.actual)).one()
     assert float(row.actual) == pytest.approx(0.4)
+
+
+#: Čas, který uložil živý sběr, než FF CPI posunul na 10:00 (2025-07-08 10:03 UTC)
+CPI_STORED_DATELINE = 1751968980
+
+
+def test_rescheduled_release_gets_actual_on_the_stored_row(tmp_path: Path) -> None:
+    """#1298 A2: živý sběr uložil 14:48, stránka FF má po zveřejnění 14:45.
+
+    Před #1298 řádek našel denní klíč. S minutou v klíči ho najde párování skupiny
+    (posun 1:1) — actual nesmí zůstat prázdný ani založit druhý řádek.
+    Druhý release téže řady v jiný den se nepáruje.
+    """
+    engine = make_db(tmp_path)
+    stored = dict(CPI_ENTRY, dateline=CPI_STORED_DATELINE, actual="")
+    live = normalize_entry(stored, fetched_at=NOW)
+    assert live is not None
+    NewsWriter(engine).write([dict_to_live(live)])
+
+    history = [normalize_entry(CPI_ENTRY, fetched_at=NOW)]  # 10:00
+    assert history[0] is not None
+    assert update_actuals(engine, [e for e in history if e is not None]) == 1
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(news_events.c.ts_event, news_events.c.actual)).fetchall()
+    assert [r.ts_event.minute for r in rows] == [3]
+    assert float(rows[0].actual) == pytest.approx(0.4)
+
+
+def test_backfill_does_not_duplicate_rescheduled_release(tmp_path: Path) -> None:
+    engine = make_db(tmp_path)
+    live = normalize_entry(dict(CPI_ENTRY, dateline=CPI_STORED_DATELINE), fetched_at=NOW)
+    assert live is not None
+    NewsWriter(engine).write([dict_to_live(live)])
+
+    stats = run_backfill(
+        engine,
+        weeks=1,
+        today=dt.date(2025, 7, 9),
+        fetch=lambda _week: page(days_json_for(CPI_ENTRY)),
+        sleep=lambda _s: None,
+    )
+    # Nový řádek nevznikne, actual dostane uložený řádek přes posun 1:1
+    assert (stats.written, stats.actuals_updated) == (0, 1)
+    assert NewsWriter(engine).count() == 1
+
+
+def dict_to_live(event: NewsEvent) -> NewsEvent:
+    """Tvar živého sběru: widget FF nenese `id` ani actual (ADR-0013)."""
+    return replace(event, raw={k: v for k, v in event.raw.items() if k != "id"}, actual=None)
 
 
 def test_refresh_job_updates_past_events_only(tmp_path: Path) -> None:

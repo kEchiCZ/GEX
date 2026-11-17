@@ -173,6 +173,57 @@ def test_daily_recurring_title_stays_a_new_event() -> None:
     assert result.duplicates == 0
 
 
+def test_two_releases_of_same_series_in_one_day_stay_apart(tmp_path: Path) -> None:
+    """#1298: FF uvedl dohánějící NFP 16. 12. 2025 ve 13:29 a aktuální ve 13:30.
+
+    Rolling okno ani `dedup_hash` je nesmí sloučit — dřív zůstal jen první
+    a aktuální release chyběl. Opakovaný fetch téhož kalendáře je dál duplicita.
+    """
+    writer, inner = make_writer(tmp_path)
+    title = "USD Non-Farm Employment Change"
+    catch_up = dt.datetime(2025, 12, 16, 13, 29, tzinfo=dt.UTC)
+    calendar = [
+        event(title, "forexfactory", at=catch_up, kind="scheduled"),
+        event(title, "forexfactory", at=catch_up + dt.timedelta(minutes=1), kind="scheduled"),
+    ]
+    assert writer.write(calendar) == 2
+    assert writer.write(calendar) == 0
+    # Nový proces: okno z DB, bez něj by opakovaný fetch prošel jen přes UNIQUE
+    restarted = DedupingWriter(inner, window_minutes=10)
+    restarted.prime_from_db(catch_up)
+    assert restarted.write(calendar) == 0
+    assert inner.count() == 2
+
+
+def test_rescheduled_calendar_item_keeps_the_stored_row(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1298 A2: FF posunul Cleveland Fed 16. 11. ze 14:48 na 14:45 i ve widget feedu.
+
+    S klíčem s minutou by vznikl druhý řádek a původní by zůstal bez actual.
+    Posun 1:1 ve skupině řada + den proto nic nezapíše a zaloguje se jednou.
+    """
+    writer, inner = make_writer(tmp_path)
+    title = "USD Cleveland Fed Inflation Expectations"
+    stored = dt.datetime(2026, 11, 16, 14, 48, tzinfo=dt.UTC)
+    adp = event("USD ADP Weekly Employment Change", "forexfactory", kind="scheduled")
+    assert writer.write([event(title, "forexfactory", at=stored, kind="scheduled"), adp]) == 2
+
+    moved = event(title, "forexfactory", at=stored.replace(minute=45), kind="scheduled")
+    with caplog.at_level(logging.INFO, logger="gexlens_news.pipeline"):
+        assert writer.write([moved, adp]) == 0
+        assert writer.write([moved, adp]) == 0
+    with inner.engine.connect() as conn:
+        rows = conn.execute(
+            select(news_events.c.id, news_events.c.ts_event).where(news_events.c.title == title)
+        ).fetchall()
+    assert [r.ts_event.minute for r in rows] == [48]
+    assert [r.message for r in caplog.records if "posunut" in r.message] == [
+        f"Kalendář FF: {title} posunut z 2026-11-16 14:48 na 14:45, řádek {rows[0].id} zůstává"
+        " (#1298)"
+    ]
+
+
 # ── Fuzzy vrstva (#274) ────────────────────────────────────────────
 # Titulky v testech jsou skutečné páry z provozních dat 28.–29. 7. 2026,
 # na kterých byl práh J ≥ 0.9 změřen (ADR-0016).

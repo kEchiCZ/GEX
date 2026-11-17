@@ -135,3 +135,24 @@ def test_unescape_entities_necha_holy_ampersand_a_odkazy() -> None:
         "S&P 500, AT&T, M&A; R&D",
     ):
         assert unescape_entities(text) == text
+
+
+def test_klic_kalendare_nese_minutu_releasu() -> None:
+    """#1298: tatáž řada dvakrát týž den (dohánění 13:29 a aktuální 13:30) = dva klíče."""
+    import datetime as dt
+
+    from gexlens_engine.compute.newstext import dedup_hash, event_dedup_hash
+
+    catch_up = dt.datetime(2025, 12, 16, 13, 29, tzinfo=dt.UTC)
+    current = dt.datetime(2025, 12, 16, 13, 30, tzinfo=dt.UTC)
+    title = "USD Non-Farm Employment Change"
+    assert event_dedup_hash("scheduled", title, catch_up) != event_dedup_hash(
+        "scheduled", title, current
+    )
+    # Týž release v jiném pásmu i se sekundami je tentýž klíč
+    eastern = dt.timezone(dt.timedelta(hours=-5))
+    assert event_dedup_hash(
+        "scheduled", title, dt.datetime(2025, 12, 16, 8, 30, 0, tzinfo=eastern)
+    ) == event_dedup_hash("scheduled", title, current.replace(second=59))
+    # Ostatní zprávy dál splývají v rámci dne (cross-source merge, ADR-0059 bod 3)
+    assert event_dedup_hash("headline", title, catch_up) == dedup_hash(title, current)

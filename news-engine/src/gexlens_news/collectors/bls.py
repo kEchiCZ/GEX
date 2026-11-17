@@ -22,7 +22,8 @@ from gexlens_news.collectors.rss import ReleaseTime, parse_feed_time, plausible_
 from gexlens_news.model import RawItem
 
 #: Release BLS → přesný titulek řádku kalendáře FF (ověřeno v produkční DB
-#: 11. 10. 2026: nejvýš 1 řádek na titulek a den)
+#: 11. 10. 2026: nejvýš 1 řádek na titulek a den; od #1298 můžou být dva,
+#: dohánějící release o minutu dřív — `calendar_release_time` vrátí pozdější)
 BLS_RELEASE_TITLES: Mapping[str, str] = {
     "empsit": "USD Non-Farm Employment Change",
     "cpi": "USD CPI m/m",

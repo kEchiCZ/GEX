@@ -155,6 +155,34 @@ def dedup_hash(title: str, ts_event: dt.datetime) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+#: Druh zprávy z kalendáře (ForexFactory): identita = řada + čas releasu (#1298)
+SCHEDULED_KIND = "scheduled"
+
+
+def scheduled_key(title: str, ts_event: dt.datetime) -> str:
+    """Identita položky kalendáře: normalizovaný titulek + minuta releasu v UTC (#1298).
+
+    Den nestačí: řada může vyjít dvakrát týž den. Po shutdownu 2025 FF uvedl
+    dohánějící release o minutu dřív (NFP 16. 12. 2025 13:29 bez forecastu,
+    aktuální 13:30), projevy členů FOMC bývají dva denně. S dnem v klíči
+    zůstal jen první záznam. FF `id` identitou být nemůže: widget feed ho
+    nenese (ADR-0013), jen historická stránka (ADR-0018). Naivní čas = UTC.
+    """
+    utc = ts_event.astimezone(dt.UTC) if ts_event.tzinfo else ts_event
+    return f"{normalize_title(title)}|{utc.strftime('%Y-%m-%dT%H:%MZ')}"
+
+
+def event_dedup_hash(kind: str, title: str, ts_event: dt.datetime) -> str:
+    """`dedup_hash` podle druhu zprávy — jediné místo, které volí klíč.
+
+    Položka kalendáře (`scheduled`) má v klíči minutu releasu (`scheduled_key`),
+    ostatní zprávy den (`dedup_hash`, cross-source merge téže story).
+    """
+    if kind == SCHEDULED_KIND:
+        return hashlib.sha256(scheduled_key(title, ts_event).encode("utf-8")).hexdigest()
+    return dedup_hash(title, ts_event)
+
+
 # Limit sloupce `news_events.source_uid` (storage/sentiment.py) — sdílená
 # konstanta, ať normalizace a schéma nemůžou rozejít
 SOURCE_UID_MAX_LENGTH = 128
