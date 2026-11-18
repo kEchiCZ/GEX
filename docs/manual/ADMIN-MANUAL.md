@@ -1248,6 +1248,11 @@ Pravidla:
 Job **`security`** na každém PR: gitleaks (celá historie — pozor, test
 s realisticky vypadajícím tajemstvím spadne i po přepsání souboru, dokud je
 v historii větve), pip-audit, npm audit. Lokálně `pwsh scripts/security-scan.ps1`.
+npm audit posuzuje `scripts/npm-audit-gate.mjs` (CI i lokální prověrka). High a critical
+blokují jako `--audit-level=high`. Výjimku do data smí mít jen advisory bez opravené verze
+upstream, každá s issue (`EXCEPTIONS` ve skriptu). Po datu advisory zase blokuje a výjimka,
+kterou už nic nepotřebuje, dá varování. Dnes: GHSA-fc5q-39xc-vjpf (picomatch, jen dev přes
+vite a vitest) do 31. 12. 2026, #1837.
 
 ---
 
