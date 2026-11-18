@@ -225,14 +225,21 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         "option_plan",
         "market",
         "setup",
-        ("option_plan_created", "option_plan_repriced", "option_plan_result"),
+        (
+            "option_plan_created",
+            "option_plan_repriced",
+            "option_plan_state",
+            "option_plan_result",
+        ),
         "Plán opce QQQ",
-        "Plán opce QQQ 1DTE ke scénáři dne NQ: vznik, přecenění po openu a výsledek.",
+        "Plán opce QQQ 1DTE ke scénáři dne NQ: vznik, přecenění po openu, živý průběh a výsledek.",
         (
             "Vznik v 9:15 ET s fotkou plánu: směr, vstup A, TP1/TP2 a exit v popisku",
             "SL a R:R až při spoušti vstupu A",
             "Přecenění v 9:31 ET; „ZMĚNA“, když se změní stav plánu. Fotka jen u plánu"
             " sestaveného až v 9:31",
+            "Živě bez fotky: vstup A se SL, TP1/TP2 a R:R z kotace, pak TP1, TP2, SL"
+            " nebo exit (nejvýš ~5 zpráv za den)",
             "Výsledek po close z naměřených kotací, bez fotky",
         ),
     ),

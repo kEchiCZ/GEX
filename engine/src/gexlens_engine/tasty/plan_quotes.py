@@ -28,6 +28,9 @@ Výstup za každou dokončenou minutu (štítek minuty, vzorek v jejím závěru
   Bar minuty, ve které odběr začal, se nezapíše: neúplný vzorek by dal falešné high/low.
   Kotace se zapíše i v ní (stav v závěru minuty se stářím).
 
+Po každé minutě odběr ohlásí `on_minute` (seance, závěr minuty): živý stav plánu
+(F3b #1757, `option_plan_live`) z ní spočítá přechody v úloze na pozadí.
+
 Minutový cyklus na nic nečeká (AGENTS.md, #1337, #1646): vlastní úloha v tasty větvi, PG
 i Parquet ve vlákně. IBKR lines 0, rozpočet DXLink: účel `plan_quotes` z rezervy ad-hoc
 (`tasty/budget.py`), 2 kontrakty a podklad × Quote + Greeks = 6 položek.
@@ -193,6 +196,9 @@ class PlanQuoteRecorder:
     #: Probudí reconciler subskripce (vzor `AdhocViewer.on_change`, #206)
     on_change: Callable[[], None]
     clock: Callable[[], dt.datetime] = _utcnow
+    #: Zapsaná minuta (seance, závěr minuty) pro živý stav plánu (F3b #1757); jen spouští
+    #: úlohu na pozadí, tik odběru na ni nečeká
+    on_minute: Callable[[dt.date, dt.datetime], None] | None = None
 
     _session: dt.date | None = field(default=None, init=False)
     #: Kontrakty plánu → streamer (None = kontrakt v řetězu tasty není, řádky bez cen)
@@ -240,6 +246,7 @@ class PlanQuoteRecorder:
         minute = _floor_minute(now)
         if self._last_minute is not None and minute > self._last_minute:
             await self.write_minute(self._last_minute, now)
+            self._minute_written(self._last_minute + MINUTE)
         self._last_minute = minute
         await self._refresh(now)
         self.sample_spot(now)
@@ -441,3 +448,12 @@ class PlanQuoteRecorder:
             self.on_change()
         except Exception:
             logger.exception("Odběr plánu %s: probuzení plánu subskripce selhalo", PRODUCT)
+
+    def _minute_written(self, until: dt.datetime) -> None:
+        """Ohlásí živému stavu plánu minutu končící v `until`, i když se nezapsala (mezera)."""
+        if self.on_minute is None or self._session is None:
+            return
+        try:
+            self.on_minute(self._session, until)
+        except Exception:
+            logger.exception("Odběr plánu %s: živý stav plánu se nespustil", PRODUCT)

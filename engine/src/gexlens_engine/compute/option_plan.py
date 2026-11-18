@@ -19,6 +19,10 @@ spoušti (P3) a čerpání P4 počítá z naměřené kotace v minutě spouště
 z kotací v minutách událostí (K3 bod 9, Rozhodnuto 16. 11.). Track record (`track_record`)
 počítá plány od `TRACK_RECORD_SINCE`.
 
+Živý stav hlavního plánu (F3b #1757, K5 B) je táž funkce s okamžikem `now`: vidí jen bary
+do něj, bez spouště je plán `čeká` a obchod bez rozhodnutí nemá exit. Přechody k upozornění
+z výsledku odvodí `live_transitions`. Bez `now` (nebo s `now` od exitu) je výsledek večerní F3.
+
 Hlavní plán má jen vstup A a hledá ho jednou (K6 B). Stíny track recordu (K10 B) jsou
 parametry téže funkce:
 - `SHADOW_B` = pravidla v1, tedy i vstup B podle P1 (K3 body 4 a 8);
@@ -85,6 +89,8 @@ TARGET_DELTA = 0.25
 MIN_RR = 2.0
 #: Exit = settle − 15 min, přes noc se nedrží (K3 bod 5)
 EXIT_BEFORE_SETTLE = dt.timedelta(minutes=15)
+#: Důvod plánu bez spouště do exitu (verdikt plánu, výsledek F3, přechod živého stavu)
+NO_ENTRY_BY_EXIT = "bez vstupu do exitu"
 #: 5min bary po hodinách od US openu (K3 bod 2)
 BAR_SPAN = dt.timedelta(minutes=5)
 MODEL_LABEL = "model z naměřené IV"
@@ -674,19 +680,21 @@ def _verdict(
     return "obchodovat", ()
 
 
+def tws_stop(side: int, stop: str, option: str) -> str:
+    """P5: podmínka stopu navázaného na podklad pro podmíněný příkaz v TWS."""
+    return f"když QQQ {'≥' if side < 0 else '≤'} {stop} → prodat {option}"
+
+
 def _p5(side: int, entry: Entry | None, main: OptionVariant | None, em: float | None) -> str:
     """P5: stop navázaný na podklad, podmíněný příkaz v TWS."""
     option = f"{'call' if side > 0 else 'put'} {main.strike:g}" if main is not None else "opci"
-    sign = "≥" if side < 0 else "≤"
     tail = "Podmínka TWS reaguje na cenu (poslední obchod), ne na 5min close plánu."
     if entry is not None:
-        return (
-            f"Podmíněný příkaz v TWS: když QQQ {sign} {_cz(entry.stop)} → prodat {option}. {tail}"
-        )
+        return f"Podmíněný příkaz v TWS: {tws_stop(side, _cz(entry.stop), option)}. {tail}"
     reserve = f" + {_cz(RESERVE_EM * em)}" if em is not None else ""
     return (
         f"SL se určí při spoušti vstupu A (5min close za extrémem od testu{reserve}), pak "
-        f"podmíněný příkaz v TWS: když QQQ {sign} SL → prodat {option}. {tail}"
+        f"podmíněný příkaz v TWS: {tws_stop(side, 'SL', option)}. {tail}"
     )
 
 
@@ -735,7 +743,7 @@ def _entries(
         )
         blocked = f"vstup A není: žádná úroveň do {_cz(LEVEL_LIMIT_EM, 0)} EM ({where})"
     elif chosen is None and window_done:
-        blocked = "bez vstupu do exitu"
+        blocked = NO_ENTRY_BY_EXIT
     return _Entries(level_a, trigger_a, trigger_b, chosen, blocked)
 
 
@@ -1051,8 +1059,12 @@ PRELIMINARY_N = 30
 #: Stíny track recordu (K10 B) v `plan.shadows`; klíč = parametr pravidel
 SHADOWS: Mapping[str, PlanRules] = {"entry_b": SHADOW_B, "wick_test": SHADOW_WICK}
 MINUTE = dt.timedelta(minutes=1)
+#: Důvod živého stavu `čeká` (F3b #1757)
+WAITING = "čeká na spoušť vstupu A"
 
 ResultStatus = Literal["spuštěno", "bez vstupu", "bez opce", "mezera"]
+#: Živý stav (F3b #1757) navíc zná `čeká`: spoušť do okamžiku `now` nenastala a exit ještě ne
+PlanStatus = ResultStatus | Literal["čeká"]
 VariantKind = Literal["obchod", "vyřazeno P3", "bez kotace"]
 Budget = Literal["v rozpočtu", "nad rozpočtem", "nenastaven"]
 EventKind = Literal["vstup", "TP1", "TP2", "SL", "stop na vstupu", "exit"]
@@ -1165,12 +1177,14 @@ class PlanResult:
     """Výsledek části plánu (hlavní plán nebo stín K10 B) z naměřených barů a kotací."""
 
     rules: str
-    status: ResultStatus
+    #: `čeká` jen živý stav s `now` před exitem; výsledek F3 ho nemá
+    status: PlanStatus
     #: Proč bez vstupu, bez opce nebo mezera
     reasons: tuple[str, ...]
     entry: Entry | None
     #: Spoušť vstupu B u stínu B, i když ji P1 vyřadí
     trigger_b: Entry | None
+    #: None u spuštěného plánu = živý stav, o průběhu se do `now` nerozhodlo
     outcome: Outcome | None
     events: tuple[PathEvent, ...]
     variants: tuple[VariantResult, ...]
@@ -1190,7 +1204,7 @@ def _ts(value: object, path: str) -> dt.datetime:
     return ts
 
 
-def _bare(rules: PlanRules, status: ResultStatus, reasons: Sequence[str]) -> PlanResult:
+def _bare(rules: PlanRules, status: PlanStatus, reasons: Sequence[str]) -> PlanResult:
     return PlanResult(rules.name, status, tuple(reasons), None, None, None, (), (), 0, 0)
 
 
@@ -1207,12 +1221,14 @@ def _walk(
     rth: Sequence[PathBar],
     open_ts: dt.datetime,
     exit_ts: dt.datetime,
-) -> tuple[Outcome, tuple[PathEvent, ...]]:
+    until: dt.datetime,
+) -> tuple[Outcome | None, tuple[PathEvent, ...]]:
     """Průběh po vstupu (K3 bod 5): TP na dotyk v 1m baru, SL na 5min close, po TP1 SL na vstup.
 
     V minutě se kontroluje TP1, pak TP2, pak 5min close (končí-li v ní 5min bar), jako
-    zpětné přehrání #1756. `rth` jsou 1m bary od US openu do exitu (bez minuty, která
-    v exitu začíná). Bez rozhodnutí do exitu = výstup v exitu za close poslední minuty.
+    zpětné přehrání #1756. `rth` jsou 1m bary od US openu do `until` (bez minuty, která
+    v něm začíná). Bez rozhodnutí do exitu = výstup v exitu za close poslední minuty.
+    Živý stav (`until` před exitem) bez rozhodnutí vrátí průběh bez výsledku (None).
     """
     events = [PathEvent("vstup", entry.ts, entry.price)]
     tp1 = targets[0]
@@ -1237,6 +1253,8 @@ def _walk(
         if (end - open_ts) % BAR_SPAN == dt.timedelta(0) and (bar.close - stop) * side < 0:
             events.append(PathEvent("stop na vstupu" if hit1 else "SL", end, bar.close))
             return ("TP1→vstup" if hit1 else "SL"), tuple(events)
+    if until < exit_ts:
+        return None, tuple(events)
     events.append(PathEvent("exit", exit_ts, last))
     return ("TP1→exit" if hit1 else "exit"), tuple(events)
 
@@ -1260,8 +1278,12 @@ def _variant_result(
     exit_ts: dt.datetime,
     quotes: Mapping[tuple[str, float, str, dt.datetime], QuoteLike],
     max_loss_usd: float | None,
+    decided: bool,
 ) -> VariantResult:
-    """P3, P4 a P&L varianty z naměřených kotací (K3 bod 9, Rozhodnuto 16. 11.)."""
+    """P3, P4 a P&L varianty z naměřených kotací (K3 bod 9, Rozhodnuto 16. 11.).
+
+    `decided` = průběh má výsledek; bez něj (živý stav) nemá varianta výstup z držení.
+    """
     role, right = variant["role"], variant["right"]
     strike, expiry = float(variant["strike"]), dt.date.fromisoformat(variant["expiry"])
     key = (expiry.strftime("%Y%m%d"), strike, right)
@@ -1313,7 +1335,11 @@ def _variant_result(
             (bid - paid) * multiplier if bid is not None else None,
         )
 
-    exits = (leave(events[1]), leave(events[-1])) if len(events) > 1 else (None, None)
+    if decided:
+        exits = (leave(events[1]), leave(events[-1])) if len(events) > 1 else (None, None)
+    else:
+        # Živý stav: otevřený obchod nemá výstup z držení, jen výstup v TP1, když už byl
+        exits = (leave(events[1]) if len(events) > 1 else None, None)
     return VariantResult(
         role=role,
         right=right,
@@ -1332,7 +1358,7 @@ def _variant_result(
 def _missing_minutes(
     present: Collection[dt.datetime], start: dt.datetime, end: dt.datetime
 ) -> tuple[int, list[dt.datetime]]:
-    expected = int((end - start) / MINUTE)
+    expected = max(0, int((end - start) / MINUTE))
     missing = [start + i * MINUTE for i in range(expected) if start + i * MINUTE not in present]
     return expected, missing
 
@@ -1344,6 +1370,7 @@ def evaluate_plan(
     bars: Sequence[PathBar],
     quotes: Sequence[QuoteLike],
     max_loss_usd: float | None,
+    now: dt.datetime | None = None,
 ) -> PlanResult:
     """Výsledek části plánu (`plan_to_json`) z 1m barů QQQ seance a minutových kotací (F3).
 
@@ -1361,6 +1388,11 @@ def evaluate_plan(
     Kotace události je řádek minuty, která okamžikem události končí (vzorek v jejím závěru),
     vstup za ask, výstup za bid. Bez kotace výstupu je P&L té nohy None s mezerou ve variantě.
     `max_loss_usd` je rozpočet ze Settings v okamžiku vyhodnocení (třída P4, Rozhodnuto 16. 11.).
+
+    `now` = živý stav (F3b #1757): funkce vidí jen 1m bary, které před `now` (zaokrouhleným
+    na minutu dolů) skončily, a mezery hledá do `now`. Před exitem je plán bez spouště `čeká`
+    a spuštěný plán bez rozhodnutí má `outcome` None, bez exitu a bez výstupu z držení.
+    Bez `now`, nebo s `now` od exitu, je to výsledek po close.
     """
     if part.get("rules") != rules.name:
         raise ValueError(f"část plánu má pravidla {part.get('rules')!r}, čekala se {rules.name!r}")
@@ -1378,7 +1410,8 @@ def evaluate_plan(
     exit_ts = _ts(part["exit_ts"], "plán.exit_ts")
     target_ts = tuple(_ts(ts, "plán.target_ts") for ts in part["target_ts"])
     open_ts = us_open_ts(day)
-    by_minute = {bar.ts: bar for bar in bars if open_ts <= bar.ts < exit_ts}
+    until = exit_ts if now is None else min(now.replace(second=0, microsecond=0), exit_ts)
+    by_minute = {bar.ts: bar for bar in bars if open_ts <= bar.ts < until}
     rth = [by_minute[ts] for ts in sorted(by_minute)]
     fives = five_minute_bars(rth, open_ts, settle_ts(day))
     p1 = GexTop(**part["p1"]) if part["p1"] is not None else None
@@ -1398,12 +1431,18 @@ def evaluate_plan(
         return _bare(rules, "bez vstupu", (entries.blocked,))
     outcome: Outcome | None = None
     events: tuple[PathEvent, ...] = ()
-    decided = exit_ts
     if entries.chosen is not None:
         outcome, events = _walk(
-            entries.chosen, side=side, targets=targets, rth=rth, open_ts=open_ts, exit_ts=exit_ts
+            entries.chosen,
+            side=side,
+            targets=targets,
+            rth=rth,
+            open_ts=open_ts,
+            exit_ts=exit_ts,
+            until=until,
         )
-        decided = events[-1].ts
+    # Rozhodnutí = poslední událost průběhu; bez vstupu nebo bez výsledku `until` (exit u F3)
+    decided = events[-1].ts if outcome is not None else until
     expected, missing = _missing_minutes(by_minute.keys(), open_ts, decided)
     if missing:
         return dataclasses.replace(
@@ -1418,9 +1457,14 @@ def evaluate_plan(
             bars=expected - len(missing),
             bars_expected=expected,
         )
-    if entries.chosen is None or outcome is None:
+    if entries.chosen is None:
+        waiting = until < exit_ts
         return dataclasses.replace(
-            _bare(rules, "bez vstupu", ("bez vstupu do exitu",)),
+            _bare(
+                rules,
+                "čeká" if waiting else "bez vstupu",
+                (WAITING if waiting else NO_ENTRY_BY_EXIT,),
+            ),
             trigger_b=entries.trigger_b,
             bars=expected,
             bars_expected=expected,
@@ -1438,6 +1482,7 @@ def evaluate_plan(
             exit_ts=exit_ts,
             quotes=by_contract,
             max_loss_usd=max_loss_usd,
+            decided=outcome is not None,
         )
         for variant in part["variants"]
     )
@@ -1453,6 +1498,48 @@ def evaluate_plan(
         bars=expected,
         bars_expected=expected,
     )
+
+
+# ── živý stav hlavního plánu (F3b #1757, ADR-0062 K5 B) ─────────────
+
+#: Přechod živého stavu: událost průběhu, nebo konec bez obchodu
+LiveEvent = Literal["vstup", "TP1", "TP2", "SL", "stop na vstupu", "exit", "bez vstupu", "mezera"]
+
+
+@dataclass(frozen=True)
+class LiveTransition:
+    """Přechod živého stavu hlavního plánu; ke každému jde jedno upozornění."""
+
+    event: LiveEvent
+    #: Událost průběhu = závěr její minuty; konec bez obchodu = okamžik zjištění (`now`)
+    ts: dt.datetime
+    #: Konečný stav: plán se dál nesleduje
+    final: bool
+
+
+def live_transitions(result: PlanResult, now: dt.datetime) -> tuple[LiveTransition, ...]:
+    """Přechody k upozornění ze živého stavu hlavního plánu (`evaluate_plan` s `now`).
+
+    - `spuštěno`: každá událost průběhu (vstup, TP1, TP2, SL, stop na vstupu, exit), poslední
+      je konečná, když má průběh výsledek. Varianty vyřazené P3 průběh nezastaví, upozornění
+      ho pak nesou jako hypotetický (Rozhodnuto 18. 11.: 4b B);
+    - `bez vstupu` do exitu a `mezera`: jeden konečný přechod v `now`. Mezera v barech je
+      mezerou celého dne jako u F3, živý stav se dál nesleduje (Rozhodnuto 18. 11.: 4a A);
+    - `čeká`, `bez opce` a `bez vstupu` od vzniku (úroveň A do 1 EM chybí, plán dostal
+      „neobchodovat“ už v 9:15 ET): žádný přechod.
+    """
+    at = now.replace(second=0, microsecond=0)
+    if result.status == "spuštěno":
+        last = len(result.events) - 1
+        return tuple(
+            LiveTransition(event.kind, event.ts, i == last and result.outcome is not None)
+            for i, event in enumerate(result.events)
+        )
+    if result.status == "mezera":
+        return (LiveTransition("mezera", at, True),)
+    if result.status == "bez vstupu" and result.reasons == (NO_ENTRY_BY_EXIT,):
+        return (LiveTransition("bez vstupu", at, True),)
+    return ()
 
 
 def evaluate_option_plan(
