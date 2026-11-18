@@ -66,8 +66,9 @@ def image_relative_path(row: OptionPlanRow) -> Path:
 def _summary(row: OptionPlanRow) -> dict[str, Any]:
     """Sloupce řádku a platný plán (`effective`); celý JSON `plan` jen v detailu.
 
-    `live_alerts` jsou odeslané přechody živého stavu (F3b #1757) v pořadí zápisu, jen
-    událost a čas; ceny a R:R nese text zprávy (Rozhodnuto 18. 11. F5a Q1 B, F4d #1841).
+    `live_alerts` jsou odeslané přechody živého stavu (F3b #1757) v pořadí zápisu: událost,
+    čas, čas odeslání a příznak `final`; ceny a R:R nese text zprávy (Rozhodnuto 18. 11.
+    F5a Q1 B, F4d #1841).
     """
     return {
         "id": row.id,
