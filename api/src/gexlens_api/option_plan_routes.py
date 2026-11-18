@@ -6,7 +6,8 @@ K4 bod 10), táž funkce jako vyhodnocení (F3 #1748) a obrázek (F4b #1744).
 
 Tvar odpovědi rozhodl vlastník 12. 11. (#1738, varianta B): seznam nese sloupce řádku
 a platný plán, detail navíc celý uložený JSON `plan` (9:15, přecenění, pokrytí snímků).
-Parametr `symbol` není (varianta A): tabulka ho nemá a plán je jen pro QQQ.
+Parametr `symbol` není (varianta A): tabulka ho nemá a plán je jen pro QQQ. Řádek nese
+i odeslané přechody živého stavu `live_alerts` (F3b #1757), API je jen přepošle (F4d #1841).
 
 Track record (F3 #1748, ADR-0062 bod 7): `GET /option-plans/stats` je tenký obal
 `OptionPlansRepository.stats` podle vzoru `/scenarios/stats`: jen aktuální verze pravidel,
@@ -63,7 +64,12 @@ def image_relative_path(row: OptionPlanRow) -> Path:
 
 
 def _summary(row: OptionPlanRow) -> dict[str, Any]:
-    """Sloupce řádku a platný plán (`effective`); celý JSON `plan` jen v detailu."""
+    """Sloupce řádku a platný plán (`effective`); celý JSON `plan` jen v detailu.
+
+    `live_alerts` jsou odeslané přechody živého stavu (F3b #1757) v pořadí zápisu: událost,
+    čas, čas odeslání a příznak `final`; ceny a R:R nese text zprávy (Rozhodnuto 18. 11.
+    F5a Q1 B, F4d #1841).
+    """
     return {
         "id": row.id,
         "scenario_id": row.scenario_id,
@@ -75,6 +81,7 @@ def _summary(row: OptionPlanRow) -> dict[str, Any]:
         "evaluated_at": row.evaluated_at.isoformat() if row.evaluated_at else None,
         "result": row.result,
         "has_image": row.image_path is not None,
+        "live_alerts": list(row.live_alerts),
         "effective": effective_plan(row.plan),
     }
 
