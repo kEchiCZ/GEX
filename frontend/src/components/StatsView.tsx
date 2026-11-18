@@ -31,6 +31,7 @@ import { useWatchlistSymbols } from '../hooks/useWatchlistSymbols'
 import { fetchVerdictStats } from '../api/briefing'
 import { ReleaseHypothesesSection } from './ReleaseHypothesesSection'
 import { ScenarioStatsSection } from './ScenarioStatsSection'
+import { OptionPlanStatsSection } from './OptionPlanStatsSection'
 import type { VerdictStatBucket, VerdictStats } from '../api/briefing'
 import {
   STRATEGY_COLORS,
@@ -925,6 +926,8 @@ export function StatsView() {
       </section>
 
       <ScenarioStatsSection symbol={symbol} />
+
+      <OptionPlanStatsSection symbol={symbol} />
 
       <ReleaseHypothesesSection />
 
