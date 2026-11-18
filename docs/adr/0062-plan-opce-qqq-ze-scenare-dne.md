@@ -19,7 +19,8 @@
   v 9:31 (K4 bod 10, vlastník „A“). **12. 11.:** odběr kontraktů plánu a podkladu do close
   (K4 bod 11, odvozeno v F1b #1747). **16. 11.:** vyhodnocení po close a track record (K4
   bod 13, vlastník „1. A, 2. A, 3. A“ s rozlišením obchodů nad rozpočtem, F3 #1748) a fotky
-  na Telegram (K4 bod 14, vlastník „1. B, 2. A, 3. A, 4. A“, F4c #1745).
+  na Telegram (K4 bod 14, vlastník „1. B, 2. A, 3. A, 4. A“, F4c #1745). **18. 11.:** track
+  record ve Stats (F5b #1749) bez podílu kotací pásma 0DTE u stínu B (K4 bod 13, nález #1839).
 - **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09, P1, track record a K4 bod 9
   2026-11-10, K4 bod 10 2026-11-11, K4 bod 11 2026-11-12, K4 body 13 a 14 2026-11-16)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
@@ -532,7 +533,7 @@ Odvozeno pro F3 (zapsal agent 16. 11., #1748; tři volby rozhodl vlastník v cha
       mohla nést spoušť, cíl nebo SL). Track record posuzuje jen `spuštěno` a `bez vstupu`,
       `mezera` a `bez opce` jsou jen v počtu podle stavu. Brána `preliminary` (n < 30) platí
       v každém bloku zvlášť. Podíl kotací pásma 0DTE k P1 stínu B (bod 7) výsledek
-      nekopíruje, zůstává v `plan.chain.zero_dte` a čte ho track record stínu ve Stats (F5b). Výsledek do PNG plánu F3 nekreslí, PNG stavu „vyhodnoceno“ (bod 12) zatím
+      nekopíruje a zůstává v `plan.chain.zero_dte`. Odpověď `/option-plans/stats` ho nenese a Stats (F5b #1749) ho neukazuje. Souhrn do track recordu stínu doplní nález #1839 (vlastník 18. 11.: „Q4 b) A“). Výsledek do PNG plánu F3 nekreslí, PNG stavu „vyhodnoceno“ (bod 12) zatím
       ukazuje plán bez průběhu (nález #1822).
     - **Kdy a odkud:** jednou za seanci 15 min po settle v úlohách po settle pipeline NQ.
       Bary QQQ za celou seanci od otevření Globexu (i UTC partice D−1), kotace z partice
