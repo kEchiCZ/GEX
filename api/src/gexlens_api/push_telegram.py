@@ -239,7 +239,7 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
             "Přecenění v 9:31 ET; „ZMĚNA“, když se změní stav plánu. Fotka jen u plánu"
             " sestaveného až v 9:31",
             "Živě bez fotky: vstup A se SL, TP1/TP2 a R:R z kotace, pak TP1, TP2, SL"
-            " nebo exit (nejvýš ~5 zpráv za den)",
+            " nebo exit (nejvýš 3 zprávy za den)",
             "Výsledek po close z naměřených kotací, bez fotky",
         ),
     ),

@@ -1517,6 +1517,21 @@ class LiveTransition:
     final: bool
 
 
+def trigger_verdict(
+    variant: VariantResult, account: AccountParams
+) -> tuple[Verdict, tuple[str, ...]]:
+    """Verdikt varianty při spoušti (K12 A): P3 a P4 z kotace a parametry účtu jako plán (K2).
+
+    Táž pravidla jako verdikt plánu (`_verdict`): nenastavený rozpočet nebo čerpání P4 nad
+    rozpočtem = `neobchodovat` s důvodem i u varianty, která projde P3. Varianta bez kotace
+    (`pricing` None) s nastaveným účtem je `čeká`: R:R nejde určit, rozhoduje ask v TWS.
+    Třída rozpočtu varianty (`budget`) zůstává jen pro track record F3 (Rozhodnuto 16. 11.).
+    """
+    return _verdict(
+        variant.pricing, account=account, waiting="kotace při vstupu chybí", blocked=None
+    )
+
+
 def live_transitions(result: PlanResult, now: dt.datetime) -> tuple[LiveTransition, ...]:
     """Přechody k upozornění ze živého stavu hlavního plánu (`evaluate_plan` s `now`).
 

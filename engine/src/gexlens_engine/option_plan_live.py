@@ -5,12 +5,12 @@ do Parquet, spočítá živý stav hlavního plánu táž čistá funkce jako ve
 (`compute/option_plan.evaluate_plan` s okamžikem `now` = závěr zapsané minuty). Přechody
 (`live_transitions`) jdou do zvonku a pod přepínačem „Plán opce QQQ“ na Telegram jako alert
 `option_plan_state`, každý jednou:
-- vstup A (SL, TP1, TP2, exit, R:R z kotace a verdikt P3 v jedné zprávě), pak TP1, TP2, SL,
-  stop na vstupu, nebo exit; bez vstupu do exitu; mezera v barech QQQ;
+- vstup A (SL, TP1, TP2, exit, R:R z kotace a verdikt P3 + P4 jako plán v jedné zprávě), pak
+  TP1, TP2, SL, stop na vstupu, nebo exit; bez vstupu do exitu; mezera v barech QQQ;
 - stíny K10 B upozornění nemají, plán bez úrovně vstupu A do 1 EM (verdikt „neobchodovat“
   od 9:15 ET) se nesleduje;
-- varianty vyřazené P3 průběh nezastaví, další zprávy ho nesou jako hypotetický
-  (Rozhodnuto 18. 11.: 4b B); mezera = konec sledování, výsledek dá F3 (4a A).
+- když se žádná varianta neobchoduje (P3, P4, nenastavený rozpočet), průběh se hlásí dál
+  jako hypotetický (Rozhodnuto 18. 11.: 4b B); mezera = konec sledování, výsledek dá F3 (4a A).
 
 Idempotence: přechod se před odesláním zapíše do `option_plans.live_alerts`
 (`claim_live_alert`, atomicky). Restart enginu ani souběh ho nepošlou dvakrát, selhané
@@ -23,8 +23,8 @@ a kotace seance.
 
 Minutový cyklus na nic nečeká (#1337, #1646): kontrola je úloha na pozadí, PG i Parquet
 ve vlákně; běží-li předchozí, minuta se přeskočí a stav dožene další (přechody se odvozují
-z celého dne). Rozpočet P4 ze Settings se čte jen pro třídu varianty, hodnota do zprávy
-ani do logu nejde.
+z celého dne). Parametry účtu ze Settings rozhodnou verdikt varianty při spoušti (K2,
+K12 A), hodnoty do zprávy ani do logu nejdou.
 """
 
 import asyncio
@@ -50,6 +50,7 @@ from gexlens_engine.compute.option_plan import (
     _cz,
     evaluate_plan,
     live_transitions,
+    trigger_verdict,
     tws_stop,
 )
 from gexlens_engine.compute.settle import ET_TZ, is_trading_session, settle_ts, us_open_ts
@@ -101,21 +102,42 @@ def live_part(plan: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return main
 
 
-def hypothetical(result: PlanResult) -> bool:
-    """Všechny varianty vyřazené P3: průběh se hlásí jen jako hypotetický (4b B)."""
-    return bool(result.variants) and all(v.kind == "vyřazeno P3" for v in result.variants)
+def _verdicts(
+    result: PlanResult, account: AccountParams
+) -> list[tuple[VariantResult, str, tuple[str, ...]]]:
+    return [(variant, *trigger_verdict(variant, account)) for variant in result.variants]
 
 
-def _entry_variant(variant: VariantResult) -> str:
+def hypothetical(result: PlanResult, account: AccountParams) -> str | None:
+    """Žádná varianta se při spoušti neobchoduje: průběh se hlásí jen hypoteticky (4b B).
+
+    Vrací štítek do zpráv po vstupu, None = aspoň jedna varianta je `obchodovat`, nebo `čeká`
+    (kotace chybí, rozhoduje ask v TWS). Vyřazení P3 má vlastní štítek z textu vlastníka.
+    """
+    verdicts = _verdicts(result, account)
+    if not verdicts or any(verdict != "neobchodovat" for _, verdict, _ in verdicts):
+        return None
+    if all(variant.kind == "vyřazeno P3" for variant, _, _ in verdicts):
+        return "hypoteticky (vyřazeno P3)"
+    return "hypoteticky (neobchodovat)"
+
+
+def _entry_variant(variant: VariantResult, verdict: str, reasons: tuple[str, ...]) -> str:
+    """Varianta ve zprávě vstupu: ask, R:R z kotace a verdikt P3 + P4 jako plán (K12 A)."""
     name = _name(variant).capitalize()
     pricing = variant.pricing
-    if variant.kind == "bez kotace" or pricing is None:
-        return f"{name}: kotace při vstupu chybí → R:R nejde určit, zkontroluj ask v TWS"
-    rr = f"R:R z kotace {_cz(pricing.rr)}" if pricing.rr is not None else "R:R nejde určit"
+    why = f"neobchodovat — {'; '.join(reasons)}"
+    if pricing is None:
+        if verdict == "čeká":
+            return f"{name}: kotace při vstupu chybí → R:R nejde určit, zkontroluj ask v TWS"
+        return f"{name}: kotace při vstupu chybí → {why}"
+    ask = f"{name}: ask {_cz(pricing.paid)}"
     if variant.kind == "vyřazeno P3":
-        return f"{name}: ask {_cz(pricing.paid)}, {rr} → neobchodovat (P3)"
-    budget = "rozpočet nenastaven" if variant.budget == "nenastaven" else variant.budget
-    return f"{name}: ask {_cz(pricing.paid)}, {rr} → obchodovat ({budget})"
+        return f"{ask} → {why}"  # důvod P3 nese R:R z kotace
+    rr = f"R:R z kotace {_cz(pricing.rr)}" if pricing.rr is not None else "R:R nejde určit"
+    if verdict == "obchodovat":
+        return f"{ask}, {rr} → obchodovat (v rozpočtu)"
+    return f"{ask}, {rr} → {why}"
 
 
 def _exit_variant(variant: VariantResult, leg: OptionExit | None) -> str:
@@ -128,11 +150,16 @@ def _exit_variant(variant: VariantResult, leg: OptionExit | None) -> str:
 
 
 def live_message(
-    plan_id: int, part: Mapping[str, Any], result: PlanResult, transition: LiveTransition
+    plan_id: int,
+    part: Mapping[str, Any],
+    result: PlanResult,
+    transition: LiveTransition,
+    account: AccountParams,
 ) -> str:
     """Text upozornění přechodu: nadpis přechodu hned za číslem plánu, časy v ET i v Praze.
 
-    Parametry účtu ani hodnota rozpočtu ve zprávě nejsou, jen třída varianty (16. 11.).
+    Verdikt varianty při spoušti jde podle P3, P4 a parametrů účtu v okamžiku upozornění
+    (`trigger_verdict`). Parametry účtu ani hodnota rozpočtu ve zprávě nejsou.
     """
     head = f"Plán QQQ #{plan_id} · {HEADLINES[transition.event]}"
     exit_ts = dt.datetime.fromisoformat(part["exit_ts"])
@@ -149,21 +176,32 @@ def live_message(
     side = 1 if part["direction"] == "long" else -1
     kinds = [event.kind for event in result.events]
     index = kinds.index(transition.event)
+    label = hypothetical(result, account)
     if index == 0:
+        verdicts = _verdicts(result, account)
         targets = [float(value) for value in part["targets"]]
         levels = ", ".join(f"TP{i} {_cz(value)}" for i, value in enumerate(targets, start=1))
         parts = [
             f"{head} {entry.kind} {_when(entry.ts)} za {_cz(entry.price)}, odmítnutí od "
             f"{LEVEL_LABELS.get(entry.level, entry.level)} {_cz(entry.level_price)}, "
             f"SL {_cz(entry.stop)} (5min close).",
-            *(f"{_entry_variant(variant)}." for variant in result.variants),
+            *(f"{_entry_variant(*item)}." for item in verdicts),
             f"{levels}, exit {exit_ts.astimezone(ET_TZ):%H:%M} ET.",
         ]
-        trade = next((v for v in result.variants if v.kind == "obchod"), None)
+        # Podmínka TWS k variantě, která se obchoduje, jinak k té bez kotace (rozhodne ask v TWS)
+        trade = next(
+            (
+                v
+                for wanted in ("obchodovat", "čeká")
+                for v, verdict, _ in verdicts
+                if verdict == wanted
+            ),
+            None,
+        )
         if trade is not None:
             option = f"{'call' if trade.right == 'C' else 'put'} {trade.strike:g}"
             parts.append(f"TWS: {tws_stop(side, _cz(entry.stop), option)}.")
-        elif hypothetical(result):
+        elif label is not None:
             parts.append("Průběh dál jen hypoteticky.")
         if transition.final:
             parts.append("Cíl 1 leží za vstupem, plán končí.")
@@ -175,8 +213,8 @@ def live_message(
         what = f"{head} {_when(event.ts)}, QQQ {_cz(event.price)}"
     else:
         what = f"{head}: 5min close {_cz(event.price)} v {_when(event.ts)}"
-    if hypothetical(result):
-        what += ", hypoteticky (vyřazeno P3)"
+    if label is not None:
+        what += f", {label}"
     legs = ", ".join(
         _exit_variant(variant, variant.exit_tp1 if index == 1 else variant.exit_hold)
         for variant in result.variants
@@ -252,10 +290,10 @@ class OptionPlanLiveWatcher:
             return []
         bars = read_bars(self.derived_dir, PRODUCT, us_open_ts(session) - MINUTE, until)
         quotes = read_option_quotes(self.derived_dir, PRODUCT, session)
-        max_loss_usd = self.account().max_loss_usd
+        account = self.account()
         alerts: list[dict[str, Any]] = []
         for row, part in watched:
-            alerts.extend(self._transitions(row, part, bars, quotes, max_loss_usd, until, now))
+            alerts.extend(self._transitions(row, part, bars, quotes, account, until, now))
         return alerts
 
     def _transitions(
@@ -264,7 +302,7 @@ class OptionPlanLiveWatcher:
         part: Mapping[str, Any],
         bars: Sequence[PathBar],
         quotes: Sequence[QuoteLike],
-        max_loss_usd: float | None,
+        account: AccountParams,
         until: dt.datetime,
         now: dt.datetime,
     ) -> list[dict[str, Any]]:
@@ -273,7 +311,7 @@ class OptionPlanLiveWatcher:
             rules=MAIN_RULES,
             bars=bars,
             quotes=quotes,
-            max_loss_usd=max_loss_usd,
+            max_loss_usd=account.max_loss_usd,
             now=until,
         )
         sent = {item["event"] for item in row.live_alerts}
@@ -282,6 +320,8 @@ class OptionPlanLiveWatcher:
         for transition in transitions:
             if transition.event in sent:
                 continue
+            # Text před zápisem: chyba sestavení přechod nespotřebuje, zkusí se další minutu
+            message = live_message(row.id, part, result, transition, account)
             claimed = self.repository.claim_live_alert(
                 row.id,
                 {
@@ -304,7 +344,7 @@ class OptionPlanLiveWatcher:
                 {
                     "kind": ALERT_KIND,
                     "symbol": PRODUCT,
-                    "message": live_message(row.id, part, result, transition),
+                    "message": message,
                     "plan_id": row.id,
                     "scenario_id": row.scenario_id,
                     "event": transition.event,

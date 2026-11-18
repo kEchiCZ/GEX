@@ -606,7 +606,9 @@ Odvozeno pro F3b (#1757; pět voleb rozhodl vlastník v chatu 18. 11.: „1 A, 2
   (vstup, TP1, TP2, SL, stop na vstupu, exit, bez vstupu, mezera). Patří pod přepínač „Plán opce
   QQQ“ (bod 14), registrace v API jde ve stejném PR. Odmítnuto B (druh na přechod).
 - **Text bez fotky (vlastník: A).** Zpráva vstupu nese vstup, SL, TP1, TP2, exit, ask, R:R
-  z kotace a verdikt P3 každé varianty (třída rozpočtu, ne hodnota) a podmínku TWS (P5).
+  z kotace a verdikt každé varianty a podmínku TWS (P5). Verdikt jde podle P3, P4 a parametrů účtu
+  jako verdikt plánu (K2, bod 4, K12 A, `trigger_verdict`): nad rozpočtem nebo bez rozpočtu je
+  „neobchodovat — důvod“, hodnota rozpočtu ve zprávě není.
   Další zprávy nesou cenu události a bid a P&L na kontrakt. Nadpis přechodu stojí hned za
   číslem plánu, protože dedup Telegramu porovnává prvních 80 znaků. Chybějící kotace = „kotace
   při vstupu chybí → R:R nejde určit“, ne odhad. Odmítnuto B (fotka při spoušti): PNG je
@@ -617,8 +619,10 @@ Odvozeno pro F3b (#1757; pět voleb rozhodl vlastník v chatu 18. 11.: „1 A, 2
   dál z barů, které jsou): TP1 nebo SL v mezeře by dal falešná upozornění.
 - **Vyřazeno P3 (vlastník: 4b B).** Když P3 vyřadí všechny varianty, průběh se hlásí dál
   s označením „hypoteticky (vyřazeno P3)“ (16. 11. by to byly 2 zprávy navíc). Jinak se
-  hlásí běžně, obě sady nikdy. Konečný stav `spuštěno — vyřazeno P3` z Návrhu epiky tím
-  platí jen pro obchod, ne pro upozornění.
+  hlásí běžně, obě sady nikdy. Totéž platí, když se žádná varianta nevejde do rozpočtu nebo
+  rozpočet není nastaven, se štítkem „hypoteticky (neobchodovat)“ (odvozeno agentem z 4b B).
+  Konečný stav `spuštěno — vyřazeno P3` z Návrhu epiky tím platí jen pro obchod, ne pro
+  upozornění.
 
 ## Zpětné přehrání pravidel verze 1 (#1756, 3. 11.)
 

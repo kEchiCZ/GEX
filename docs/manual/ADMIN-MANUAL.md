@@ -1003,7 +1003,12 @@ fotky.
   a vstup za cílem 1. Po konečném přechodu se plán nesleduje.
   - Chybějící 1m bar QQQ dá jedno upozornění „mezera“ a sledování končí, stejně jako F3 (4a A).
     Restart enginu v RTH proto sledování dne ukončí.
-  - Když P3 vyřadí obě varianty, průběh se hlásí dál s „hypoteticky (vyřazeno P3)“ (4b B).
+  - Verdikt varianty ve zprávě vstupu (`compute/option_plan.trigger_verdict`) jde podle P3, P4
+    a parametrů účtu stejně jako verdikt plánu (K2, K12 A). Nad rozpočtem nebo bez nastaveného
+    rozpočtu je to „neobchodovat — důvod“ i u varianty, která projde P3. Třída `budget` zůstává
+    pro track record F3.
+  - Když se žádná varianta neobchoduje, průběh se hlásí dál jako hypotetický (4b B): po
+    vyřazení P3 „hypoteticky (vyřazeno P3)“, z jiného důvodu „hypoteticky (neobchodovat)“.
   - Za den nejvýš 3 zprávy (vstup, TP1, konec), nebo jedna (bez vstupu, mezera).
 - **Idempotence:** přechod se zapíše do `option_plans.live_alerts` před odesláním
   (`claim_live_alert`: zámek řádku a kontrola v jedné transakci). Restart ani souběh ho nepošle
@@ -1014,9 +1019,11 @@ Log enginu:
 
 - INFO „Plán opce QQQ #N: přechod vstup (15:35 UTC), upozornění 1 s po závěru minuty“ (změřené
   zpoždění) a „Živý stav plánu QQQ: předchozí kontrola běží — minuta HH:MM UTC se přeskočí“;
-- ERROR „Živý stav plánu QQQ v HH:MM UTC selhal“ s tracebackem (další minuta to zkusí znovu),
-  „Plán opce QQQ #N: upozornění … do zvonku neodešlo“ a „Odběr plánu QQQ: živý stav plánu se
-  nespustil“.
+- ERROR „Živý stav plánu QQQ v HH:MM UTC selhal“ s tracebackem (další minuta to zkusí znovu;
+  text zprávy se sestaví před zápisem přechodu, takže chyba textu přechod nespotřebuje) a „Odběr
+  plánu QQQ: živý stav plánu se nespustil“;
+- výpadek API při odeslání dá jen WARNING „Publish alerts do API selhal: …“ (`HttpPublisher`).
+  Přechod je už zapsaný a znovu se neposílá.
 
 Zprávy z golden 2. 11. mají časy v ET i v Praze, parametry účtu ani hodnotu rozpočtu nenesou:
 - „Plán QQQ #N · VSTUP A 10:35 ET (16:35 Praha) za 697,99, odmítnutí od flip 698,21, SL 699,66

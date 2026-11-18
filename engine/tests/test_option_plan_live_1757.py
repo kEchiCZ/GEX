@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_option_plan_eval_1748 import ACCOUNT, Harness
+from test_option_plan_eval_1748 import Harness
 from test_option_plan_result_1748 import (
     DAY,
     EXIT,
@@ -43,6 +43,7 @@ from gexlens_engine.compute.option_plan import (
     MAIN_RULES,
     NO_ENTRY_BY_EXIT,
     WAITING,
+    AccountParams,
     LiveTransition,
     PlanResult,
     evaluate_plan,
@@ -62,6 +63,12 @@ from gexlens_engine.storage.parquet_store import OptionQuoteRow
 UTC = dt.UTC
 MINUTE = dt.timedelta(minutes=1)
 PRAGUE = live.PRAGUE_TZ
+#: Syntetické parametry účtu testu (ne skutečný účet; výchozí hodnota v kódu není)
+ACCOUNT_USD = 10_000.0
+
+
+def account(max_loss_usd: float | None = 150.0) -> AccountParams:
+    return AccountParams(account_usd=ACCOUNT_USD, max_loss_usd=max_loss_usd)
 
 
 def _at(hour: int, minute: int, day: dt.date = DAY) -> dt.datetime:
@@ -100,6 +107,7 @@ def first_seen(
     **kwargs: Any,
 ) -> dict[str, tuple[dt.datetime, LiveTransition, str]]:
     """Přechody po minutách jako hlídač: kdy se který poprvé objevil a jeho zpráva."""
+    params = kwargs.pop("params", None) or account(kwargs.get("max_loss_usd", 150.0))
     seen: dict[str, tuple[dt.datetime, LiveTransition, str]] = {}
     now = start
     while now <= end:
@@ -109,7 +117,7 @@ def first_seen(
                 seen[transition.event] = (
                     now,
                     transition,
-                    live_message(1, plan, result, transition),
+                    live_message(1, plan, result, transition, params),
                 )
         now += MINUTE
     return seen
@@ -231,7 +239,7 @@ def test_exit_jen_v_exitu_a_v_exitu_konecny() -> None:
         ("vstup", _at(14, 40), False),
         ("exit", EXIT, True),
     ]
-    message = live_message(3, plan, result, transitions[1])
+    message = live_message(3, plan, result, transitions[1], account())
     assert message.startswith(
         "Plán QQQ #3 · EXIT 15:45 ET (21:45 Praha), QQQ 597,50. Hlavní put 590"
     )
@@ -265,7 +273,7 @@ def test_bez_spouste_ceka_a_v_exitu_bez_vstupu() -> None:
     assert (done.status, done.reasons) == ("bez vstupu", (NO_ENTRY_BY_EXIT,))
     (transition,) = live_transitions(done, EXIT)
     assert (transition.event, transition.final) == ("bez vstupu", True)
-    assert live_message(4, plan, done, transition) == (
+    assert live_message(4, plan, done, transition, account()) == (
         "Plán QQQ #4 · BEZ VSTUPU do exitu 15:45 ET (21:45 Praha). Plán končí."
     )
 
@@ -292,7 +300,7 @@ def test_mezera_v_barech_jeden_konecny_prechod() -> None:
     gap = live_at(plan, path, _at(14, 43))
     (transition,) = live_transitions(gap, _at(14, 43))
     assert (transition.event, transition.ts, transition.final) == ("mezera", _at(14, 43), True)
-    assert live_message(5, plan, gap, transition) == (
+    assert live_message(5, plan, gap, transition, account()) == (
         "Plán QQQ #5 · MEZERA: bary QQQ: chybí 1 z 13 minut od US openu do 09:43 ET "
         "(první 09:42 ET). Živý stav se dál nesleduje, výsledek přijde po close."
     )
@@ -309,13 +317,16 @@ def test_chybejici_kotace_pri_vstupu_je_mezera_ne_odhad() -> None:
     main, backup = result.variants
     assert (main.kind, backup.kind) == ("bez kotace", "obchod")
     entry, sl = live_transitions(result, _at(14, 45))
-    message = live_message(6, plan, result, entry)
+    message = live_message(6, plan, result, entry, account())
     assert (
         "Hlavní put 590: kotace při vstupu chybí → R:R nejde určit, zkontroluj ask v TWS."
         in message
     )
     assert "TWS: když QQQ ≥ 600,85 → prodat put 589." in message
-    assert "hlavní put 590: bez kotace při vstupu" in live_message(6, plan, result, sl).lower()
+    assert (
+        "hlavní put 590: bez kotace při vstupu"
+        in live_message(6, plan, result, sl, account()).lower()
+    )
 
 
 def test_vyrazeno_p3_prubeh_dal_hypoteticky() -> None:
@@ -324,10 +335,33 @@ def test_vyrazeno_p3_prubeh_dal_hypoteticky() -> None:
     seen = first_seen(hand(), STOP_AT_ENTRY_PATH, OPEN + MINUTE, EXIT, quotes=quotes)
     assert list(seen) == ["vstup", "TP1", "stop na vstupu"]
     entry = seen["vstup"][2]
-    assert entry.count("→ neobchodovat (P3)") == 2
+    assert entry.count("→ neobchodovat — R:R ") == 2 and entry.count(" < 2 (P3)") == 2
     assert entry.endswith("Průběh dál jen hypoteticky.") and "TWS:" not in entry
     assert ", hypoteticky (vyřazeno P3). " in seen["TP1"][2]
     assert ", hypoteticky (vyřazeno P3). " in seen["stop na vstupu"][2]
+
+
+def test_nad_rozpoctem_neobchodovat_p4_a_prubeh_hypoteticky() -> None:
+    """K2, bod 4, K12 A: varianta, která projde P3, nad rozpočtem = neobchodovat (P4) jako plán."""
+    seen = first_seen(hand(), STOP_AT_ENTRY_PATH, OPEN + MINUTE, EXIT, max_loss_usd=1.0)
+    entry = seen["vstup"][2]
+    assert entry.count("→ neobchodovat — nad rozpočtem (P4: čerpání −") == 2
+    assert "R:R z kotace" in entry and "obchodovat (v rozpočtu)" not in entry
+    assert entry.endswith("Průběh dál jen hypoteticky.") and "TWS:" not in entry
+    assert ", hypoteticky (neobchodovat). " in seen["TP1"][2]
+
+
+def test_rozpocet_nenastaven_neobchodovat_jako_plan() -> None:
+    """Nevyplněné parametry účtu = „neobchodovat — rozpočet nenastaven“ (K2, bez defaultu)."""
+    unset = AccountParams(account_usd=None, max_loss_usd=None)
+    seen = first_seen(hand(), SL_PATH, _at(14, 40), _at(14, 45), max_loss_usd=None, params=unset)
+    entry = seen["vstup"][2]
+    reason = "→ neobchodovat — rozpočet nenastaven (chybí rozpočet na obchod a velikost účtu)"
+    assert entry.count(reason) == 2 and "TWS:" not in entry
+    assert seen["SL"][2].startswith(
+        "Plán QQQ #1 · SL: 5min close 600,90 v 09:45 ET (15:45 Praha), "
+    )
+    assert ", hypoteticky (neobchodovat). " in seen["SL"][2]
 
 
 def test_cil_1_za_vstupem_vstup_je_konecny() -> None:
@@ -337,7 +371,9 @@ def test_cil_1_za_vstupem_vstup_je_konecny() -> None:
     assert result.outcome == "cíl 1 za vstupem"
     (transition,) = live_transitions(result, _at(14, 41))
     assert (transition.event, transition.final) == ("vstup", True)
-    assert live_message(8, plan, result, transition).endswith("Cíl 1 leží za vstupem, plán končí.")
+    assert live_message(8, plan, result, transition, account()).endswith(
+        "Cíl 1 leží za vstupem, plán končí."
+    )
 
 
 # ── hlídač: PG, Parquet, upozornění ─────────────────────────────────
@@ -351,11 +387,15 @@ class Clock:
         return self.now
 
 
+#: Hlídač čte parametry účtu ze Settings; tady syntetické
+LIVE_ACCOUNT = AccountParams(account_usd=ACCOUNT_USD, max_loss_usd=1234.5)
+
+
 def watcher(h: Harness, clock: Clock) -> OptionPlanLiveWatcher:
     return OptionPlanLiveWatcher(
         repository=h.repo,
         derived_dir=h.settings.derived_dir,
-        account=lambda: ACCOUNT,
+        account=lambda: LIVE_ACCOUNT,
         publisher=h.publisher,
         clock=clock,
     )
@@ -403,7 +443,8 @@ def test_hlidac_golden_tri_upozorneni_stiny_mlci(tmp_path: Path) -> None:
         assert payload["kind"] == ALERT_KIND == "option_plan_state"
         assert (payload["symbol"], payload["plan_id"]) == ("QQQ", plan_id)
         assert payload["message"].startswith(f"Plán QQQ #{plan_id} · ")
-        assert "1234" not in payload["message"] and "1 234" not in payload["message"]
+        for value in ("1234", "1 234", "10000", "10 000"):  # parametry účtu do zprávy nejdou
+            assert value not in payload["message"]
     row = h.repo.get(plan_id)
     assert row is not None
     assert [(a["event"], a["ts"], a["final"]) for a in row.live_alerts] == [
@@ -428,12 +469,43 @@ def test_restart_po_vstupu_bez_duplicity(tmp_path: Path, monkeypatch: pytest.Mon
     assert [(until, payload["event"]) for until, payload in again] == [(_at(14, 45), "SL")]
     reads: list[dt.datetime] = []
     real = live.read_bars
-    monkeypatch.setattr(live, "read_bars", lambda *args: reads.append(args[3]) or real(*args))
+
+    def counted(*args: Any) -> Any:
+        reads.append(args[3])
+        return real(*args)
+
+    monkeypatch.setattr(live, "read_bars", counted)
     # Další restart po konečném přechodu: partice se nečtou, nic se nepošle
     assert minutes(watcher(h, clock), clock, DAY, _at(14, 47), _at(14, 50)) == []
     assert reads == []
     row = h.repo.get(plan_id)
     assert row is not None and [a["event"] for a in row.live_alerts] == ["vstup", "SL"]
+
+
+def test_skutecny_restart_v_rth_da_mezeru_a_konec(tmp_path: Path) -> None:
+    """Restart po vstupu: F1b nezapíše bar minuty startu odběru → MEZERA a dál nic (4a A).
+
+    Vstup se znovu nepošle, SL v 9:45 ET už upozornění nemá; výsledek dá F3 po close.
+    """
+    h = Harness(tmp_path)
+    plan_id = h.plan(main=hand())
+    restart = _at(14, 41)  # bar minuty, ve které odběr po restartu začal, chybí
+    h.bars([bar for bar in SL_PATH if bar.ts != restart])
+    h.quotes(DAY, SL_PATH)
+    clock = Clock(OPEN)
+    before = minutes(watcher(h, clock), clock, DAY, OPEN + MINUTE, _at(14, 40))
+    assert [payload["event"] for _, payload in before] == ["vstup"]
+    after = minutes(watcher(h, clock), clock, DAY, _at(14, 42), _at(14, 50))
+    assert [(until, payload["event"]) for until, payload in after] == [(_at(14, 42), "mezera")]
+    assert after[0][1]["message"].startswith(
+        f"Plán QQQ #{plan_id} · MEZERA: bary QQQ: chybí 1 z 12 minut"
+    )
+    row = h.repo.get(plan_id)
+    assert row is not None
+    assert [(a["event"], a["final"]) for a in row.live_alerts] == [
+        ("vstup", False),
+        ("mezera", True),
+    ]
 
 
 def test_zapis_prechodu_jednou(tmp_path: Path) -> None:
@@ -457,10 +529,17 @@ def test_prace_jen_nad_dnem_planu(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     bars_calls: list[tuple[Any, ...]] = []
     quote_calls: list[tuple[Any, ...]] = []
     real_bars, real_quotes = live.read_bars, live.read_option_quotes
-    monkeypatch.setattr(live, "read_bars", lambda *a: bars_calls.append(a) or real_bars(*a))
-    monkeypatch.setattr(
-        live, "read_option_quotes", lambda *a: quote_calls.append(a) or real_quotes(*a)
-    )
+
+    def bars_spy(*args: Any) -> Any:
+        bars_calls.append(args)
+        return real_bars(*args)
+
+    def quotes_spy(*args: Any) -> Any:
+        quote_calls.append(args)
+        return real_quotes(*args)
+
+    monkeypatch.setattr(live, "read_bars", bars_spy)
+    monkeypatch.setattr(live, "read_option_quotes", quotes_spy)
     clock = Clock(_at(14, 41))
     w = watcher(h, clock)
     assert w.run(DAY, _at(14, 40)) == []  # 17. 11. bez plánu: PG ano, Parquet ne
@@ -481,6 +560,8 @@ def test_prace_jen_nad_dnem_planu(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         (DAY, OPEN),  # před US openem (minuta 9:29 ET)
         (DAY, _at(21, 1)),  # po settle
         (DAY, _at(22, 30)),  # denní pauza Globexu 16:30 CT
+        # nedělní otevření Globexu 17:00 CT: seance pondělí, RTH až v pondělí
+        (dt.date(2026, 11, 23), dt.datetime(2026, 11, 22, 23, 1, tzinfo=UTC)),
     ],
 )
 def test_brany_mimo_seanci_nic(session: dt.date, until: dt.datetime, tmp_path: Path) -> None:
@@ -540,7 +621,11 @@ def test_odber_ohlasi_zapsanou_minutu(tmp_path: Path) -> None:
     h = RecorderHarness(tmp_path, recorder_ts(14, 16, 10))
     h.add_plan(recorder_plan())
     calls: list[tuple[dt.date, dt.datetime]] = []
-    h.recorder.on_minute = lambda session, until: calls.append((session, until))
+
+    def written(session: dt.date, until: dt.datetime) -> None:
+        calls.append((session, until))
+
+    h.recorder.on_minute = written
     h.tick(recorder_ts(14, 16, 10))
     h.feed(recorder_ts(14, 16, 30))
     h.tick(recorder_ts(14, 17, 0.05))
