@@ -69,8 +69,12 @@ Pop-Location
 if (Test-Path $npmReport) {
     $npm = Get-Content $npmReport -Raw | ConvertFrom-Json
     $counts = $npm.metadata.vulnerabilities
-    if ($counts.critical -gt 0 -or $counts.high -gt 0) {
-        $failures += "npm audit: $($counts.critical) critical, $($counts.high) high"
+    # Tatáž brána jako CI: high/critical blokují, kromě dočasné výjimky do data (#1837)
+    node (Join-Path $repo 'scripts/npm-audit-gate.mjs') $npmReport | ForEach-Object { Write-Host "  $_" }
+    if ($LASTEXITCODE -eq 1) {
+        $failures += "npm audit: $($counts.critical) critical, $($counts.high) high (bez výjimky viz výše)"
+    } elseif ($LASTEXITCODE -eq 2) {
+        Write-Host '  ! npm audit endpoint neodpověděl — audit se neprokazuje ani nevylučuje'
     }
     Write-Host "  critical $($counts.critical) · high $($counts.high) · moderate $($counts.moderate) · low $($counts.low)"
     foreach ($name in $npm.vulnerabilities.PSObject.Properties.Name) {

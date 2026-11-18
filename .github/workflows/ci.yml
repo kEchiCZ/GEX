@@ -110,23 +110,22 @@ jobs:
       # Audit endpoint registru npm občas neodpovídá (4. 9. 2026 celé dopoledne
       # 503/400) — to není nález, ale shazovalo to každý PR i main. Tři pokusy
       # s pauzou; přetrvávající výpadek endpointu = varování, ne červené CI.
-      # Skutečné zranitelnosti (report + exit 1) dál padají.
+      # Skutečné zranitelnosti (report + exit 1) dál padají. High a critical posuzuje
+      # `scripts/npm-audit-gate.mjs` jako `--audit-level=high`, jen advisory bez opravené
+      # verze smí mít dočasnou výjimku do data (#1837); po datu zase blokuje.
       - name: npm audit
         working-directory: frontend
         shell: bash
         run: |
           for attempt in 1 2 3; do
-            if npm audit --audit-level=high > audit.log 2>&1; then
-              cat audit.log
-              exit 0
+            npm audit --json > audit.json 2> audit.log || true
+            rc=0
+            node ../scripts/npm-audit-gate.mjs audit.json || rc=$?
+            if [ "$rc" -ne 2 ] && ! grep -q "audit endpoint returned an error" audit.log; then
+              exit "$rc"
             fi
-            if grep -q "audit endpoint returned an error" audit.log; then
-              echo "npm audit endpoint nedostupný (pokus $attempt/3)"
-              sleep 30
-              continue
-            fi
-            cat audit.log
-            exit 1
+            echo "npm audit endpoint nedostupný (pokus $attempt/3)"
+            sleep 30
           done
           cat audit.log
           echo "::warning::npm audit endpoint nedostupný po 3 pokusech — audit přeskočen (nález se neprokazuje ani nevylučuje)"
