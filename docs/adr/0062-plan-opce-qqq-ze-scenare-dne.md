@@ -588,6 +588,38 @@ zprávy a dvě sady cen jednoho plánu a dva sub-issues navíc (F1c #1768, F2c #
 **Rozhodnuto 3. 11.: B** (vlastník; rozšíření rozsahu o sub-issue #1757). Důvod: rychlost
 („kliknu a je hotovo“). P3 je bez živého upozornění v okamžiku obchodu nepoužitelné.
 
+Odvozeno pro F3b (#1757; pět voleb rozhodl vlastník v chatu 18. 11.: „1 A, 2 A, 3 A, 4a A,
+4b B“, #1738 Rozhodnuto):
+
+- **Funkce a spouštění (agent).** Živý stav je `evaluate_plan` s okamžikem `now`: vidí jen
+  1m bary, které před ním skončily. Bez spouště je plán `čeká` a otevřený obchod nemá exit
+  ani výstup z držení. Od exitu, nebo bez `now`, je výsledek totožný s F3. Přechody odvodí
+  `live_transitions`. Spouští ho každá minuta, kterou odběr F1b zapíše (asi 1 s po závěru
+  minuty, úloha na pozadí), takže na pipeline NQ ani IBKR nezávisí. Sleduje se jen hlavní plán
+  s opcí a úrovní vstupu A (K10 B: stíny bez upozornění; plán bez úrovně A do 1 EM má
+  „neobchodovat“ už v 9:15).
+- **Odeslané přechody (vlastník: A).** Odeslané přechody drží nový sloupec
+  `option_plans.live_alerts` (JSON `[{event, ts, sent_at, final}]`, záloha PG před nasazením).
+  Přechod se zapíše atomicky před odesláním, takže restart nic nepošle dvakrát a selhané
+  odeslání se neopakuje. Odmítnuto B (klíč v JSON plánu): JSON z 9:15 se nepřepisuje (K2 A).
+- **Druh alertu (vlastník: A).** Jeden druh `option_plan_state` s přechodem v poli `event`
+  (vstup, TP1, TP2, SL, stop na vstupu, exit, bez vstupu, mezera). Patří pod přepínač „Plán opce
+  QQQ“ (bod 14), registrace v API jde ve stejném PR. Odmítnuto B (druh na přechod).
+- **Text bez fotky (vlastník: A).** Zpráva vstupu nese vstup, SL, TP1, TP2, exit, ask, R:R
+  z kotace a verdikt P3 každé varianty (třída rozpočtu, ne hodnota) a podmínku TWS (P5).
+  Další zprávy nesou cenu události a bid a P&L na kontrakt. Nadpis přechodu stojí hned za
+  číslem plánu, protože dedup Telegramu porovnává prvních 80 znaků. Chybějící kotace = „kotace
+  při vstupu chybí → R:R nejde určit“, ne odhad. Odmítnuto B (fotka při spoušti): PNG je
+  snímek stavu v 9:15, 9:31 a po vyhodnocení (bod 12).
+- **Mezera (vlastník: 4a A).** Chybějící 1m bar QQQ mezi openem a „teď“ dá jedno konečné
+  upozornění „mezera“, dál se nesleduje. Stejně skončí i večerní F3. Restart enginu v RTH proto
+  sledování dne ukončí (F1b nezapíše bar minuty, ve které odběr začal). Odmítnuto B (počítat
+  dál z barů, které jsou): TP1 nebo SL v mezeře by dal falešná upozornění.
+- **Vyřazeno P3 (vlastník: 4b B).** Když P3 vyřadí všechny varianty, průběh se hlásí dál
+  s označením „hypoteticky (vyřazeno P3)“ (16. 11. by to byly 2 zprávy navíc). Jinak se
+  hlásí běžně, obě sady nikdy. Konečný stav `spuštěno — vyřazeno P3` z Návrhu epiky tím
+  platí jen pro obchod, ne pro upozornění.
+
 ## Zpětné přehrání pravidel verze 1 (#1756, 3. 11.)
 
 Skript `scripts/measure_option_plan_entries_1738.py` přehrál všechny auto scénáře z
@@ -815,13 +847,14 @@ P4 ani rozpočet.
 
 - **Nové prvky:** tabulka `option_plans` (před nasazením F2b záloha PG), partice
   `derived/QQQ/option_quotes`, dva klíče v `settings`, druhy alertů `option_plan_created`,
-  `option_plan_repriced` (K4 C, „ZMĚNA“ při změně stavu varianty) a `option_plan_result`, alerty
-  přechodů stavu (K5 B, #1757), endpointy `/option-plans*`, závislost matplotlib v API (K1 A).
+  `option_plan_repriced` (K4 C, „ZMĚNA“ při změně stavu varianty) a `option_plan_result`, alert
+  přechodů stavu `option_plan_state` se sloupcem `live_alerts` (K5 B, #1757), endpointy
+  `/option-plans*`, závislost matplotlib v API (K1 A).
   JSON plánu nese dvě sady cen (9:15 a 9:31 ET), každou se svým časem.
 - **Výkon:** IBKR lines 0. Tasty: dva krátké snímky (9:15 a 9:31 ET) po ~520 položkách v rezervě
   ad-hoc a přes den 3 symboly.
-  Minutový cyklus beze změny (při K5 B jedna čistá funkce nad dnešními bary, jen ve dnech
-  s plánem). RAM podle K1.
+  Minutový cyklus beze změny: živý stav K5 B je jedna čistá funkce nad dnešními bary jen ve
+  dnech s plánem, v úloze na pozadí po zápisu minuty F1b. RAM podle K1.
 - **Relevance dat:** ceny jsou měřené a nesou stáří. Model (BS z naměřené IV) počítá jen
   hypotetické ceny při SL a TP a nese štítek. Chybějící řetěz = mezera.
 - **Riziko:** pravidla stojí na jednom dni (2. 11.). Zpětné přehrání (#1756) dalo z 12 plánů
