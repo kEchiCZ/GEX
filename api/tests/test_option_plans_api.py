@@ -185,6 +185,35 @@ def test_plan_short_a_long_seznam_a_detail(
     assert {key: value for key, value in detail.items() if key != "plan"} == second
 
 
+def test_odeslane_prechody_ziveho_stavu_v_seznamu_i_detailu(
+    client: TestClient, plans: OptionPlansRepository
+) -> None:
+    """F4d #1841: `live_alerts` přepošle API beze změny, v pořadí zápisu (F3b #1757)."""
+    quiet = _create(
+        plans, 37, MONDAY, verdict="čeká", status="sestaven", plan=_built("short", 687.0)
+    )
+    live = _create(
+        plans, 38, TUESDAY, verdict="čeká", status="sestaven", plan=_built("long", 700.0)
+    )
+    entry = {
+        "event": "vstup",
+        "ts": "2026-11-03T15:35:00+00:00",
+        "sent_at": "2026-11-03T15:35:04+00:00",
+        "final": False,
+    }
+    tp1 = {
+        "event": "TP1",
+        "ts": "2026-11-03T17:31:00+00:00",
+        "sent_at": "2026-11-03T17:31:03+00:00",
+        "final": True,
+    }
+    assert plans.claim_live_alert(live, entry) and plans.claim_live_alert(live, tp1)
+    by_id = {item["id"]: item for item in client.get("/option-plans").json()["option_plans"]}
+    assert by_id[quiet]["live_alerts"] == []  # bez přechodu prázdný seznam, ne null
+    assert by_id[live]["live_alerts"] == [entry, tp1]
+    assert client.get(f"/option-plans/{live}").json()["live_alerts"] == [entry, tp1]
+
+
 def test_plan_sestaveny_v_9_31_plati_z_9_31(
     client: TestClient, plans: OptionPlansRepository
 ) -> None:
