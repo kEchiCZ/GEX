@@ -186,7 +186,10 @@ class IbQuoteStreamer:
                     bid=ticker.bid,
                     ask=ticker.ask,
                     last=ticker.last if _valid(ticker.last) else (ticker.bid + ticker.ask) / 2,
-                    volume=ticker.volume if _valid(ticker.volume) else 0.0,
+                    # Objem bez ticku = neměřeno, ne nula (#1835): čerstvý ticker po
+                    # startu procesu nese NaN, dokud tick objemu nedorazí; 0,0 se
+                    # pak stalo referencí a návrat kumulativu duchovým přírůstkem
+                    volume=ticker.volume if _valid(ticker.volume) else None,
                     iv=iv if iv is not None and _valid(iv) else 0.0,
                     delta=delta,
                     gamma=gamma,
@@ -202,7 +205,7 @@ class IbQuoteStreamer:
                     bid=ticker.bid,
                     ask=ticker.ask,
                     last=ticker.last if _valid(ticker.last) else (ticker.bid + ticker.ask) / 2,
-                    volume=ticker.volume if _valid(ticker.volume) else 0.0,
+                    volume=ticker.volume if _valid(ticker.volume) else None,
                 )
             return None
         finally:

@@ -75,7 +75,8 @@ class PartialQuote:
     bid: float
     ask: float
     last: float
-    volume: float
+    #: None = tick objemu v subskripci nedorazil (neměřeno, #1835), viz QuoteSnapshot
+    volume: float | None
 
 
 @dataclass
