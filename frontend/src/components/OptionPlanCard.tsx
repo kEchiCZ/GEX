@@ -198,9 +198,7 @@ function PlanBody({ plan, main }: { plan: OptionPlanRow; main: OptionPlanMain })
                       </span>
                     )}
                   </td>
-                  <td>
-                    {(later ?? variant).at_targets.map((value) => px(value)).join(' / ')}
-                  </td>
+                  <td>{(later ?? variant).at_targets.map((value) => px(value)).join(' / ')}</td>
                   <td>
                     {label(variant.verdict, variant.reasons)}
                     {variant.pricing && (
@@ -319,7 +317,9 @@ function ResultBlock({ plan }: { plan: OptionPlanRow }) {
         {plan.evaluated_at ? (
           <span className="muted"> · vyhodnoceno {hhmm(plan.evaluated_at)}</span>
         ) : null}
-        {part.reasons.length > 0 ? <span className="muted"> · {part.reasons.join('; ')}</span> : null}
+        {part.reasons.length > 0 ? (
+          <span className="muted"> · {part.reasons.join('; ')}</span>
+        ) : null}
       </p>
       {part.entry && (
         <p>
@@ -329,7 +329,9 @@ function ResultBlock({ plan }: { plan: OptionPlanRow }) {
       {part.events.length > 0 && (
         <p className="muted">
           průběh:{' '}
-          {part.events.map((event) => `${event.kind} ${hhmm(event.ts)} ${px(event.price)}`).join(' → ')}
+          {part.events
+            .map((event) => `${event.kind} ${hhmm(event.ts)} ${px(event.price)}`)
+            .join(' → ')}
         </p>
       )}
       {part.variants.length > 0 && (
@@ -444,8 +446,7 @@ export function OptionPlanCard({
       {accountMissing === true && (
         <p className="option-plan-warning" role="status" data-testid="option-plan-account-missing">
           ⚠ Účet plánu nenastaven (Settings → Plán opce QQQ — účet): plán dá „neobchodovat —
-          rozpočet nenastaven“. Plán čte hodnoty v 9:15 ET, živé upozornění a vyhodnocení
-          aktuální.
+          rozpočet nenastaven“. Plán čte hodnoty v 9:15 ET, živé upozornění a vyhodnocení aktuální.
         </p>
       )}
       {accountMissing === null && (

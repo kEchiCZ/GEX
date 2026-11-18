@@ -8,6 +8,7 @@ import {
   OPTION_PLAN_ACCOUNT_KEY,
   OPTION_PLAN_MAX_LOSS_KEY,
   accountValueSet,
+  parseAccountInput,
 } from '../api/optionPlans'
 import type { ServerSettings } from '../api/settings'
 
@@ -39,14 +40,6 @@ const FIELDS: readonly AccountField[] = [
     ].join('\n'),
   },
 ]
-
-/** Text pole → hodnota pro server: `null` = nenastaveno, `undefined` = neplatné. */
-export function parseAccountInput(text: string): number | null | undefined {
-  const trimmed = text.trim().replace(',', '.')
-  if (trimmed === '') return null
-  const value = Number(trimmed)
-  return Number.isFinite(value) && value > 0 ? value : undefined
-}
 
 function draftOf(value: unknown): string {
   return accountValueSet(value) ? String(value) : ''

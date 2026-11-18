@@ -3,7 +3,8 @@ nenastaveno, validace kladného čísla jako na serveru, chyba serveru viditeln�
 syntetická (skutečný účet do repa nepatří). */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
-import { OptionPlanAccountSettings, parseAccountInput } from './OptionPlanAccountSettings'
+import { OptionPlanAccountSettings } from './OptionPlanAccountSettings'
+import { parseAccountInput } from '../api/optionPlans'
 
 const ACCOUNT = 'option_plan_account_usd'
 const MAX_LOSS = 'option_plan_max_loss_usd'
@@ -73,6 +74,8 @@ test('chyba serveru (422) je vidět a rozepsaná hodnota zůstane', async () => 
   render(<OptionPlanAccountSettings values={{}} saveAll={saveAll} />)
   fireEvent.change(input(MAX_LOSS_LABEL), { target: { value: '75' } })
   fireEvent.click(saveButton())
-  expect(await screen.findByText('Uložení selhalo: Uložení nastavení selhalo: HTTP 422')).toBeTruthy()
+  expect(
+    await screen.findByText('Uložení selhalo: Uložení nastavení selhalo: HTTP 422'),
+  ).toBeTruthy()
   expect(input(MAX_LOSS_LABEL).value).toBe('75')
 })

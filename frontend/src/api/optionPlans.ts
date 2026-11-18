@@ -138,6 +138,15 @@ export function accountValueSet(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
+/** Text pole v Settings → hodnota pro server: `null` = nenastaveno, `undefined` = neplatné.
+ *  Platí totéž co `account_value` na serveru (kladné konečné číslo), čárka jako desetinná tečka. */
+export function parseAccountInput(text: string): number | null | undefined {
+  const trimmed = text.trim().replace(',', '.')
+  if (trimmed === '') return null
+  const value = Number(trimmed)
+  return Number.isFinite(value) && value > 0 ? value : undefined
+}
+
 /** Kotace varianty v jednom okamžiku (9:15 ve variantě, 9:31 v `prices`). */
 export interface OptionPlanQuote {
   role: string

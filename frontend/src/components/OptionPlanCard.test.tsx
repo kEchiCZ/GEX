@@ -40,7 +40,10 @@ function variant(
   }
 }
 
-function main(direction: 'long' | 'short', overrides: Partial<OptionPlanMain> = {}): OptionPlanMain {
+function main(
+  direction: 'long' | 'short',
+  overrides: Partial<OptionPlanMain> = {},
+): OptionPlanMain {
   const right = direction === 'long' ? 'C' : 'P'
   const strike = direction === 'long' ? 505 : 495
   return {
@@ -62,7 +65,10 @@ function main(direction: 'long' | 'short', overrides: Partial<OptionPlanMain> = 
   }
 }
 
-function plan(overrides: Partial<OptionPlanRow> = {}, planMain: OptionPlanMain | null = main('long')) {
+function plan(
+  overrides: Partial<OptionPlanRow> = {},
+  planMain: OptionPlanMain | null = main('long'),
+) {
   const row: OptionPlanRow = {
     id: 7,
     scenario_id: 70,
@@ -228,7 +234,13 @@ test('výsledek F3: vyřazeno P3 hypoteticky, varianta nad rozpočtem označená
       pnl_tp2_usd: 40,
     },
     budget: 'nad rozpočtem',
-    exit_tp1: { event: 'TP1', ts: '2026-11-18T15:00:00+00:00', bid: 2.0, quote_age_s: 1, pnl_usd: 40 },
+    exit_tp1: {
+      event: 'TP1',
+      ts: '2026-11-18T15:00:00+00:00',
+      bid: 2.0,
+      quote_age_s: 1,
+      pnl_usd: 40,
+    },
     exit_hold: null,
     gaps: [],
   }
