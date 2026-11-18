@@ -505,3 +505,42 @@ test('ES: plán opce ze scénáře ES nevzniká (#1790), seznam plánů se nečt
   expect(urls.some((url) => url.includes('/option-plans'))).toBe(false)
   expect(urls.some((url) => url.includes('/settings'))).toBe(false)
 })
+
+test('NQ: alert plánu přes WS načte plány znovu, jiný alert ne (polling není)', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:plan')
+  URL.revokeObjectURL = vi.fn()
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  mockApis({
+    scenarios: { scenarios: [NQ_SCENARIO] },
+    optionPlans: { option_plans: [nqPlan(9, 70)] },
+  })
+  const { rerender } = render(<BriefingView />)
+  await screen.findByTestId('option-plan-9')
+  const planCalls = () =>
+    fetchMock.mock.calls.filter((call) => /\/option-plans\?/.test(String(call[0]))).length
+  expect(planCalls()).toBe(1)
+  const setupAlert = { kind: 'setup', symbol: 'NQ', message: 'setup', ts: 1 }
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ', alerts: [setupAlert] }))
+  rerender(<BriefingView />)
+  expect(planCalls()).toBe(1)
+  const planAlert = {
+    kind: 'option_plan_state',
+    symbol: 'QQQ',
+    message: 'VSTUP',
+    ts: 2,
+    event: 'vstup',
+  }
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ', alerts: [setupAlert, planAlert] }))
+  rerender(<BriefingView />)
+  await waitFor(() => expect(planCalls()).toBe(2))
+})
+
+test('NQ: nejnovější plán bez scénáře v kartě se ukáže zvlášť, nezmizí', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:plan')
+  URL.revokeObjectURL = vi.fn()
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  mockApis({ scenarios: { scenarios: [] }, optionPlans: { option_plans: [nqPlan(9, 71)] } })
+  render(<BriefingView />)
+  expect((await screen.findByTestId('option-plan-orphan')).textContent).toContain('#71')
+  expect(screen.getByTestId('option-plan-9')).toBeTruthy()
+})

@@ -307,3 +307,25 @@ test('nenačtené Settings = výslovná hláška; kompaktní řádek nese stav a
   expect(screen.queryByTestId('option-plan-account-missing')).toBeNull()
   expect(fetchMock).not.toHaveBeenCalled()
 })
+
+test('stáří živé osy: čas načtení seznamu u řádku Průběh živě', () => {
+  const loadedAt = Date.parse('2026-11-18T16:02:00+00:00')
+  render(<OptionPlanCard plan={plan()} accountMissing={false} loadedAt={loadedAt} />)
+  expect(screen.getByTestId('option-plan-live').textContent).toMatch(
+    /^Průběh živě \(stav k \d\d:\d\d\): zatím bez přechodu/,
+  )
+})
+
+test('PNG se načte znovu po změně stavu plánu (vyhodnocení), jinak ne', async () => {
+  const { rerender } = render(<OptionPlanCard plan={plan()} accountMissing={false} />)
+  await screen.findByTestId('option-plan-image')
+  rerender(<OptionPlanCard plan={plan({ live_alerts: [] })} accountMissing={false} />)
+  expect(fetchMock).toHaveBeenCalledTimes(1) // tentýž stav = žádný nový dotaz
+  rerender(
+    <OptionPlanCard
+      plan={plan({ evaluated_at: '2026-11-18T21:15:00+00:00' })}
+      accountMissing={false}
+    />,
+  )
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+})

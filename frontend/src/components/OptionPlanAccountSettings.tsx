@@ -5,6 +5,7 @@ serveru (`compute/option_plan.account_value`), server ji kontroluje znovu a jeho
 ukáže. Hodnoty se nikam nelogují, velikost účtu je soukromá. */
 import { useState } from 'react'
 import {
+  ACCOUNT_TIMING,
   OPTION_PLAN_ACCOUNT_KEY,
   OPTION_PLAN_MAX_LOSS_KEY,
   accountValueSet,
@@ -45,6 +46,11 @@ function draftOf(value: unknown): string {
   return accountValueSet(value) ? String(value) : ''
 }
 
+/** Hodnota ze serveru ve tvaru pole po `parseAccountInput`: číslo, nebo `null` = nenastaveno. */
+function serverValue(value: unknown): number | null {
+  return accountValueSet(value) ? (value as number) : null
+}
+
 export function OptionPlanAccountSettings({
   values,
   saveAll,
@@ -59,14 +65,19 @@ export function OptionPlanAccountSettings({
   const shown = draft ?? Object.fromEntries(FIELDS.map((f) => [f.key, draftOf(values[f.key])]))
   const parsed = FIELDS.map((field) => parseAccountInput(shown[field.key] ?? ''))
   const valid = parsed.every((value) => value !== undefined)
+  // Posílají se jen změněné klíče: nenačtené Settings (chyba se v `useServerSettings` polyká)
+  // ukážou prázdné pole a úprava druhého pole by jinak uložený rozpočet přepsala na `null`
+  const changed = FIELDS.flatMap((field, index): [string, unknown][] =>
+    parsed[index] === serverValue(values[field.key]) ? [] : [[field.key, parsed[index]]],
+  )
 
   const save = async () => {
-    if (!valid) return
+    if (!valid || changed.length === 0) return
     setSaving(true)
     try {
-      await saveAll(FIELDS.map((field, index) => [field.key, parsed[index]]))
+      await saveAll(changed)
       setDraft(null)
-      setMessage('Uloženo. Plán čte hodnoty v 9:15 ET, živé upozornění a vyhodnocení aktuální.')
+      setMessage(`Uloženo. ${ACCOUNT_TIMING}`)
     } catch (err) {
       setMessage(`Uložení selhalo: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -114,7 +125,7 @@ export function OptionPlanAccountSettings({
       <button
         type="button"
         className="chip"
-        disabled={saving || !valid || draft === null}
+        disabled={saving || !valid || changed.length === 0}
         onClick={() => void save()}
       >
         {saving ? 'Ukládám…' : 'Uložit účet plánu'}

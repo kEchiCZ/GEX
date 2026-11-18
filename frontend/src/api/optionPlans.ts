@@ -133,6 +133,10 @@ export const ROW_TOOLTIPS = {
 export const OPTION_PLAN_ACCOUNT_KEY = 'option_plan_account_usd'
 export const OPTION_PLAN_MAX_LOSS_KEY = 'option_plan_max_loss_usd'
 
+/** Kdy engine parametry účtu čte (`option_plan_job`, `option_plan_live`, `option_plan_eval`). */
+export const ACCOUNT_TIMING =
+  'Plán čte hodnoty při vzniku (9:15 ET, plán sestavený až v 9:31 ET v 9:31), živé upozornění a večerní vyhodnocení aktuální hodnotu.'
+
 /** Nastavená hodnota účtu: kladné konečné číslo (API ukládá číslo, nebo `null` = nenastaveno). */
 export function accountValueSet(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value > 0

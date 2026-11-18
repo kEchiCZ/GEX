@@ -50,7 +50,7 @@ import {
   accountValueSet,
   fetchOptionPlans,
 } from '../api/optionPlans'
-import type { OptionPlansResult } from '../api/optionPlans'
+import type { OptionPlanRow, OptionPlansResult } from '../api/optionPlans'
 import { fetchSettings } from '../api/settings'
 import { contractCode, nextContractCode, shortDate } from '../api/calendar'
 import type { ExpiryPhase } from '../api/calendar'
@@ -97,12 +97,15 @@ function formatSigned(value: number): string {
 /** Scénáře dne (#1173): otevřené (termín ≥ dnes) a poslední vyhodnocené.
 
 Pod scénářem NQ je plán opce QQQ, který z něj vznikl (F5a #1746, Rozhodnuto 18. 11. Q2 A):
-nejnovější plán celý, starší jedním řádkem. Seznam se načte znovu jen po alertu plánu přes WS
-(`planAlertKey`), polling ne (Q1 B). Ze scénáře ES plán nevzniká (#1790). */
+nejnovější plán celý, starší jedním řádkem. Nejnovější plán, jehož scénář tu není (smazaný,
+starší, nenačtené scénáře), se ukáže zvlášť, nezmizí. Plány, Settings a u NQ i scénáře se načtou
+znovu jen po alertu plánu přes WS (`planAlertKey`; s plánem v 9:15 vzniká i scénář), polling ne
+(Q1 B). Ze scénáře ES plán nevzniká (#1790). */
 function ScenarioBlock({ symbol, planAlertKey }: { symbol: string; planAlertKey: string }) {
   const [rows, setRows] = useState<Scenario[]>([])
   const planned = symbol === OPTION_PLAN_SCENARIO_SYMBOL
-  const [plans, setPlans] = useState<OptionPlansResult | null>(null)
+  const planKey = planned ? planAlertKey : ''
+  const [plans, setPlans] = useState<{ result: OptionPlansResult; loadedAt: number } | null>(null)
   // null = Settings se nenačetly; hodnoty účtu se jen testují, nezobrazují
   const [accountMissing, setAccountMissing] = useState<boolean | null>(false)
   useEffect(() => {
@@ -110,44 +113,62 @@ function ScenarioBlock({ symbol, planAlertKey }: { symbol: string; planAlertKey:
     void fetchScenarios(symbol, 20).then((items) => {
       if (!cancelled) setRows(items)
     })
-    if (planned) {
-      void fetchOptionPlans(10).then((result) => {
-        if (!cancelled) setPlans(result)
-      })
-      fetchSettings()
-        .then((values) => {
-          if (cancelled) return
-          const set =
-            accountValueSet(values[OPTION_PLAN_ACCOUNT_KEY]) &&
-            accountValueSet(values[OPTION_PLAN_MAX_LOSS_KEY])
-          setAccountMissing(!set)
-        })
-        .catch(() => {
-          if (!cancelled) setAccountMissing(null)
-        })
-    }
     return () => {
       cancelled = true
     }
-  }, [symbol, planned, planAlertKey])
+  }, [symbol, planKey])
+  useEffect(() => {
+    if (!planned) return
+    let cancelled = false
+    void fetchOptionPlans(10).then((result) => {
+      if (!cancelled) setPlans({ result, loadedAt: Date.now() })
+    })
+    fetchSettings()
+      .then((values) => {
+        if (cancelled) return
+        const set =
+          accountValueSet(values[OPTION_PLAN_ACCOUNT_KEY]) &&
+          accountValueSet(values[OPTION_PLAN_MAX_LOSS_KEY])
+        setAccountMissing(!set)
+      })
+      .catch(() => {
+        if (!cancelled) setAccountMissing(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [planned, planKey])
   const open = rows.filter((row) => row.evaluated_at === null)
   const recent = rows.filter((row) => row.evaluated_at !== null).slice(0, 3)
-  const planList = planned && plans?.ok ? plans.plans : []
-  const newestPlanId = planList[0]?.id ?? null
+  const planList = planned && plans?.result.ok ? plans.result.plans : []
+  const newest = planList[0]
+  const card = (plan: OptionPlanRow) => (
+    <OptionPlanCard
+      plan={plan}
+      compact={plan.id !== newest?.id}
+      accountMissing={accountMissing}
+      loadedAt={plans?.loadedAt ?? null}
+    />
+  )
   const planOf = (scenarioId: number) => {
     const plan = planList.find((item) => item.scenario_id === scenarioId)
-    return plan ? (
-      <OptionPlanCard
-        plan={plan}
-        compact={plan.id !== newestPlanId}
-        accountMissing={accountMissing}
-      />
-    ) : null
+    return plan ? card(plan) : null
   }
+  const shown = new Set([...open, ...recent].map((row) => row.id))
+  const orphan =
+    newest && !shown.has(newest.scenario_id) ? (
+      <>
+        <p className="muted" data-testid="option-plan-orphan">
+          Plán opce QQQ ke scénáři #{newest.scenario_id}, který tu není (smazaný, starší, nebo se
+          scénáře nenačetly):
+        </p>
+        {card(newest)}
+      </>
+    ) : null
   const planNote = planned ? (
-    plans !== null && !plans.ok ? (
+    plans !== null && !plans.result.ok ? (
       <p className="option-plan-error" role="alert" data-testid="option-plan-list-error">
-        Plány opce QQQ se nenačetly: {plans.error}
+        Plány opce QQQ se nenačetly: {plans.result.error}
       </p>
     ) : null
   ) : (
@@ -165,6 +186,7 @@ function ScenarioBlock({ symbol, planAlertKey }: { symbol: string; planAlertKey:
           nakresli na živém grafu (šipka/freehand) a ulož ji tlačítkem ✎ Scénář — po termínu se
           vyhodnotí sama.
         </p>
+        {orphan}
         {planNote}
       </>
     )
@@ -184,6 +206,7 @@ function ScenarioBlock({ symbol, planAlertKey }: { symbol: string; planAlertKey:
           {planOf(row.id)}
         </Fragment>
       ))}
+      {orphan}
       {planNote}
     </>
   )

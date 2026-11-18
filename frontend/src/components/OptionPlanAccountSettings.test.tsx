@@ -55,9 +55,9 @@ test('neplatná hodnota: hláška u pole a Uložit nejde', () => {
   expect(saveAll).not.toHaveBeenCalled()
 })
 
-test('Uložit pošle obě hodnoty: číslo a prázdné jako null', async () => {
+test('Uložit pošle obě změněné hodnoty: číslo a prázdné jako null', async () => {
   const saveAll = vi.fn(() => Promise.resolve())
-  render(<OptionPlanAccountSettings values={{}} saveAll={saveAll} />)
+  render(<OptionPlanAccountSettings values={{ [ACCOUNT]: 1111, [MAX_LOSS]: 22 }} saveAll={saveAll} />) // prettier-ignore
   fireEvent.change(input(ACCOUNT_LABEL), { target: { value: '2468' } })
   fireEvent.change(input(MAX_LOSS_LABEL), { target: { value: '' } })
   fireEvent.click(saveButton())
@@ -78,4 +78,22 @@ test('chyba serveru (422) je vidět a rozepsaná hodnota zůstane', async () => 
     await screen.findByText('Uložení selhalo: Uložení nastavení selhalo: HTTP 422'),
   ).toBeTruthy()
   expect(input(MAX_LOSS_LABEL).value).toBe('75')
+})
+
+test('Uložit pošle jen změněný klíč: nenačtené Settings nepřepíšou druhý na null', async () => {
+  const saveAll = vi.fn(() => Promise.resolve())
+  // Nenačtené Settings vypadají jako prázdné hodnoty (`useServerSettings` chybu polyká)
+  render(<OptionPlanAccountSettings values={{}} saveAll={saveAll} />)
+  fireEvent.change(input(MAX_LOSS_LABEL), { target: { value: '60' } })
+  fireEvent.click(saveButton())
+  await waitFor(() => expect(saveAll).toHaveBeenCalledTimes(1))
+  expect(saveAll).toHaveBeenCalledWith([[MAX_LOSS, 60]])
+})
+
+test('vrácení na uloženou hodnotu = nic ke změně, Uložit nejde', () => {
+  render(<OptionPlanAccountSettings values={{ [MAX_LOSS]: 60 }} saveAll={vi.fn()} />)
+  fireEvent.change(input(MAX_LOSS_LABEL), { target: { value: '61' } })
+  expect(saveButton().disabled).toBe(false)
+  fireEvent.change(input(MAX_LOSS_LABEL), { target: { value: '60' } })
+  expect(saveButton().disabled).toBe(true)
 })

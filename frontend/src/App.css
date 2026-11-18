@@ -3975,7 +3975,7 @@ tr.setup-after-settle td {
   color: var(--down);
 }
 .option-plan-warning {
-  color: #f5c542;
+  color: var(--warn);
 }
 .option-plan-over {
   padding: 1px 6px;

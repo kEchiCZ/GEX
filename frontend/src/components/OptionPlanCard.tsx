@@ -10,7 +10,12 @@ a nic nepočítá: R:R, P3, P4, ceny opce a třídu rozpočtu má engine.
 
 Vstup B hlavní plán nemá, je jen stínem v track recordu (K6 B). */
 import { useEffect, useState } from 'react'
-import { LEVEL_LABELS, LIVE_EVENT_LABELS, fetchOptionPlanImage } from '../api/optionPlans'
+import {
+  ACCOUNT_TIMING,
+  LEVEL_LABELS,
+  LIVE_EVENT_LABELS,
+  fetchOptionPlanImage,
+} from '../api/optionPlans'
 import type {
   OptionPlanEntry,
   OptionPlanExit,
@@ -83,8 +88,13 @@ const VERDICT_CLASSES: Record<string, string> = {
   neobchodovat: 'option-plan-stop',
 }
 
-function hhmm(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+/** Místní čas 24h; `h23` i v prohlížeči s 12h locale (vedle štítků „9:15 ET“ a PNG). */
+function hhmm(value: string | number): string {
+  return new Date(value).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  })
 }
 
 /** `2026-11-18` → `18. 11.` */
@@ -252,12 +262,14 @@ function PlanBody({ plan, main }: { plan: OptionPlanRow; main: OptionPlanMain })
   )
 }
 
-function LiveLine({ plan }: { plan: OptionPlanRow }) {
+/** `loadedAt` = čas načtení seznamu: bez pollingu musí být stáří osy vidět (výpadek WS). */
+function LiveLine({ plan, loadedAt }: { plan: OptionPlanRow; loadedAt: number | null }) {
   if (plan.result !== null || plan.effective.main === null) return null
+  // Chybí u API před F4d #1841 (frontend jde nasadit i bez nového API)
   const alerts = plan.live_alerts
   return (
     <p className="muted" title={OPTION_PLAN_TOOLTIPS.live} data-testid="option-plan-live">
-      Průběh živě:{' '}
+      Průběh živě{loadedAt === null ? '' : ` (stav k ${hhmm(loadedAt)})`}:{' '}
       {alerts === undefined
         ? 'zvonek a Telegram (API průběh zatím nevrací)'
         : alerts.length === 0
@@ -422,11 +434,14 @@ export function OptionPlanCard({
   plan,
   compact = false,
   accountMissing,
+  loadedAt = null,
 }: {
   plan: OptionPlanRow
   compact?: boolean
   /** null = Settings se nenačetly */
   accountMissing: boolean | null
+  /** Čas načtení seznamu plánů (ms) pro stáří živé osy */
+  loadedAt?: number | null
 }) {
   const main = plan.effective.main
   if (compact) {
@@ -446,7 +461,7 @@ export function OptionPlanCard({
       {accountMissing === true && (
         <p className="option-plan-warning" role="status" data-testid="option-plan-account-missing">
           ⚠ Účet plánu nenastaven (Settings → Plán opce QQQ — účet): plán dá „neobchodovat —
-          rozpočet nenastaven“. Plán čte hodnoty v 9:15 ET, živé upozornění a vyhodnocení aktuální.
+          rozpočet nenastaven“. {ACCOUNT_TIMING}
         </p>
       )}
       {accountMissing === null && (
@@ -461,7 +476,7 @@ export function OptionPlanCard({
           Bez opce: {noOptionReasons(plan)}
         </p>
       )}
-      <LiveLine plan={plan} />
+      <LiveLine plan={plan} loadedAt={loadedAt} />
       <ResultBlock plan={plan} />
       <PlanImage plan={plan} />
     </article>

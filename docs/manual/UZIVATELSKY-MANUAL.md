@@ -784,11 +784,12 @@ nepočítá, ukáže plán tak, jak ho uložil engine.
   tabulkou úroveň vstupu A, TP1 a TP2 s časy cesty, exit a text P5 (podmíněný příkaz v TWS).
   SL, cenu opce při SL, ztrátu při SL, P&L na TP1 / TP2 a R:R dá až spoušť (K12 A), ráno je
   karta neodhaduje. Vstup B hlavní plán nemá, je jen stínem v track recordu.
-- **Od spouště do vyhodnocení:** řádek *Průběh živě* s časy odeslaných přechodů (vstup A,
-  TP1, TP2, SL, stop na vstupu, exit, u posledního „konec“). Ceny, R:R a verdikt při spoušti
+- **Od spouště do vyhodnocení:** řádek *Průběh živě* (se „stav k HH:MM“ = čas načtení) s časy
+  odeslaných přechodů (vstup A, TP1, TP2, SL, stop na vstupu, exit, u posledního „konec“). Ceny, R:R a verdikt při spoušti
   nese zpráva ve zvonku a na Telegramu (kap. 14), karta je neopakuje. Seznam plánů se obnoví
   sám, když přijde alert plánu (vznik, přecenění, průběh, výsledek). Jinak se karta na
-  server neptá.
+  server neptá, proto je u osy čas načtení. Nejnovější plán, jehož scénář v kartě není
+  (smazaný, starší), se ukáže zvlášť s poznámkou.
 - **Po vyhodnocení** (~15 min po close): *Výsledek* (spuštěno, bez vstupu, mezera, bez opce
   a průběh), vstup a SL na podkladu. Po variantách cena při spoušti s P3 a P4 (zaplaceno, cena
   při SL, R:R, ztráta při SL, čerpání P4, P&L TP1 / TP2 z modelu), naměřený výstup v TP1,
@@ -797,8 +798,9 @@ nepočítá, ukáže plán tak, jak ho uložil engine.
 - **Graf plánu** (PNG ze serveru, snímek stavu plánu) se načte s kartou. Když se nenakreslí,
   karta ukáže důvod ze serveru, ne prázdný obrázek.
 - **Účet plánu nenastaven** (Settings → Plán opce QQQ — účet, kap. 13): žluté varování na
-  kartě. Plán bez obou hodnot dá variantám „neobchodovat — rozpočet nenastaven“. Plán čte
-  hodnoty při vzniku v 9:15 ET, živé upozornění a večerní vyhodnocení aktuální hodnotu.
+  kartě. Když chybí kterákoli z obou hodnot, plán dá variantám „neobchodovat — rozpočet
+  nenastaven“. Plán čte hodnoty při vzniku (9:15 ET, plán sestavený až v 9:31 ET v 9:31), živé
+  upozornění a večerní vyhodnocení aktuální hodnotu.
   „% účtu“ se zatím nikde nepočítá (#1842).
 - Selhané načtení plánů nebo Settings karta řekne výslovně („Plány opce QQQ se nenačetly:
   HTTP …“), nic nedosazuje.
@@ -1425,7 +1427,7 @@ které se přepne hned.
 | **Tastytrade** (v1.10) | Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, řádek **tastytrade** se stavovým tlačítkem a badgem zdroje (v1.16, #1108; obě větve běží záměrně souběžně — IBKR primární, tastytrade OI fill, tisky, extended expirace a záloha řetězu/spotu), trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží |
 | **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
 | **Trading** | **Traders mode** — přepínač trading vrstev (viz kap. 11e); **velikost účtu + riziko na obchod** pro kalkulačku pozice u setup karty. Vše jen v prohlížeči, na server neodchází |
-| **Plán opce QQQ — účet** (#1746) | Dva parametry plánu opce QQQ ze scénáře dne (ADR-0062 K2 A): **Velikost účtu ($)** a **Rozpočet na obchod — max. čerpání P4 ($ na kontrakt)**. Bez výchozí hodnoty, prázdné pole = nenastaveno a plán pak dá „neobchodovat — rozpočet nenastaven“. Platí kladné číslo (i s desetinnou čárkou), jinak pole ukáže chybu a Uložit nejde; chybu serveru sekce vypíše. Ukládá se tlačítkem **Uložit účet plánu** na server, hodnoty se nelogují. Plán je čte v 9:15 ET, živé upozornění a vyhodnocení aktuální |
+| **Plán opce QQQ — účet** (#1746) | Dva parametry plánu opce QQQ ze scénáře dne (ADR-0062 K2 A): **Velikost účtu ($)** a **Rozpočet na obchod — max. čerpání P4 ($ na kontrakt)**. Bez výchozí hodnoty, prázdné pole = nenastaveno a plán pak (chybí-li kterákoli) dá „neobchodovat — rozpočet nenastaven“. Platí kladné číslo (i s desetinnou čárkou), jinak pole ukáže chybu a Uložit nejde; chybu serveru sekce vypíše. Ukládá se tlačítkem **Uložit účet plánu** na server, jen změněné pole; hodnoty se nelogují. Plán je čte při vzniku (9:15 ET, plán sestavený až v 9:31 ET v 9:31), živé upozornění a vyhodnocení aktuální |
 | **Vzhled** | Téma **Dark/Light** (přepne se ihned), jazyk |
 | **Seance** | Historické pole (JSON) — markery seancí se nově generují **automaticky** z časů světových burz; checkbox Sessions v grafu |
 
