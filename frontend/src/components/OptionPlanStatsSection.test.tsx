@@ -77,9 +77,7 @@ function stats(overrides: Partial<OptionPlanStats>): OptionPlanStats {
 function mockFetch(body: unknown, status = 200) {
   vi.stubGlobal(
     'fetch',
-    vi.fn(() =>
-      Promise.resolve({ ok: status < 400, status, json: () => Promise.resolve(body) }),
-    ),
+    vi.fn(() => Promise.resolve({ ok: status < 400, status, json: () => Promise.resolve(body) })),
   )
 }
 
@@ -116,13 +114,17 @@ test('předběžné při n < 30: obchody, vyřazené P3 hypoteticky, jen nepráz
   mockFetch(
     stats({
       outside: 2,
-      main: section(4, { spuštěno: 3, 'bez vstupu': 1, mezera: 1 }, {
-        hlavní: {
-          trades: withBudget(trades, { 'v rozpočtu': trades }),
-          rejected_p3: withBudget(rejected, { 'nad rozpočtem': rejected }),
+      main: section(
+        4,
+        { spuštěno: 3, 'bez vstupu': 1, mezera: 1 },
+        {
+          hlavní: {
+            trades: withBudget(trades, { 'v rozpočtu': trades }),
+            rejected_p3: withBudget(rejected, { 'nad rozpočtem': rejected }),
+          },
+          záložní: { no_quote: 1 },
         },
-        záložní: { no_quote: 1 },
-      }),
+      ),
     }),
   )
   render(<OptionPlanStatsSection symbol="NQ" />)
@@ -166,7 +168,11 @@ test('plný stav n ≥ 30: platné', async () => {
   const trades = leaf(30, { TP2: 18, SL: 12 }, pnl(30, 600, 20, 18), pnl(30, 900, 30, 18), false)
   mockFetch(
     stats({
-      main: section(32, { spuštěno: 30, 'bez vstupu': 2 }, { hlavní: { trades: withBudget(trades) } }),
+      main: section(
+        32,
+        { spuštěno: 30, 'bez vstupu': 2 },
+        { hlavní: { trades: withBudget(trades) } },
+      ),
     }),
   )
   render(<OptionPlanStatsSection symbol="NQ" />)
@@ -186,9 +192,13 @@ test('stíny K10 B: samostatné řádky se štítkem stín, do hlavního plánu 
     stats({
       main: section(1, { spuštěno: 1 }, { hlavní: { trades: withBudget(mainTrades) } }),
       shadows: {
-        entry_b: section(4, { spuštěno: 4 }, {
-          hlavní: { trades: withBudget(shadowTrades, { nenastaven: shadowTrades }) },
-        }),
+        entry_b: section(
+          4,
+          { spuštěno: 4 },
+          {
+            hlavní: { trades: withBudget(shadowTrades, { nenastaven: shadowTrades }) },
+          },
+        ),
         wick_test: EMPTY_SECTION,
       },
     }),

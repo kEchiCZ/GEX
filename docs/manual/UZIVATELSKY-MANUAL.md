@@ -814,8 +814,8 @@ výsledek, takže večer přijde stejný průběh, jen s oběma nohami P&L.
   zvlášť a do výsledků hlavního plánu se nepočítají.
 
 **Track record** je ve **Stats → Plán opce — track record** (#1749), hned pod Scénáři dne
-a zvlášť od track recordu scénáře NQ. Počítá ho engine (`GET /option-plans/stats`), sekce
-čísla jen zobrazí. Počítá jen plány od první seance, kdy jsou nasazené opravy vstupů plánu
+a zvlášť od track recordu scénáře NQ. Čísla počítá čistá funkce enginu `track_record`, kterou
+API volá při čtení `GET /option-plans/stats`; sekce je jen zobrazí. Počítá jen plány od první seance, kdy jsou nasazené opravy vstupů plánu
 (#1774, #1653 + #1599 a #1610, Rozhodnuto 10. 11.). Dokud datum není, sekce řekne „Track
 record zatím nezačal“ a vypíše počet vyhodnocených plánů mimo track record. Plány se přesto
 vyhodnocují a zpráva ve zvonku končí větou „Do track recordu se nepočítá.“ Počítá se jen

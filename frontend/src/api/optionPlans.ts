@@ -1,7 +1,7 @@
 /** Plán opce QQQ ze scénáře dne NQ (ADR-0062): track record pro Stats (F5b #1749).
 
-Track record počítá engine (`compute/option_plan.track_record`), API ho jen přeposílá
-(`GET /option-plans/stats`). Frontend nic nesčítá ani nepřepočítává, jen zobrazuje bloky
+Track record počítá čistá funkce enginu `compute/option_plan.track_record`, kterou API volá
+při čtení `GET /option-plans/stats`. Frontend nic nesčítá ani nepřepočítává, jen zobrazuje bloky
 odpovědi: hlavní plán a stíny K10 B zvlášť, po variantách obchody, vyřazené P3 a třídy
 rozpočtu (Rozhodnuto 16. 11. v #1738). */
 import { API_BASE } from '../config'
@@ -57,8 +57,7 @@ export interface OptionPlanStats {
 }
 
 export type OptionPlanStatsResult =
-  | { ok: true; stats: OptionPlanStats }
-  | { ok: false; error: string }
+  { ok: true; stats: OptionPlanStats } | { ok: false; error: string }
 
 /** Track record plánu; chyba je výslovná (HTTP kód, síť, tvar odpovědi), ne prázdná tabulka. */
 export async function fetchOptionPlanStats(): Promise<OptionPlanStatsResult> {
@@ -69,13 +68,15 @@ export async function fetchOptionPlanStats(): Promise<OptionPlanStatsResult> {
     return { ok: false, error: `síť: ${err instanceof Error ? err.message : String(err)}` }
   }
   if (!response.ok) return { ok: false, error: `HTTP ${response.status}` }
-  let payload: Partial<OptionPlanStats>
+  let payload: Partial<OptionPlanStats> | null
   try {
-    payload = (await response.json()) as Partial<OptionPlanStats>
+    payload = (await response.json()) as Partial<OptionPlanStats> | null
   } catch {
     return { ok: false, error: 'odpověď není JSON' }
   }
   if (
+    payload === null ||
+    typeof payload !== 'object' ||
     typeof payload.outside !== 'number' ||
     typeof payload.rules_version !== 'number' ||
     payload.main?.variants === undefined ||
@@ -113,7 +114,8 @@ export const ROW_TOOLTIPS = {
   noQuote:
     'Bez kotace = v minutě spouště chyběl ask nebo IV:\n• mezera, ne odhad\n• mimo obchody i vyřazené P3',
   gap: 'Mezera = chybí 1m bar QQQ mezi US openem a rozhodnutím:\n• plán nešlo posoudit\n• do posouzených ani do obchodů nejde',
-  noOption: 'Bez opce = plán bez variant opce:\n• není co ocenit\n• do posouzených ani do obchodů nejde',
+  noOption:
+    'Bez opce = plán bez variant opce:\n• není co ocenit\n• do posouzených ani do obchodů nejde',
   shadow:
     'Stín (ADR-0062 K10 B) = táž pravidla s jinou spouští:\n• do track recordu hlavního plánu se nepočítá\n• živá upozornění nemá',
   pnlTp1:

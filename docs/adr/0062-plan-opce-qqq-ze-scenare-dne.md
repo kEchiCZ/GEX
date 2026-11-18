@@ -22,7 +22,8 @@
   na Telegram (K4 bod 14, vlastník „1. B, 2. A, 3. A, 4. A“, F4c #1745). **18. 11.:** track
   record ve Stats (F5b #1749) bez podílu kotací pásma 0DTE u stínu B (K4 bod 13, nález #1839).
 - **Datum:** 2026-11-02 (revize K4 2026-11-05, K4 bod 7 2026-11-09, P1, track record a K4 bod 9
-  2026-11-10, K4 bod 10 2026-11-11, K4 bod 11 2026-11-12, K4 body 13 a 14 2026-11-16)
+  2026-11-10, K4 bod 10 2026-11-11, K4 bod 11 2026-11-12, K4 body 13 a 14 2026-11-16, K4 bod 13
+  2026-11-18)
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
   #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
