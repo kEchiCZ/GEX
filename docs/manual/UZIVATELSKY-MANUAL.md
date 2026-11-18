@@ -813,11 +813,29 @@ výsledek, takže večer přijde stejný průběh, jen s oběma nohami P&L.
 - **Stíny** (vstup B a test úrovně knotem, K10 B) se vyhodnocují stejně, ale vedou se
   zvlášť a do výsledků hlavního plánu se nepočítají.
 
-**Track record** (`GET /option-plans/stats`, karta ve Stats přijde s F5b #1749) počítá
-jen plány od první seance, kdy jsou nasazené opravy vstupů plánu (#1774, #1653 + #1599
-a #1610, Rozhodnuto 10. 11.). Dokud datum není, je track record prázdný. Plány se přesto
+**Track record** je ve **Stats → Plán opce — track record** (#1749), hned pod Scénáři dne
+a zvlášť od track recordu scénáře NQ. Čísla počítá čistá funkce enginu `track_record`, kterou
+API volá při čtení `GET /option-plans/stats`; sekce je jen zobrazí. Počítá jen plány od první seance, kdy jsou nasazené opravy vstupů plánu
+(#1774, #1653 + #1599 a #1610, Rozhodnuto 10. 11.). Dokud datum není, sekce řekne „Track
+record zatím nezačal“ a vypíše počet vyhodnocených plánů mimo track record. Plány se přesto
 vyhodnocují a zpráva ve zvonku končí větou „Do track recordu se nepočítá.“ Počítá se jen
 aktuální verze pravidel plánu a pod 30 případů je každé číslo **předběžné**.
+
+Jak sekci číst:
+- **Symbol Stats:** plán vzniká jen ze scénáře NQ. Při zvoleném ES sekce řekne, že ze
+  scénáře ES plán nevzniká (výběr instrumentů je zadání #1790).
+- **Řádek stavů** nad každou částí: *posouzeno* (spuštěno + bez vstupu), pak *mimo
+  posouzení* **mezera** a **bez opce**. Ty se do posouzených ani do obchodů nepočítají.
+- **Řádky po variantách** (hlavní, záložní): **obchody** (spoušť prošla P3), pod nimi
+  **vyřazeno P3 — hypoteticky** (ztlumený, mimo součty obchodů) a **bez kotace**, jen když
+  nastala. Pod řádkem jsou jen neprázdné třídy rozpočtu (↳ v rozpočtu, nad rozpočtem,
+  rozpočet nenastaven).
+- **Sloupce:** n, průběh po vstupu (SL, TP1, TP2, TP1→vstup, TP1→exit, exit, cíl 1 za
+  vstupem; význam v tooltipu záhlaví), **$ výstup v TP1** a **$ držení do TP2** na
+  1 kontrakt jako Σ · ⌀ · zisk k/n (n = nohy s naměřeným bidem výstupu) a stav
+  *předběžné* / *platné*.
+- **Stíny** (vstup B, test knotem) mají stejnou strukturu včetně tříd rozpočtu, štítek
+  „stín“ a ztlumené řádky. Do hlavního plánu se nepočítají.
 
 ### Technická poznámka k ukotvení
 
@@ -1073,6 +1091,7 @@ v tu chvíli je i settle a přechod na další expiraci.
 | **Hit-raty bucketů** | Empirický model reakcí na zprávy: úspěšnost per kategorie × důležitost × překvapení, přepínač **okna reakce** (+5/+15/+30/+60 min) a **režimu** (vše / RiskOn / RiskOff / Neutral / gamma ±), progres ke gate |
 | **Výkon setupů** (v1.10) | **Sharpe ratio a equity křivka** simulace: denní ΣR přes všechny symboly watchlistu (jen aktuální mechanika detektoru), anualizovaný Sharpe celkem + za posledních 30 seancí, max drawdown, karta **Všechny setupy — 1 kontrakt** (čistě, hrubě, poplatky), **Účet 50k** (jen obchodovatelné) a **USD simulace** s exekucí micro kontrakty dle kalkulačky (Trading nastavení) včetně nákladů. Od v1.23 vše z celé historie, počítá server (#1319) — dřív jen posledních 200 setupů na symbol. Do 60 seancí varování o malém vzorku — potvrzení cíle Sharpe > 2 vyžaduje 400+ seancí |
 | **Setupy per režim** | Úspěšnost šablon T1–T7 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí (cíl vs. stop, timeouty mimo; celá historie aktuální mechaniky) |
+| **Plán opce — track record** (#1749) | Track record plánu opce QQQ ke scénáři dne NQ, zvlášť od scénáře: posouzené plány, mezera a bez opce, po variantách obchody, vyřazené P3 (hypoteticky) a třídy rozpočtu, průběh po vstupu a $ na kontrakt pro výstup v TP1 i držení do TP2; stíny vstup B a test knotem zvlášť. Při ES jen poznámka (plán ze scénáře ES nevzniká, #1790). Detail v kap. 10 „Plán opce QQQ — vyhodnocení a track record“ |
 | **Releasy — předem registrované hypotézy** (v1.22, #1296) | Živý stav hypotéz o reakci trhu na ohlášené releasy: **H1** teplejší jádro inflace → za 15 min níž (ES, NQ), **H3** po CPI je ES za 60 min výš (jen ES, do upozornění nejde), **M1** výchylka za 15 min nad běžným dnem u CPI/NFP/FOMC/PPI/PCE (ES, NQ). Sloupce: stav (ověřuje se šedá / ověřeno zelená / zamítnuto červená), živě k/n, 95% interval, další kontrolní bod a historie výzkumu (jen popisně). Počítají se jen releasy od 1. 10. 2026 a rozhoduje se jen při n = 10, 20 a 30: ověřeno = dolní mez intervalu nad 50 %, zamítnuto = horní mez pod 50 % nebo n = 30 bez ověření; kritéria se už nemění a rozhodnutí je konečné — pozdější oprava dat ho nezmění (tooltip nadpisu). U řádku rozbalíš posledních 10 releasů (✔/✘ a výnos či výchylka v bp). Když se data nenačtou, sekce ukáže chybu |
 | **Track record** | Mechanické equity křivky strategií (signály, setupy) + drawdown |
 | **Latence zdrojů** | Jak rychle který zdroj doručuje zprávy (medián, p90, podíl dávek) |

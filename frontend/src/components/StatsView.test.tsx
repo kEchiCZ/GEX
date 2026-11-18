@@ -330,3 +330,32 @@ test('verdikty a automatické scénáře přiznají verzi pravidel z API (#1588,
     'aktuální verze pravidel verdiktu (v3), ruční všechny',
   )
 })
+
+test('sekce Plán opce (#1749): u ES poznámka #1790, po přepnutí na NQ čte /option-plans/stats', async () => {
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(
+    <AppStateProvider socket={socket}>
+      <SymbolSwitch to="NQ" />
+      <StatsView />
+    </AppStateProvider>,
+  )
+  const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+  const planCalls = () =>
+    fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.includes('/option-plans/stats'))
+
+  expect((await screen.findByTestId('option-plan-stats-other-symbol')).textContent).toContain(
+    '#1790',
+  )
+  expect(planCalls()).toHaveLength(0)
+
+  fireEvent.click(screen.getByText('Přepnout na NQ'))
+  await waitFor(() => expect(planCalls()).toHaveLength(1))
+  // Mock vrací pro neznámou URL {} → výslovná chyba tvaru, ne nuly
+  expect((await screen.findByTestId('option-plan-stats-error')).textContent).toContain(
+    'neočekávaný tvar odpovědi',
+  )
+})

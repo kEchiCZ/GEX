@@ -2849,6 +2849,34 @@ tr.setup-after-settle td {
   color: var(--down);
 }
 
+/* Track record plánu opce QQQ (F5b #1749): stíny K10 B a vyřazené P3 ztlumené, ať se
+   nečtou jako výsledek obchodů; třídy rozpočtu odsazené pod svým řádkem */
+.option-plan-error {
+  color: var(--down);
+}
+
+.option-plan-stats-wrap {
+  overflow-x: auto;
+}
+
+.option-plan-stats tr.option-plan-part th {
+  padding-top: 10px;
+  color: var(--text);
+}
+
+.option-plan-stats tr.option-plan-rejected td {
+  opacity: 0.75;
+}
+
+.option-plan-stats tr.option-plan-shadow td,
+.option-plan-stats tr.option-plan-shadow th {
+  opacity: 0.6;
+}
+
+.option-plan-stats tr.option-plan-budget td:first-child {
+  padding-left: 22px;
+}
+
 .stats-legend {
   display: flex;
   gap: 16px;
