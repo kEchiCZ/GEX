@@ -1335,6 +1335,7 @@ def _variant_result(
             (bid - paid) * multiplier if bid is not None else None,
         )
 
+    exits: tuple[OptionExit | None, OptionExit | None]
     if decided:
         exits = (leave(events[1]), leave(events[-1])) if len(events) > 1 else (None, None)
     else:

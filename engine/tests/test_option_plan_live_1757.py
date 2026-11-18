@@ -15,19 +15,19 @@ from typing import Any
 
 import pytest
 from test_option_plan_eval_1748 import Harness
+from test_option_plan_golden_1741 import BARS as GOLDEN_BARS
+from test_option_plan_golden_1741 import _plan
 from test_option_plan_result_1748 import (
     DAY,
     EXIT,
     EXPIRY,
     GOLDEN,
-    GOLDEN_BARS,
     GOLDEN_EXPIRY,
     GOLDEN_QUOTES,
     OPEN,
     STRIKES,
     TEST_AND_ENTRY,
     Quote,
-    _plan,
     fives,
     flat,
     part,
@@ -58,7 +58,7 @@ from gexlens_engine.option_plan_live import (
     live_message,
     live_part,
 )
-from gexlens_engine.storage.parquet_store import OptionQuoteRow
+from gexlens_engine.storage.parquet_store import OptionQuoteRow, read_bars, read_option_quotes
 
 UTC = dt.UTC
 MINUTE = dt.timedelta(minutes=1)
@@ -468,7 +468,7 @@ def test_restart_po_vstupu_bez_duplicity(tmp_path: Path, monkeypatch: pytest.Mon
     again = minutes(watcher(h, clock), clock, DAY, _at(14, 40), _at(14, 46))
     assert [(until, payload["event"]) for until, payload in again] == [(_at(14, 45), "SL")]
     reads: list[dt.datetime] = []
-    real = live.read_bars
+    real = read_bars
 
     def counted(*args: Any) -> Any:
         reads.append(args[3])
@@ -528,7 +528,7 @@ def test_prace_jen_nad_dnem_planu(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     h.quotes(DAY, SL_PATH)
     bars_calls: list[tuple[Any, ...]] = []
     quote_calls: list[tuple[Any, ...]] = []
-    real_bars, real_quotes = live.read_bars, live.read_option_quotes
+    real_bars, real_quotes = read_bars, read_option_quotes
 
     def bars_spy(*args: Any) -> Any:
         bars_calls.append(args)
