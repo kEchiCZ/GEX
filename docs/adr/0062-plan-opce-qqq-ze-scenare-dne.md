@@ -620,7 +620,8 @@ Odvozeno pro F3b (#1757; pět voleb rozhodl vlastník v chatu 18. 11.: „1 A, 2
 - **Vyřazeno P3 (vlastník: 4b B).** Když P3 vyřadí všechny varianty, průběh se hlásí dál
   s označením „hypoteticky (vyřazeno P3)“ (16. 11. by to byly 2 zprávy navíc). Jinak se
   hlásí běžně, obě sady nikdy. Totéž platí, když se žádná varianta nevejde do rozpočtu nebo
-  rozpočet není nastaven, se štítkem „hypoteticky (neobchodovat)“ (odvozeno agentem z 4b B).
+  rozpočet není nastaven, se štítkem „hypoteticky (neobchodovat)“ (odvozeno agentem z 4b B, vlastník
+  potvrdil v chatu 18. 11.).
   Konečný stav `spuštěno — vyřazeno P3` z Návrhu epiky tím platí jen pro obchod, ne pro
   upozornění.
 
