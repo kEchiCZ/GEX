@@ -112,6 +112,7 @@ from gexlens_engine.mapstate import MapStateCollector
 from gexlens_engine.memwatch import MemoryWatch
 from gexlens_engine.option_plan_eval import OptionPlanCollector
 from gexlens_engine.option_plan_job import OptionPlanMaker, account_params
+from gexlens_engine.option_plan_live import OptionPlanLiveWatcher
 from gexlens_engine.paper import PaperBroker
 from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.provider import MarketDataProviderLike
@@ -1943,6 +1944,14 @@ async def main() -> None:
         account=option_plan_account,
         publisher=publisher,
     )
+    # Živý stav plánu (F3b #1757): po každé minutě odběru plánu (F1b) úloha na pozadí,
+    # přechody do zvonku a na Telegram; rozpočet P4 jen pro třídu varianty
+    option_plan_live = OptionPlanLiveWatcher(
+        repository=option_plans_repository,
+        derived_dir=settings.derived_dir,
+        account=option_plan_account,
+        publisher=publisher,
+    )
     try:
         # Restart po vzniku scénáře dne: plán bez opce s důvodem, jen do exitu seance
         await option_plan_maker.recover()
@@ -2260,6 +2269,7 @@ async def main() -> None:
             cache=tasty_cache,
             writer=writer,
             on_change=plan_wakeup.set,
+            on_minute=option_plan_live.on_minute,
         )
 
         def _tasty_event(event_type: str, values: list[object]) -> None:

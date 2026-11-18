@@ -857,6 +857,8 @@ ve vlákně.
   z `plan.repricing.plan` do 30 s po zápisu, tedy před prvním 5min close v 9:35. Plán z 9:15
   bez opce kontrakty nemá a odebírá se jen podklad, protože plán z 9:31 potřebuje bary od openu.
 - **Restart enginu** obnoví odběr z plánu dne v PG při prvním tiku.
+- **Živý stav plánu:** po každé minutě odběr zavolá `on_minute` hlídače `option_plan_live`
+  (F3b #1757, níž).
 - **Rozpočet:** účel `plan_quotes` (Quote + Greeks) z rezervy ad-hoc (kap. 2,
   `tasty/budget.py`). 2 kontrakty a podklad dávají 6 položek, pokrytí extended se nemění.
   `/status.tasty_symbol_breakdown.plan_quotes` je v okně 3 (u plánu bez opce 1, jen podklad),
@@ -978,6 +980,72 @@ Testy: `test_option_plan_result_1748.py` (golden 2. 11. se syntetickými kotacem
 `test_option_plan_eval_1748.py` (kolektor: settle, víkend a svátek, partice D−1, pondělí
 proti pátku, doběhnutí, idempotence, alert) a `test_option_plans_api.py`.
 
+**Živý stav plánu a upozornění** (`option_plan_live.OptionPlanLiveWatcher`, F3b #1757,
+ADR-0062 K5 B, Rozhodnuto 18. 11.). Po každé minutě, kterou odběr F1b zapíše, spočítá živý
+stav hlavního plánu táž čistá funkce jako F3. `evaluate_plan` s `now` = závěr zapsané minuty
+vidí jen bary, které před ním skončily, a mezery hledá do `now`. Přechody
+(`compute/option_plan.live_transitions`) jdou do zvonku a pod přepínačem „Plán opce QQQ“ na
+Telegram jako alert `option_plan_state` (symbol QQQ, `plan_id`, `scenario_id`, `event`), bez
+fotky.
+
+- **Spouštění:** `PlanQuoteRecorder` po zápisu minuty zavolá `on_minute(seance, závěr minuty)`,
+  i když se minuta nezapsala (pozdní vzorek = mezera). Hlídač pustí úlohu na pozadí. Když
+  předchozí ještě běží, minuta se přeskočí (INFO) a stav dožene další. PG i Parquet jdou ve
+  vlákně, takže tik odběru ani minutový cyklus NQ nečekají. Upozornění přijde asi 1 s po
+  závěru minuty a nezávisí na IBKR ani na pipeline NQ.
+- **Brány:** obchodní den (`is_trading_session`), US RTH od openu do settle a otevřený trh
+  (`is_market_closed`, AGENTS.md). Odběr minutu ohlásí jen ve dnech s plánem. Sleduje se jen
+  hlavní plán s opcí a úrovní vstupu A (`live_part`), stíny K10 B upozornění nemají. Čte se
+  partice barů QQQ od US openu a kotace seance. Rozpočet P4 ze Settings jen určí třídu
+  varianty.
+- **Přechody:** vstup (spoušť vstupu A), TP1, TP2, SL, stop na vstupu, exit, bez vstupu do exitu
+  a mezera. Konečné jsou TP2, SL, stop na vstupu, exit, bez vstupu, mezera, TP1 bez druhého cíle
+  a vstup za cílem 1. Po konečném přechodu se plán nesleduje.
+  - Chybějící 1m bar QQQ dá jedno upozornění „mezera“ a sledování končí, stejně jako F3 (4a A).
+    Restart enginu v RTH proto sledování dne ukončí.
+  - Verdikt varianty ve zprávě vstupu (`compute/option_plan.trigger_verdict`) jde podle P3, P4
+    a parametrů účtu stejně jako verdikt plánu (K2, K12 A). Nad rozpočtem nebo bez nastaveného
+    rozpočtu je to „neobchodovat — důvod“ i u varianty, která projde P3. Třída `budget` zůstává
+    pro track record F3.
+  - Když se žádná varianta neobchoduje, průběh se hlásí dál jako hypotetický (4b B): po
+    vyřazení P3 „hypoteticky (vyřazeno P3)“, z jiného důvodu „hypoteticky (neobchodovat)“.
+  - Za den nejvýš 3 zprávy (vstup, TP1, konec), nebo jedna (bez vstupu, mezera).
+- **Idempotence:** přechod se zapíše do `option_plans.live_alerts` před odesláním
+  (`claim_live_alert`: zámek řádku a kontrola v jedné transakci). Restart ani souběh ho nepošle
+  dvakrát, selhané odeslání se neopakuje (nejvýš jednou). Výsledek F3 po close je konečný stav
+  téže funkce.
+
+Log enginu:
+
+- INFO „Plán opce QQQ #N: přechod vstup (15:35 UTC), upozornění 1 s po závěru minuty“ (změřené
+  zpoždění) a „Živý stav plánu QQQ: předchozí kontrola běží — minuta HH:MM UTC se přeskočí“;
+- ERROR „Živý stav plánu QQQ v HH:MM UTC selhal“ s tracebackem (další minuta to zkusí znovu;
+  text zprávy se sestaví před zápisem přechodu, takže chyba textu přechod nespotřebuje) a „Odběr
+  plánu QQQ: živý stav plánu se nespustil“;
+- výpadek API při odeslání dá jen WARNING „Publish alerts do API selhal: …“ (`HttpPublisher`).
+  Přechod je už zapsaný a znovu se neposílá.
+
+Zprávy z golden 2. 11. mají časy v ET i v Praze, parametry účtu ani hodnotu rozpočtu nenesou:
+- „Plán QQQ #N · VSTUP A 10:35 ET (16:35 Praha) za 697,99, odmítnutí od flip 698,21, SL 699,66
+  (5min close). Hlavní put 687: ask 1,19, R:R z kotace 4,41 → obchodovat (v rozpočtu). Záložní
+  put 686: ask 1,02, R:R z kotace 4,48 → obchodovat (v rozpočtu). TP1 691,99, TP2 690,59, exit
+  15:45 ET. TWS: když QQQ ≥ 699,66 → prodat put 687.“
+- „Plán QQQ #N · TP1 691,99 v 12:31 ET (18:31 Praha). Hlavní put 687 bid 2,63 (+143 $/kontrakt),
+  záložní put 686 bid 2,30 (+128 $/kontrakt). SL posunut na vstup 697,99.“
+- „Plán QQQ #N · TP2 690,59 v 12:45 ET (18:45 Praha). … Plán končí.“
+
+Nadpis přechodu stojí hned za číslem plánu, protože dedup Telegramu porovnává prvních 80 znaků
+za 10 min.
+
+Ověření (read-only PG):
+`SELECT id, day, live_alerts FROM option_plans ORDER BY id DESC LIMIT 3;`.
+Rozdíl `sent_at` − `ts` je zpoždění upozornění.
+
+Testy:
+- `test_option_plan_live_1757.py`: golden 2. 11. po minutách, shoda s F3, stavy a texty, mezera,
+  chybějící kotace, P3 hypoteticky, restart, brány (víkend, svátek, denní pauza), práce dne;
+- `test_option_plans_store.py`: migrace `live_alerts`.
+
 **PNG plánu a záložní graf NQ** (`api/plan_chart.py`, `api/chart_render.py`, F4b #1744,
 ADR-0062 K1 A). Obrázek kreslí API; engine jen při startu migruje sloupec `option_plans.image_bytes` (`ensure_schema`, kap. 6). Závislost `matplotlib` má jen balík API
 (`api/pyproject.toml`), ve sdíleném image `gex-python` je i pro engine a news-engine, ty ji
@@ -1053,7 +1121,8 @@ ADR-0062 K4 bod 14). Rozsah rozhodl vlastník 16. 11. (#1738 Rozhodnuto,
   fotku nemá.
 - **Plán opce QQQ (2 A):** při `option_plan_created` vždy, při `option_plan_repriced` jen
   u plánu sestaveného celého v 9:31 (`plan.repricing.plan`, `push_photos.rebuilt_at_reprice`),
-  k `option_plan_result` ne (PNG stavu „vyhodnoceno“ zatím neukazuje průběh, #1822). PNG
+  k `option_plan_result` ne (PNG stavu „vyhodnoceno“ zatím neukazuje průběh, #1822), k živému
+  průběhu `option_plan_state` také ne (F3b #1757, Rozhodnuto 18. 11.: 3 A). PNG
   jde přes `option_plan_routes.PlanImages`, tutéž instanci jako `GET /option-plans/{id}/image`:
   nakreslí se jednou ke stavu, uloží se do `data/scenarios/QQQ/…` a `image_bytes`
   a endpoint ho pak čte z disku.
@@ -1126,7 +1195,7 @@ Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane č
 | `paper_accounts`, `paper_events`, `paper_orders`, `paper_order_changes` | Paper účet (#1187 fáze 1, ADR-0040): účet 1 (start 50 000 $ v jednotkách plného kontraktu, `halted` = kill switch), události (vklad/výběr/poznámka), ordery (side, qty, typ, entry/stop/cíl, status `working/open/closed/cancelled`, fill/exit ceny a čas, `exit_reason` stop/target/manual/settle/kill, `pnl_usd`, `fees_usd`, `r_multiple`, `risk_usd`, `context` JSON, `journal_entry_id`). Fily dělá engine per symbol po cyklu pipeline (`gexlens_engine.paper.PaperBroker`) proti 1min barům; `fees_usd` = kontrakty × poplatek podle instrumentu orderu (ES a NQ `fee_per_contract_usd`, MES a MNQ `fee_per_micro_contract_usd`) z platné verze parametrů setupů — novou verzi převezme za běhu spolu se `SetupEngine` (#1402; dřív jen při startu enginu); uzavřený obchod zapíše do `journal_entries`/`journal_trades` (typ `obchod`, tag `paper`). |
 | `setup_params` | Verzované prahy šablon setupů (#794 fáze 2, ADR-0033): append-only, poslední řádek platí; `created_by` (`engine` seed / `ui` / `script`), povinná `note`, `mechanics_version`, `params` JSON. Engine při prvním startu založí seed z `.env` + defaultů (od té chvíle **store přebíjí `.env`** klíče `GEXLENS_SETUP_*`), novou verzi přečte po NOTIFY nebo v k-tém cyklu. Setupy nesou `params_version` (NULL = před store). |
 | `adhoc_view` | Most UI → engine pro ad-hoc pohled (#521 C), viz kap. 12 |
-| `option_plans` | Plán opce QQQ ke scénáři dne NQ (ADR-0062 K2 A, #1742, kap. 5 „Plán opce QQQ ze scénáře dne“). Řádek vznikne jednou v 9:15 ET a JSON z 9:15 se zpětně nepřepisuje: `scenario_id` (unikátní, bez cizího klíče, protože scénář smí uživatel smazat), `day`, `created_at` (štítek minuty scénáře, u restartu čas startu), `rules_version`. `status` je `sestaven` (z ranního snímku, nebo celý z 9:31 — pak nese `plan.repricing.plan`), nebo `bez opce`. `verdict` je hlavní slovo verdiktu hlavního plánu (`čeká` / `neobchodovat`, K12 A), u plánu bez opce NULL. Sloupce popisují aktuální stav plánu (vlastník 11. 11., #1738), stav z 9:15 zůstává v JSON. Platný plán řádku je `plan.repricing.plan`, když existuje (pak je `plan.main` null), jinak `plan.main` a `plan.shadows` (ADR-0062 K4 bod 10). Vybírá ho jediná čistá funkce `storage/option_plans_store.effective_plan` (API #1743, vyhodnocení F3, obrázek F4b). JSON `plan` nese `slot`, `reasons`, `levels_nq` (úrovně scénáře), `chain` (zdroj, čas, spot, poměr a pokrytí obou expirací; `zero_dte.quoted_share` patří k P1 stínu B, Rozhodnuto 10. 11.), `main` (celý plán, `compute/option_plan.plan_to_json`) a `shadows` (`entry_b`, `wick_test`). Přecenění v 9:31 ET (#1769) přidá jednou klíč `repricing`: `slot`, `reasons` (proč se ceny nezapsaly, nebo proč plán zůstal bez opce), `chain` (snímek 9:31), `prices` (sady cen úplného plánu podle klíčů `main`, `entry_b`, `wick_test`: bid, ask, IV, delta, `quote_ts`, `at_targets`) a `plan` (celý plán z 9:31 u plánu bez opce z 9:15: `levels_nq`, `main`, `shadows`). `evaluated_at` a `result` zapíše jednou vyhodnocení po close (F3 #1748, kap. 5): `result` = `rules_version`, `main` a `shadows` (`entry_b`, `wick_test`), každá část se `status`, `reasons`, `entry`, `trigger_b`, `outcome`, `events` (druh, čas, cena QQQ), `bars` / `bars_expected` a `variants` (`kind`, `entry_quote`, `pricing` = P3 a P4 při spoušti se zaplacenou cenou z ask a modelem s IV kotace: `paid`, `at_stop`, `at_tp1`, `at_tp2`, `rr`, `rr_strict`, `loss_at_stop_usd`, `drawdown_usd`, `model_label`; `budget`, `exit_tp1` a `exit_hold` s naměřeným bid a `pnl_usd`, `gaps`); schéma se tím nemění. `image_path` a `image_bytes` zapisuje API s PNG plánu (F4b #1744, kap. 5): cesta `scenarios/QQQ/{den}/plan-{id}-{stav}.png` a velikost pro hlídání místa. Sloupec `image_bytes` přidá dopředná migrace v `ensure_schema` (`ALTER TABLE … ADD COLUMN`, výchozí 0), proto před nasazením F4b záloha PG. Tabulku zakládá engine při startu (`ensure_schema`), před prvním nasazením záloha PG. API ji čte (`GET /option-plans`, kap. 7) a zapisuje jen sloupce PNG; `ensure_schema` volá i API při prvním dotazu, kdyby startovalo před enginem |
+| `option_plans` | Plán opce QQQ ke scénáři dne NQ (ADR-0062 K2 A, #1742, kap. 5 „Plán opce QQQ ze scénáře dne“). Řádek vznikne jednou v 9:15 ET a JSON z 9:15 se zpětně nepřepisuje: `scenario_id` (unikátní, bez cizího klíče, protože scénář smí uživatel smazat), `day`, `created_at` (štítek minuty scénáře, u restartu čas startu), `rules_version`. `status` je `sestaven` (z ranního snímku, nebo celý z 9:31 — pak nese `plan.repricing.plan`), nebo `bez opce`. `verdict` je hlavní slovo verdiktu hlavního plánu (`čeká` / `neobchodovat`, K12 A), u plánu bez opce NULL. Sloupce popisují aktuální stav plánu (vlastník 11. 11., #1738), stav z 9:15 zůstává v JSON. Platný plán řádku je `plan.repricing.plan`, když existuje (pak je `plan.main` null), jinak `plan.main` a `plan.shadows` (ADR-0062 K4 bod 10). Vybírá ho jediná čistá funkce `storage/option_plans_store.effective_plan` (API #1743, vyhodnocení F3, obrázek F4b). JSON `plan` nese `slot`, `reasons`, `levels_nq` (úrovně scénáře), `chain` (zdroj, čas, spot, poměr a pokrytí obou expirací; `zero_dte.quoted_share` patří k P1 stínu B, Rozhodnuto 10. 11.), `main` (celý plán, `compute/option_plan.plan_to_json`) a `shadows` (`entry_b`, `wick_test`). Přecenění v 9:31 ET (#1769) přidá jednou klíč `repricing`: `slot`, `reasons` (proč se ceny nezapsaly, nebo proč plán zůstal bez opce), `chain` (snímek 9:31), `prices` (sady cen úplného plánu podle klíčů `main`, `entry_b`, `wick_test`: bid, ask, IV, delta, `quote_ts`, `at_targets`) a `plan` (celý plán z 9:31 u plánu bez opce z 9:15: `levels_nq`, `main`, `shadows`). `evaluated_at` a `result` zapíše jednou vyhodnocení po close (F3 #1748, kap. 5): `result` = `rules_version`, `main` a `shadows` (`entry_b`, `wick_test`), každá část se `status`, `reasons`, `entry`, `trigger_b`, `outcome`, `events` (druh, čas, cena QQQ), `bars` / `bars_expected` a `variants` (`kind`, `entry_quote`, `pricing` = P3 a P4 při spoušti se zaplacenou cenou z ask a modelem s IV kotace: `paid`, `at_stop`, `at_tp1`, `at_tp2`, `rr`, `rr_strict`, `loss_at_stop_usd`, `drawdown_usd`, `model_label`; `budget`, `exit_tp1` a `exit_hold` s naměřeným bid a `pnl_usd`, `gaps`); schéma se tím nemění. `image_path` a `image_bytes` zapisuje API s PNG plánu (F4b #1744, kap. 5): cesta `scenarios/QQQ/{den}/plan-{id}-{stav}.png` a velikost pro hlídání místa. Sloupec `image_bytes` přidá dopředná migrace v `ensure_schema` (`ALTER TABLE … ADD COLUMN`, výchozí 0), proto před nasazením F4b záloha PG. `live_alerts` (JSON, NULL = žádný) nese odeslané přechody živého stavu `[{event, ts, sent_at, final}]` (F3b #1757, `claim_live_alert`, kap. 5). Přidá ho táž dopředná migrace, proto před nasazením F3b záloha PG. API ho nevrací. Tabulku zakládá engine při startu (`ensure_schema`), před prvním nasazením záloha PG. API ji čte (`GET /option-plans`, kap. 7) a zapisuje jen sloupce PNG; `ensure_schema` volá i API při prvním dotazu, kdyby startovalo před enginem |
 | `watchlist`, `alerts`, `annotations`, `settings` | CRUD přes API |
 
 ## 7. API reference

@@ -46,6 +46,7 @@ PUBLISHED_KINDS = frozenset(
         "scenario_result",
         "option_plan_created",
         "option_plan_repriced",
+        "option_plan_state",
         "option_plan_result",
         "t6_candidate",
         "level_proximity",
@@ -98,13 +99,14 @@ SCRIPT_KINDS = frozenset({"vhdx_compact", "deploy_rollback"})
 def _legacy_category(kind: str) -> str:
     """Dřívější `category_of` (#1175) bez mrtvého `broker` — kotva pro „nic se nepřevrátí"."""
     # setup_stage (#1323, konec zkoušky v Knihovně) vznikl po #1175 — patří k setupům
-    # option_plan_* (#1742, #1769, #1748; přepínač F4c #1745) — plán opce QQQ ke scénáři dne
+    # option_plan_* (#1742, #1769, #1748, #1757; přepínač F4c #1745) — plán opce QQQ
     if kind in (
         "setup",
         "scenario_result",
         "scenario_created",
         "option_plan_created",
         "option_plan_repriced",
+        "option_plan_state",
         "option_plan_result",
         "risk_brake",
         "paper",
@@ -586,7 +588,7 @@ def _photo(**values: Any) -> Photo:
 
 
 def test_prepinac_planu_opce_qqq() -> None:
-    """Vlastník 16. 11. (#1738: 2 A): jeden přepínač pro vznik, přecenění i výsledek plánu."""
+    """Vlastník 16. 11. a 18. 11. (#1738: 2 A): jeden přepínač pro celý plán i živý průběh."""
     topic = KIND_TOPIC["option_plan_created"]
     assert (topic.key, topic.group, topic.category, topic.default) == (
         "option_plan",
@@ -594,7 +596,13 @@ def test_prepinac_planu_opce_qqq() -> None:
         "setup",
         True,
     )
-    assert topic.kinds == ("option_plan_created", "option_plan_repriced", "option_plan_result")
+    assert topic.kinds == (
+        "option_plan_created",
+        "option_plan_repriced",
+        "option_plan_state",
+        "option_plan_result",
+    )
+    assert KIND_TOPIC["option_plan_state"] is topic
     assert not topic.ignores_quiet_hours
     assert "• SL a R:R až při spoušti vstupu A" in topic.help_lines()
 

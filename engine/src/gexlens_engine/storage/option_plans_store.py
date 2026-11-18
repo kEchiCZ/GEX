@@ -4,7 +4,8 @@ Jeden plán na auto-scénář (`scenario_id` je unikátní). Plán je point-in-t
 jednou v 9:15 ET (K4 C) a JSON z 9:15 se zpětně nepřepisuje. Přecenění v 9:31 ET (F2c #1769)
 přidá do JSON `plan` jen klíč `repricing`, jednou. `evaluated_at` a `result` doplní jednou
 vyhodnocení po close (F3 #1748, `record_result`), `image_path` a `image_bytes` PNG plánu
-(API, F4b #1744). Track record (`stats`) počítá `compute/option_plan.track_record`. Detail
+(API, F4b #1744), `live_alerts` odeslané přechody živého stavu (F3b #1757,
+`claim_live_alert`). Track record (`stats`) počítá `compute/option_plan.track_record`. Detail
 plánu nese JSON `plan` (`compute/option_plan.plan_to_json`), sloupce slouží jen dotazům
 a vazbám a popisují aktuální stav plánu (vlastník 11. 11., #1738):
 - `status`: `sestaven` (z ranního snímku, nebo celý z 9:31 — pak `plan.repricing.plan`),
@@ -71,6 +72,14 @@ option_plans_table = Table(
     Column("image_path", String(255), nullable=True),
     # Velikost PNG plánu: hlídání místa sčítá z DB, ne procházením stromu (#1173, #1105)
     Column("image_bytes", Integer, nullable=False, default=0),
+    # Odeslané přechody živého stavu (F3b #1757): [{event, ts, sent_at, final}], NULL = žádný
+    Column("live_alerts", JSON, nullable=True),
+)
+
+#: Sloupce přidané po založení tabulky (F2b #1742): název → definice pro `ALTER TABLE`
+_ADDED_COLUMNS = (
+    ("image_bytes", "INTEGER NOT NULL DEFAULT 0"),  # F4b #1744
+    ("live_alerts", "JSON"),  # F3b #1757
 )
 
 
@@ -88,6 +97,7 @@ class OptionPlanRow:
     result: dict[str, Any] | None
     image_path: str | None
     image_bytes: int = 0
+    live_alerts: tuple[dict[str, Any], ...] = ()
 
 
 def effective_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -139,6 +149,7 @@ def _row(mapping: Any) -> OptionPlanRow:
         result=mapping["result"],
         image_path=mapping["image_path"],
         image_bytes=int(mapping["image_bytes"] or 0),
+        live_alerts=tuple(dict(item) for item in mapping["live_alerts"] or ()),
     )
 
 
@@ -148,17 +159,17 @@ class OptionPlansRepository:
 
     def ensure_schema(self) -> None:
         option_plans_metadata.create_all(self._engine)
-        # Dopředná migrace (F4b #1744): velikost PNG k řádkům z F2b. Start enginu a první
-        # dotaz API ji můžou spustit souběžně, proto na PG `IF NOT EXISTS` (vzor fa_calibration)
+        # Dopředná migrace (F4b #1744, F3b #1757): sloupce k řádkům starší verze. Start enginu
+        # a první dotaz API ji můžou spustit souběžně, proto na PG `IF NOT EXISTS`
+        # (vzor fa_calibration)
         columns = {column["name"] for column in inspect(self._engine).get_columns("option_plans")}
-        if "image_bytes" not in columns:
-            guard = " IF NOT EXISTS" if self._engine.dialect.name == "postgresql" else ""
+        guard = " IF NOT EXISTS" if self._engine.dialect.name == "postgresql" else ""
+        for name, definition in _ADDED_COLUMNS:
+            if name in columns:
+                continue
             with self._engine.begin() as conn:
                 conn.execute(
-                    text(
-                        f"ALTER TABLE option_plans ADD COLUMN{guard} image_bytes INTEGER "
-                        "NOT NULL DEFAULT 0"
-                    )
+                    text(f"ALTER TABLE option_plans ADD COLUMN{guard} {name} {definition}")
                 )
 
     def create(
@@ -302,6 +313,36 @@ class OptionPlansRepository:
         if self.get(plan_id) is None:
             raise LookupError(f"option_plans #{plan_id} neexistuje")
         return False
+
+    def claim_live_alert(self, plan_id: int, alert: Mapping[str, Any]) -> bool:
+        """Přechod živého stavu (F3b #1757) jednou za plán; False = přechod už je zapsaný.
+
+        `alert` nese `event` (klíč přechodu, za seanci nejvýš jednou), `ts`, `sent_at`
+        a `final`. Zápis jde před odesláním upozornění: restart enginu ani souběh nepošle
+        přechod dvakrát, selhané odeslání se neopakuje (nejvýš jednou). Řádek se v transakci
+        zamkne (PG `FOR UPDATE`), kontrola a zápis jsou atomické. Plán ani výsledek se nemění.
+        """
+        with self._engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(option_plans_table.c.live_alerts)
+                    .where(option_plans_table.c.id == plan_id)
+                    .with_for_update()
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                raise LookupError(f"option_plans #{plan_id} neexistuje")
+            sent = list(row["live_alerts"] or [])
+            if any(item["event"] == alert["event"] for item in sent):
+                return False
+            conn.execute(
+                update(option_plans_table)
+                .where(option_plans_table.c.id == plan_id)
+                .values(live_alerts=[*sent, dict(alert)])
+            )
+        return True
 
     def stats(self, *, rules_version: int, since: dt.date | None) -> dict[str, Any]:
         """Track record vyhodnocených plánů verze pravidel `rules_version` (F3 #1748).
