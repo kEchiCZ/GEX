@@ -17,6 +17,7 @@ import { requestReconnect, useServerSettings } from '../api/settings'
 import { PushSettings } from './PushSettings'
 import { ScenarioSettings } from './ScenarioSettings'
 import { RiskSettings } from './RiskSettings'
+import { OptionPlanAccountSettings } from './OptionPlanAccountSettings'
 import type { ReconnectTarget } from '../api/settings'
 import {
   providerButtonLabel,
@@ -758,6 +759,9 @@ Sběr dat se na ~1–2 minuty přeruší.`)
 
       {/* Risk management (#1185): sizing, brzdy a brána = verze parametrů setupů */}
       <RiskSettings />
+
+      {/* Plán opce QQQ (ADR-0062 K2 A, #1746): dva klíče účtu, bez výchozí hodnoty */}
+      <OptionPlanAccountSettings values={values} saveAll={saveAll} />
 
       {/* Push na Telegram (#1175, #1284): hlavní vypínač + přepínače per druh =
           serverová nastavení, ukládají se hned přes saveAll (chyba se ukáže) */}

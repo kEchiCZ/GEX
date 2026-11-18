@@ -20,6 +20,7 @@ function appState(overrides: Record<string, unknown> = {}) {
     setJournalDraft,
     setView,
     status: { engine: 'online' },
+    alerts: [],
     ...overrides,
   }
 }
@@ -91,6 +92,12 @@ function mockApis(overrides: Record<string, unknown> = {}) {
       const byTf = (overrides['candles'] ?? {}) as Record<string, unknown[]>
       return body({ candles: byTf[tf] ?? [] })
     }
+    if (path.includes('/option-plans/') && path.endsWith('/image'))
+      return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve(new Blob(['png'])) }) // prettier-ignore
+    if (path.includes('/option-plans'))
+      return body(overrides['optionPlans'] ?? { option_plans: [] }, (overrides['optionPlansStatus'] as number) ?? 200) // prettier-ignore
+    if (path.includes('/scenarios')) return body(overrides['scenarios'] ?? { scenarios: [] })
+    if (path.includes('/settings')) return body(overrides['settings'] ?? { settings: {} })
     return body({})
   })
 }
@@ -422,4 +429,79 @@ test('Včera a overnight (#1596): v pondělí páteční settle = RTH close, gap
     .map((url) => new URL(url, 'http://x').searchParams.get('date'))
   expect(barDates).not.toContain('2026-10-18')
   expect(barDates).not.toContain('2026-10-17')
+})
+
+/** Scénář NQ dne a plán opce QQQ z něj (F5a #1746); čísla syntetická. */
+const NQ_SCENARIO = {
+  id: 70,
+  symbol: 'NQ',
+  day: '2026-11-18',
+  created_at: '2026-11-18T14:15:00+00:00',
+  deadline: '2026-11-18',
+  deadline_ts: '2026-11-18T21:00:00+00:00',
+  entry: 20000,
+  targets: [19950, 19900],
+  path: [],
+  annotation_id: null,
+  note: null,
+  has_image: false,
+  image_bytes: 0,
+  evaluated_at: null,
+  result: null,
+  source: 'auto',
+  rationale: null,
+}
+
+function nqPlan(id: number, scenarioId: number) {
+  return {
+    id,
+    scenario_id: scenarioId,
+    day: '2026-11-18',
+    created_at: '2026-11-18T14:15:00+00:00',
+    rules_version: 1,
+    status: 'bez opce',
+    verdict: null,
+    evaluated_at: null,
+    result: null,
+    has_image: false,
+    live_alerts: [],
+    effective: { slot: '9:15', main: null, prices: null, reasons: ['řetěz chybí'], repricing_reasons: null }, // prettier-ignore
+  }
+}
+
+test('NQ: plán opce pod scénářem, ze kterého vznikl; nenastavený účet = varování', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:plan')
+  URL.revokeObjectURL = vi.fn()
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  mockApis({
+    scenarios: { scenarios: [NQ_SCENARIO] },
+    optionPlans: { option_plans: [nqPlan(9, 70), nqPlan(8, 69)] },
+    settings: { settings: { option_plan_account_usd: 1000, option_plan_max_loss_usd: null } },
+  })
+  render(<BriefingView />)
+  const card = await screen.findByTestId('option-plan-9')
+  expect(card.previousElementSibling?.getAttribute('data-testid')).toBe('scenario-70')
+  expect(card.textContent).toContain('Bez opce: řetěz chybí')
+  expect(await screen.findByTestId('option-plan-account-missing')).toBeTruthy()
+  expect(screen.queryByTestId('option-plan-8')).toBeNull() // scénář 69 v Briefingu není
+  expect(screen.queryByTestId('option-plan-other-symbol')).toBeNull()
+})
+
+test('NQ: chyba seznamu plánů je výslovná, žádná náhradní data', async () => {
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  mockApis({ scenarios: { scenarios: [NQ_SCENARIO] }, optionPlansStatus: 503 })
+  render(<BriefingView />)
+  expect((await screen.findByTestId('option-plan-list-error')).textContent).toBe(
+    'Plány opce QQQ se nenačetly: HTTP 503',
+  )
+  expect(screen.queryByTestId('option-plan-9')).toBeNull()
+})
+
+test('ES: plán opce ze scénáře ES nevzniká (#1790), seznam plánů se nečte', async () => {
+  mockApis({ scenarios: { scenarios: [{ ...NQ_SCENARIO, symbol: 'ES' }] } })
+  render(<BriefingView />)
+  expect((await screen.findByTestId('option-plan-other-symbol')).textContent).toContain('#1790')
+  const urls = fetchMock.mock.calls.map((call) => String(call[0]))
+  expect(urls.some((url) => url.includes('/option-plans'))).toBe(false)
+  expect(urls.some((url) => url.includes('/settings'))).toBe(false)
 })

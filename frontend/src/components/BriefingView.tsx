@@ -5,7 +5,7 @@ včerejší settle + overnight rozsah, dnešní odpad gammy (#576), Forward GEX
 útesy týdne (#519), makro kalendář dne, ΔOI přes noc, stav sentimentu per
 instrument. Tlačítko ☀ předvyplní ranní plán deníku (#673).
 */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   VOL_BUCKET_LABELS,
@@ -43,6 +43,15 @@ import { categoryGlyph, fetchSentimentState, fetchUpcoming, isHighImpact } from 
 import type { NewsRow, SentimentStateInfo } from '../api/news'
 import { useGexForward } from '../hooks/useGexForward'
 import { fetchScenarios } from '../api/scenarios'
+import {
+  OPTION_PLAN_ACCOUNT_KEY,
+  OPTION_PLAN_MAX_LOSS_KEY,
+  OPTION_PLAN_SCENARIO_SYMBOL,
+  accountValueSet,
+  fetchOptionPlans,
+} from '../api/optionPlans'
+import type { OptionPlansResult } from '../api/optionPlans'
+import { fetchSettings } from '../api/settings'
 import { contractCode, nextContractCode, shortDate } from '../api/calendar'
 import type { ExpiryPhase } from '../api/calendar'
 import { API_BASE } from '../config'
@@ -55,6 +64,7 @@ import { MorningChecklistCard } from './MorningChecklistCard'
 import { CoachWatchCard } from './CoachWatchCard'
 import type { Scenario } from '../api/scenarios'
 import { ScenarioCard } from './ScenarioCard'
+import { OptionPlanCard } from './OptionPlanCard'
 import { TIMEFRAME_LABELS, assessTrends, directionLabel } from '../instrument/trend'
 import type { Candle, TimeframeKey } from '../instrument/trend'
 import { previousTradingSessionIso, sessionDateIso } from '../instrument/tz'
@@ -84,38 +94,97 @@ function formatSigned(value: number): string {
   return `${rounded >= 0 ? '+' : ''}${rounded.toLocaleString('cs-CZ')}`
 }
 
-/** Scénáře dne (#1173): otevřené (termín ≥ dnes) a poslední vyhodnocené. */
-function ScenarioBlock({ symbol }: { symbol: string }) {
+/** Scénáře dne (#1173): otevřené (termín ≥ dnes) a poslední vyhodnocené.
+
+Pod scénářem NQ je plán opce QQQ, který z něj vznikl (F5a #1746, Rozhodnuto 18. 11. Q2 A):
+nejnovější plán celý, starší jedním řádkem. Seznam se načte znovu jen po alertu plánu přes WS
+(`planAlertKey`), polling ne (Q1 B). Ze scénáře ES plán nevzniká (#1790). */
+function ScenarioBlock({ symbol, planAlertKey }: { symbol: string; planAlertKey: string }) {
   const [rows, setRows] = useState<Scenario[]>([])
+  const planned = symbol === OPTION_PLAN_SCENARIO_SYMBOL
+  const [plans, setPlans] = useState<OptionPlansResult | null>(null)
+  // null = Settings se nenačetly; hodnoty účtu se jen testují, nezobrazují
+  const [accountMissing, setAccountMissing] = useState<boolean | null>(false)
   useEffect(() => {
     let cancelled = false
     void fetchScenarios(symbol, 20).then((items) => {
       if (!cancelled) setRows(items)
     })
+    if (planned) {
+      void fetchOptionPlans(10).then((result) => {
+        if (!cancelled) setPlans(result)
+      })
+      fetchSettings()
+        .then((values) => {
+          if (cancelled) return
+          const set =
+            accountValueSet(values[OPTION_PLAN_ACCOUNT_KEY]) &&
+            accountValueSet(values[OPTION_PLAN_MAX_LOSS_KEY])
+          setAccountMissing(!set)
+        })
+        .catch(() => {
+          if (!cancelled) setAccountMissing(null)
+        })
+    }
     return () => {
       cancelled = true
     }
-  }, [symbol])
+  }, [symbol, planned, planAlertKey])
   const open = rows.filter((row) => row.evaluated_at === null)
   const recent = rows.filter((row) => row.evaluated_at !== null).slice(0, 3)
+  const planList = planned && plans?.ok ? plans.plans : []
+  const newestPlanId = planList[0]?.id ?? null
+  const planOf = (scenarioId: number) => {
+    const plan = planList.find((item) => item.scenario_id === scenarioId)
+    return plan ? (
+      <OptionPlanCard
+        plan={plan}
+        compact={plan.id !== newestPlanId}
+        accountMissing={accountMissing}
+      />
+    ) : null
+  }
+  const planNote = planned ? (
+    plans !== null && !plans.ok ? (
+      <p className="option-plan-error" role="alert" data-testid="option-plan-list-error">
+        Plány opce QQQ se nenačetly: {plans.error}
+      </p>
+    ) : null
+  ) : (
+    <p className="muted" data-testid="option-plan-other-symbol">
+      Plán opce QQQ vzniká zatím jen ze scénáře dne {OPTION_PLAN_SCENARIO_SYMBOL}. Ze scénáře{' '}
+      {symbol} nevzniká, výběr instrumentů je zadání #1790.
+    </p>
+  )
   if (open.length === 0 && recent.length === 0) {
     return (
-      <p className="muted">
-        Žádný scénář. Automatický scénář dne vzniká z verdiktu dne ~15 minut před US openem (jen při
-        verdiktu long/short a existující úrovni obratu ve směru; #1173). Vlastní cestu nakresli na
-        živém grafu (šipka/freehand) a ulož ji tlačítkem ✎ Scénář — po termínu se vyhodnotí sama.
-      </p>
+      <>
+        <p className="muted">
+          Žádný scénář. Automatický scénář dne vzniká z verdiktu dne ~15 minut před US openem (jen
+          při verdiktu long/short a existující úrovni obratu ve směru; #1173). Vlastní cestu
+          nakresli na živém grafu (šipka/freehand) a ulož ji tlačítkem ✎ Scénář — po termínu se
+          vyhodnotí sama.
+        </p>
+        {planNote}
+      </>
     )
   }
   return (
     <>
       {open.map((row) => (
-        <ScenarioCard key={row.id} scenario={row} />
+        <Fragment key={row.id}>
+          <ScenarioCard scenario={row} />
+          {planOf(row.id)}
+        </Fragment>
       ))}
       {recent.length > 0 && <p className="muted">Poslední vyhodnocené</p>}
       {recent.map((row) => (
-        <ScenarioCard key={row.id} scenario={row} compact />
+        <Fragment key={row.id}>
+          <ScenarioCard scenario={row} compact />
+          {planOf(row.id)}
+        </Fragment>
       ))}
+      {planNote}
     </>
   )
 }
@@ -226,7 +295,13 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 }
 
 export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedMove | null }) {
-  const { symbol, selectedExpiry, setJournalDraft, setView, regimeInfo, status } = useAppState()
+  const { symbol, selectedExpiry, setJournalDraft, setView, regimeInfo, status, alerts } =
+    useAppState()
+  // Poslední alert plánu opce (vznik, přecenění, živý přechod, výsledek) obnoví kartu plánu
+  const planAlertKey = useMemo(() => {
+    const last = [...alerts].reverse().find((alert) => alert.kind.startsWith('option_plan_'))
+    return last ? `${last.kind}|${last.ts}|${last.event ?? ''}` : ''
+  }, [alerts])
   const dateIso = sessionDateIso()
   // „Včerejšek“ = předchozí obchodní seance z kalendáře (#1596)
   const prevDate = useMemo(() => previousTradingSessionIso(dateIso), [dateIso])
@@ -460,7 +535,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
         {/* Expirační týden (#1189): jen v roll/OPEX/SOQ/post fázi */}
         <ExpiryWeekCard />
         <Card title="Scénář dne">
-          <ScenarioBlock symbol={symbol} />
+          <ScenarioBlock symbol={symbol} planAlertKey={planAlertKey} />
         </Card>
         <section className="briefing-card briefing-summary" aria-label="Shrnutí dne">
           <h3>Shrnutí dne</h3>
