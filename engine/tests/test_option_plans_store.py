@@ -224,7 +224,7 @@ def test_platny_plan_sestaveny_v_9_31_a_plan_bez_opce() -> None:
 
 
 def test_migrace_image_bytes_k_radkum_z_f2b_a_snimky_planu(tmp_path: Path) -> None:
-    """F4b #1744: tabulka z F2b bez `image_bytes` dostane sloupec, starý řádek má 0."""
+    """F4b #1744 a F3b #1757: tabulka z F2b dostane `image_bytes` (0) a `live_alerts` (NULL)."""
     db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'old.sqlite'}")
     with db.begin() as conn:
         conn.execute(
@@ -244,9 +244,10 @@ def test_migrace_image_bytes_k_radkum_z_f2b_a_snimky_planu(tmp_path: Path) -> No
     plans = OptionPlansRepository(db)
     plans.ensure_schema()
     plans.ensure_schema()  # druhý start: migrace se neopakuje
-    assert "image_bytes" in {column["name"] for column in inspect(db).get_columns("option_plans")}
+    columns = {column["name"] for column in inspect(db).get_columns("option_plans")}
+    assert {"image_bytes", "live_alerts"} <= columns
     old = plans.get_for_scenario(29)
-    assert old is not None and (old.image_path, old.image_bytes) == (None, 0)
+    assert old is not None and (old.image_path, old.image_bytes, old.live_alerts) == (None, 0, ())
     assert plans.disk_usage() == {"bytes": 0, "images": 0}
 
     plans.set_image(old.id, "scenarios/QQQ/2026-11-02/plan-1-0915.png", 4321)

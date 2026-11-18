@@ -311,6 +311,8 @@ def test_scenar_es_a_vysledky_bez_fotky(env: Env) -> None:
     assert env.photos(_alert("scenario_result", symbol="NQ", scenario_id=es)) is None
     plan_id = _plan(env, FULL_PLAN)
     assert env.photos(_alert("option_plan_result", symbol="QQQ", plan_id=plan_id)) is None
+    # Živý průběh plánu (F3b #1757, Rozhodnuto 18. 11.: 3 A) jde jen textem
+    assert env.photos(_alert("option_plan_state", symbol="QQQ", plan_id=plan_id)) is None
     assert env.time.slept == 0 and env.renders == []
 
 
