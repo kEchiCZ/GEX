@@ -604,6 +604,11 @@ Odvozeno pro F3b (#1757; pět voleb rozhodl vlastník v chatu 18. 11.: „1 A, 2
   `option_plans.live_alerts` (JSON `[{event, ts, sent_at, final}]`, záloha PG před nasazením).
   Přechod se zapíše atomicky před odesláním, takže restart nic nepošle dvakrát a selhané
   odeslání se neopakuje. Odmítnuto B (klíč v JSON plánu): JSON z 9:15 se nepřepisuje (K2 A).
+  *Doplněno 18. 11. (F4d #1841, vlastník v chatu k F5a #1746 Q1: „B pokud to nezatíží aplikaci
+  nebo ji to nezpomalí“):* `GET /option-plans` a `GET /option-plans/{id}` sloupec přepošlou beze
+  změny, karta plánu v Briefingu z něj ukáže osu přechodů s časy. Ceny a R:R nese jen text
+  zprávy, API nic nepočítá. Dotaz PG se nemění (řádek se čte celý). Odmítnuto C (živý stav
+  s cenami počítaný při čtení): každé otevření Briefingu by četlo bary a kotace.
 - **Druh alertu (vlastník: A).** Jeden druh `option_plan_state` s přechodem v poli `event`
   (vstup, TP1, TP2, SL, stop na vstupu, exit, bez vstupu, mezera). Patří pod přepínač „Plán opce
   QQQ“ (bod 14), registrace v API jde ve stejném PR. Odmítnuto B (druh na přechod).
