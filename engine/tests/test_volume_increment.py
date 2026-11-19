@@ -221,3 +221,37 @@ def test_restart_a_skok_zpet_diru_nedaji() -> None:
     assert not volumes.cycle(at("12:09"))  # start procesu: štítek bez předchůdce
     assert not volumes.cycle(at("12:10"))
     assert not volumes.cycle(at("12:08"))  # srovnání hodin zpět
+
+
+# ── Neměřený objem po startu procesu (#1835) ───────────────────────────
+
+
+def test_start_neznamy_objem_jen_zalozi_stav_pak_1602_a_1774() -> None:
+    """ES 17. 11. po startu 18:13:11: čerstvý ticker nese objem NaN, adaptér dá None.
+
+    Kontrakt bez objemu v prvním cyklu po startu jen čeká, první měřený
+    kumulativ založí stav. Za ním platí beze změny pokles a návrat (#1602)
+    i kotva po časové díře (#1774).
+    """
+    day = dt.date(2026, 11, 17)
+    values = {
+        "18:13": None,  # start: tick objemu ještě nedorazil
+        "18:14": 4392.0,  # první měřený kumulativ jen založí stav
+        "18:15": 4400.0,
+        "18:16": 4390.0,  # pokles feedu (#1602)
+        "18:17": 4400.0,  # návrat k maximu
+        "18:18": 4405.0,
+        # 18:19 vypadla (#1774): první sweep po díře nese objem z cache
+        "18:20": 4405.0,
+        "18:21": 4420.0,  # první čerstvý objem kotvu přeroste, jen založí stav
+        "18:22": 4425.0,
+    }
+    cycles = [(at(t, day), {"C": v}) for t, v in values.items()]
+    assert labelled(cycles, day)["C"] == [None, 8.0, 0.0, 0.0, 5.0, None, None, 5.0]
+
+
+def test_nula_misto_neznameho_objemu_je_duchovy_prirustek() -> None:
+    """Proč adaptér nesmí NaN převést na 0,0: nula je pak reference a kumulativ přírůstek."""
+    day = dt.date(2026, 11, 17)
+    cycles = [(at("18:13", day), {"C": 0.0}), (at("18:14", day), {"C": 4392.0})]
+    assert labelled(cycles, day)["C"] == [None, 4392.0]

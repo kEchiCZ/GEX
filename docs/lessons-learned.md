@@ -383,6 +383,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-11-18 — neměřený objem IBKR jako 0,0 dal po restartu duchový přírůstek (#1835).** Adaptér
+  převáděl `ticker.volume` NaN na 0,0. Čerstvý ticker ib_async nese NaN, dokud nedorazí tick objemu,
+  a to se stává jen při první subskripci kontraktu po startu procesu. `SessionVolumes` pak vzal 0 jako
+  referenci a další sweep započetl celý denní kumulativ: ES 17. 11. 18:15 `printvol` 38 129 místo
+  +1 085. Oprava v `SessionVolumes` (restart jako časová díra) by léčila symptom a každému kontraktu
+  by po startu vzala ještě jednu minutu přírůstku.
+  → „Neměřeno“ je `None`, ne nula, už v adaptéru. Výchozí NaN knihovny nikdy nepřevádět na číslo. Když
+  se nula objeví jen v určitém stavu procesu (po startu), hledat příčinu ve zdroji hodnoty, ne v konzumentu.
 - **2026-11-17 — dedup klíč s dnem zahodil druhý release téže řady v jeden den (#1298).** `dedup_hash`
   = titulek + den platil i pro kalendář FF, takže dohánějící NFP 16. 12. 2025 13:29 a aktuální 13:30
   (stejně PPI, Core PCE, JOLTS po shutdownu, ADP Weekly každý týden) skončily na `ON CONFLICT DO

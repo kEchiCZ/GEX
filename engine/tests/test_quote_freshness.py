@@ -111,6 +111,49 @@ async def test_cerstvy_tick_kotaci_pusti() -> None:
 
 
 @pytest.mark.asyncio
+async def test_objem_bez_ticku_je_nemereny_ne_nula() -> None:
+    """#1835: čerstvý ticker (start procesu) nese NaN objem, dokud tick nedorazí.
+
+    17. 11. 18:13 tak první sweep po startu zapsal 0,0 u 38 kontraktů ES, nula
+    se stala referencí přírůstku a návrat kumulativu v 18:15 dal duchových
+    37 728 kontraktů v `printvol`. Neměřený objem je None (QuoteSnapshot).
+    """
+    ib = _FakeIB(_contract())
+    ib.ticker.volume = math.nan
+    streamer = IbQuoteStreamer(cast(IB, ib))
+
+    async def tws() -> None:
+        await asyncio.sleep(0.3)
+        ib.deliver_tick()
+
+    task = asyncio.create_task(tws())
+    result = await streamer.fetch_quote(SPEC, timeout_s=2.0)
+    await task
+    assert isinstance(result, QuoteSnapshot)
+    assert result.volume is None
+    assert result.bid == 10.0  # zbytek kotace projde jako dřív
+
+
+@pytest.mark.asyncio
+async def test_castecna_kotace_s_nemerenym_objemem() -> None:
+    """#1835 i u #547 fallbacku: NaN objem je None, ne nula."""
+    ib = _FakeIB(_contract())
+    ib.ticker.modelGreeks = None
+    ib.ticker.volume = math.nan
+    streamer = IbQuoteStreamer(cast(IB, ib))
+
+    async def tws() -> None:
+        await asyncio.sleep(0.3)
+        ib.deliver_tick()
+
+    task = asyncio.create_task(tws())
+    result = await streamer.fetch_quote(SPEC, timeout_s=2.0)
+    await task
+    assert isinstance(result, PartialQuote)
+    assert result.volume is None
+
+
+@pytest.mark.asyncio
 async def test_castecna_kotace_jen_kdyz_je_cerstva() -> None:
     """#547 fallback (bid/ask bez greeks) platí jen pro čerstvé hodnoty."""
     ib = _FakeIB(_contract())
