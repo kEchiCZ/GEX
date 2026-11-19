@@ -1333,7 +1333,7 @@ Pravidla:
 
 - **Python** (~160): jednotkové + golden (GEX, levels, heatmap módy, walls, CumΔ, profil), mock-based integrační (scheduler, hot zóna, runtime), PG integrační (v CI přes service kontejner), **e2e smoke** — deterministický referenční den přes celou pipeline engine→storage→API proti golden hodnotám.
 - **Frontend** (~58): jednotkové (geometrie, barvy, contours, slice), komponentové (jsdom + testing-library, PointerEvent polyfill), Arrow round-trip loaderu, **e2e render smoke** (App nad /replay balíkem), vizuální regresní snapshoty renderu.
-- **CI** (GitHub Actions, na každý PR): python job (ruff, mypy strict, pytest + PostgreSQL service), python-arm64 job (celá sada pytest na `ubuntu-24.04-arm` pro server Oracle A1, #1798 — golden testy výpočtů a nativní wheely na aarch64), frontend job (eslint, prettier, vitest, build). Povinné checky ruleset `main` jsou `python`, `frontend`, `security`; `scripts/merge-when-green.sh` merguje jen po zelených **všech** checkách commitu, tedy i `python-arm64`. Výkonnostní testy s tvrdým limitem běží jen lokálně (`CI` env skip).
+- **CI** (GitHub Actions, na každý PR): python job (ruff, mypy strict, pytest + PostgreSQL service), python-arm64 job (celá sada pytest na `ubuntu-24.04-arm` pro server Oracle A1, #1798 — golden testy výpočtů a nativní wheely na aarch64), frontend job (eslint, prettier, vitest, build). Povinné checky ruleset `main` jsou `python`, `python-arm64` (od 19. 11. 2026, vlastník v #1094), `frontend`, `security`; `scripts/merge-when-green.sh` navíc čeká na zelené **všechny** checky commitu. Výkonnostní testy s tvrdým limitem běží jen lokálně (`CI` env skip).
 
 ### Bezpečnostní kontroly v CI
 
