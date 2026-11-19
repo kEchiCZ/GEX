@@ -10,8 +10,10 @@
 # jen podle digestu. Job `manifest` pak oba digesty spojí do jednoho indexu
 # pod stávajícími tagy `latest` a `sha-<7>` — `docker compose pull` si na
 # každém stroji vezme svou architekturu sám a deploy skript ani návrat pinem
-# tagu se nemění. Selže-li jedna architektura, nový tag nevznikne vůbec:
-# oba stroje tak běží vždy na stejné revizi.
+# tagu se nemění. Selže-li jedna architektura image, nový tag toho image
+# nevznikne: oba stroje tak běží vždy na stejné revizi. Image se tagují
+# navzájem nezávisle jako před #1798 — rozbitý build frontendu nezablokuje
+# nasazení enginu.
 #
 # Bezpečnost: repo je veřejné → Actions minuty (i arm64 runnery) a veřejné
 # balíčky GHCR jsou zdarma. Do image jde jen to, co Dockerfile explicitně
@@ -161,8 +163,12 @@ jobs:
   manifest:
     name: manifest ${{ matrix.image }}
     needs: build
+    # I po pádu jiného buildu: každý image se rozhoduje jen podle svých dvou
+    # digestů (kontrola počtu níž), pád gex-frontend arm64 neblokuje gex-python
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         image: [gex-python, gex-frontend]
     steps:
@@ -196,19 +202,17 @@ jobs:
           if [ "$n" -ne 2 ]; then
             echo "::error::Čekám dva digesty (amd64 a arm64), je jich $n"; exit 1
           fi
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf "$IMAGE@sha256:%s " *)
-      # Kontrola výsledku z registru, ne z lokálního stavu: index tagu `sha-<7>`
-      # musí obsahovat obě architektury
-      - name: kontrola architektur
-        env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.image }}
-        run: |
-          ref="$IMAGE:sha-${GITHUB_SHA::7}"
-          docker buildx imagetools inspect "$ref"
-          platforms=$(docker buildx imagetools inspect --raw "$ref" \
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          sources=$(printf "$IMAGE@sha256:%s " *)
+          # Nejdřív nanečisto: tag vznikne, jen když výsledný index má obě
+          # architektury (záznamy provenance mají platformu unknown/unknown)
+          platforms=$(docker buildx imagetools create --dry-run $tags $sources \
             | jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' | sort -u)
           echo "$platforms"
-          grep -qx 'linux/amd64' <<< "$platforms"
-          grep -qx 'linux/arm64' <<< "$platforms"
+          for p in linux/amd64 linux/arm64; do
+            grep -qx "$p" <<< "$platforms" || { echo "::error::Index bez $p"; exit 1; }
+          done
+          docker buildx imagetools create $tags $sources
+      # Výsledek z registru do logu (Platform: linux/amd64, linux/arm64)
+      - name: index v registru
+        run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.image }}:sha-${GITHUB_SHA::7}"
