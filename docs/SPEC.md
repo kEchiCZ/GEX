@@ -16,11 +16,11 @@
 
 | # | Rozhodnutí |
 |---|---|
-| R1 | Žádná MVP zjednodušení — všechny moduly ve finální podobě |
+| R1 | Žádná MVP zjednodušení — všechny moduly ve finální podobě — *dočasná výjimka jen pro server Oracle do zaplacení subskripce druhého IBKR username: bez denního objemu a zpráv IBKR, konec po #1856, viz ADR-0063 bod 8* |
 | R2 | Cum Δ s **plnou klasifikací agresora**: tok i čistý objem **jen ze strany agresora od burzy** (dxFeed `TimeAndSale`) pro aktivní i sekundární řetěz; objem bez tisku se stranou jde mimo tok, výpadek tastytrade větve = viditelná mezera, ne odhad — *revize ADR-0057 (16. 10. 2026; midpoint test zrušen, verdikt #1018); předtím ADR-0032 (3.–4. 9. 2026) s midpoint fallbackem, původně IBKR tick-by-tick hot zóna ATM ±15* |
 | R3 | Retence intraday dat a tick dat: **14 dní** (denní Parquet partice, noční purge job) — *okno prodlouženo na 90 dní, viz ADR-0022* |
 | R4 | **Výjimka: EOD snapshot Open Interest se archivuje bez časového limitu** (řádově KB/den, nenahraditelná data) |
-| R5 | Datový zdroj výhradně IBKR (účet existuje); žádné placené externí feedy — *rozšířeno na brokerské účty s daty zdarma, primární zdroj zůstává IBKR, viz ADR-0025* |
+| R5 | Datový zdroj výhradně IBKR (účet existuje); žádné placené externí feedy — *rozšířeno na brokerské účty s daty zdarma, primární zdroj zůstává IBKR, viz ADR-0025; dočasně na serveru Oracle do zaplacení subskripce druhého username data z tasty, konec po #1856, viz ADR-0063 bod 8* |
 | R6 | Stack: Python 3.12 + ib_async (data engine), FastAPI + WebSocket (API), PostgreSQL (metadata + OI archiv), Parquet (snapshoty), React + TypeScript (frontend), canvas/WebGL heatmapa |
 
 ---

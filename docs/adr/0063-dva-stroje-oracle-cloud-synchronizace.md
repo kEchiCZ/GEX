@@ -26,7 +26,7 @@ plně nahraditelný a návrat k dnešnímu provozu kdykoli.
 Tvrdá data (19. 11. 2026):
 - **Oracle Always Free:** `VM.Standard.A1.Flex` 1 500 OCPU h + 9 000 GB h měsíčně, což pro
   Always Free tenancy odpovídá **2 OCPU / 12 GB**; 200 GB block storage včetně boot volume;
-  10 TB odchozích dat měsíčně. Instanci Oracle smí převzít jako **nečinnou**, když za 7 dní
+  10 TB odchozích dat měsíčně. Instanci Oracle smí zastavit (reclaim) jako **nečinnou**, když za 7 dní
   platí současně: CPU p95 < 20 %, síť < 20 % a u A1 paměť < 20 % (dokumentace Oracle
   „Always Free Resources“, ověřeno 19. 11.).
 - **Zátěž:** aktivní stack 5,3 GB RAM (9. 9., `docker stats`) ≈ 44 % z 12 GB; v prohlížení
@@ -91,12 +91,15 @@ takže PC se po nasazení chová jako dnes; server dostane roli prohlížení u�
 
 ### 4. Synchronizace = záloha + obnova
 Synchronizace stojí na téže záloze, kterou stroj dělá každou noc (restic):
-1. snímek **teď** na zdroji: celá DB (`pg_dump`) a `data/` bez dopočitatelných `ticks/`, `logs/`
-   a bez `local/` (bod 3), manifest se sha256 (obsah zálohy #1799);
+1. snímek **teď** na zdroji: celá DB (`pg_dump`) a `data/` bez `logs/` a bez `local/` (bod 3),
+   manifest se sha256 (obsah zálohy #1799);
 2. přenos jen rozdílu (deduplikace restic);
 3. obnova na cíli s **výměnou DB**: nová DB vedle běžící, ověření, přejmenování; předchozí DB
    zůstává jako pojistná a nemaže se bez dumpu v repu s tagem `pred-obnovou` (#1800).
-   `data/` se jen přepíše změněnými soubory, nic se nemaže.
+   `data/` se přepíše změněnými soubory. Soubor, který ve snímku zdroje chybí (zdroj ho
+   přesunul, např. do `quarantine/`), se na cíli **nemaže, ale přesune** do
+   `quarantine/sync-<datum>/` a vypíše ve výsledku synchronizace. Jinak by se přesunutá
+   podezřelá partice na cíli vrátila do UI (odvozeno 19. 11. po ověřovateli, #1800, #1851).
 
 Kanálem je **repozitář restic na serveru** (sftp v tailnetu), takže synchronizace nezávisí
 na úložišti záloh PC (bod 7):
@@ -134,7 +137,10 @@ Stroj; požadavek do 1 min provede úloha hostitele PC, protože kontejnery nema
 4. cíl aktivní: naváže denní stav (#1849), naběhne přes tasty a na IBKR přejde po přihlášení;
 5. ověření (`/instance`, první minuta zapsaná na cíli).
 
-Mezera v datech **≤ 4 min** (cíl ~2–4 min). Chyba v kterémkoli kroku = zdroj se vrací ke
+Mezera v datech **≤ 4 min** (cíl ~2–4 min). Dorovnání (krok 3) proto bere jen partice dnešní
+seance (obě UTC partice, #1002) a DB, ne průchod celého `data/`: ten by na bind mountu Docker
+Desktop (~20 ms na soubor, AGENTS.md) trval minuty. Jak výběr udělat (restic na hostiteli,
+nebo seznam cest), změří a rozhodne #1808. Chyba v kterémkoli kroku = zdroj se vrací ke
 sběru, cíl zůstává v prohlížení. Přepíná se **jen z PC ručně** (Rozhodnuto 19. 11.).
 Přepnutí v pauze Globexu nebo o víkendu je doporučení, ne blokace; minuty mezery se
 nedokreslují (ADR-0024 bod 2).
@@ -164,8 +170,10 @@ Noční restic snapshot dělá **jen aktivní stroj**, služba `ops` je stejná 
 - **Aktivní server** → zálohuje do svého repa; PC v 7:00 (nejelo-li, hned po zapnutí)
   zkopíruje snapshoty do repa na T7, je-li připojený. Server pošle Telegram, když je kopie
   starší než 72 h (#1805).
-- Časy jsou pevné (Rozhodnuto 19. 11., varianta A): záloha 23:15, kopie 7:00; bez průběžných
-  kontrol, přeskočené se nedohánějí, upozornění po 72 h.
+- Časy jsou pevné v pásmu Europe/Prague (Rozhodnuto 19. 11., varianta A): záloha 23:15,
+  kopie 7:00. Bez průběžných kontrol; přeskočená záloha 23:15 se během dne nedohání, kopie
+  7:00 proběhne po zapnutí PC, nejelo-li v 7:00; upozornění po 72 h. V týdnech posunu letního
+  času padne 23:15 do otevřeného trhu, dnešní partice doplní další noc (#1804).
 - **Ručně:** Settings → Úplná záloha → jeden `.tar` s `RESTORE.md` a manifestem, místo vybírá
   vlastník (#1799, #1801). Cloud až dojde místo (#1811).
 
@@ -185,9 +193,13 @@ Noční restic snapshot dělá **jen aktivní stroj**, služba `ops` je stejná 
   přihlášení na serveru by odhlásilo PC i mobil (ADMIN-MANUAL kap. 13.3).
 - **Do zaplacení subskripce druhého username IBKR market data serveru nedodá:** engine žádá
   jen živá data, bez subskripce přijde 354 a zpožděná data engine odmítá (10167). Market data
-  převezme tasty fallbackem (křížová kontrola, spot; ADMIN-MANUAL kap. 11), jen se zapnutým
-  tasty. Discovery řetězu přes IBKR bez subskripce ověří F6 krok A (#1803); bez ní platí cache
-  discovery ≤ 14 dní a jen do rollu.
+  má převzít tasty fallbackem (křížová kontrola, spot; ADMIN-MANUAL kap. 11), jen se zapnutým
+  tasty; že k převzetí dojde i při spojení `Connected` bez dat, ověří F6 krok A (#1803). Tam se
+  ověří i discovery řetězu přes IBKR bez subskripce; bez ní platí cache discovery ≤ 14 dní
+  a jen do rollu.
+- Se zapnutým IBKR bez subskripce bude detektor shluku 354 (#417) hlásit každou seanci a řetěz
+  poběží přes `chain_fallback`. Kdyby to F6 krok A potvrdilo, nechá se do zaplacení IBKR na
+  serveru vypnuté přepínačem níže.
 - **Dočasná odchylka od R5** (IBKR primární zdroj, ADR-0025) **a od úplnosti dat R1** (bez
   kumulativního denního objemu a zpráv IBKR) **jen na serveru** v roli aktivní. Konec:
   vlastník zaplatí subskripci druhého username a #1856 přeměří bránu s IBKR. Do té doby
@@ -202,6 +214,7 @@ Noční restic snapshot dělá **jen aktivní stroj**, služba `ops` je stejná 
 | **A druhý username (zvoleno 19. 11.)** | PC ani mobil se serverem neruší; souběh relací | do zaplacení subskripce server bez dat IBKR (dočasná odchylka R5/R1) |
 | B týž username s tlačítkem „Znovu připojit“ | data IBKR hned | každé přihlášení serveru shodí PC nebo mobil; vlastník přepíná ručně |
 | C server trvale bez IBKR | nic se neplatí | trvalá odchylka od R5 a R1 na serveru |
+| D přijímat zpožděná data IBKR (typ 3) do zaplacení | data IBKR hned a zdarma | zpožděné hodnoty by se v téže minutě míchaly s živými z tasty a heatmapa by ukazovala minulost jako přítomnost (point-in-time); engine zpožděná data dnes odmítá a musel by nést zpoždění v každém bodě → **nedoporučeno** |
 
 ### 9. Přístup jen v tailnetu (odchylka od SPEC kap. 8)
 Tailscale na serveru, PC i mobilu. UI obou strojů je dostupné jen v tailnetu přes
@@ -236,7 +249,10 @@ beze změny. Veřejná IP s 80/443 a Let's Encrypt ani Cloudflare Access nevznik
 - **Týdenní IB Key na serveru:** plný login **neděle 22:30** (TZ Europe/Prague,
   `TWS_COLD_RESTART`); nepotvrzený push → ještě 2 pokusy po ~10 min (**nejvýš 3 pushe**), pak
   Gateway stojí a server jede přes tasty. Po otevření trhu Telegram a tlačítko „Přihlásit IBKR
-  na serveru“ (#1850). Denní restart bez hesla `AUTO_RESTART_TIME` 23:05 beze změny.
+  na serveru“ (#1850). Denní restart bez hesla zůstává **vždy v pauze Globexu**: dnešní
+  `AUTO_RESTART_TIME` 23:05 Europe/Prague padne v týdnech posunu letního času do otevřeného
+  trhu, proto ho #1850 převede do pásma America/Chicago (16:05 CT). Nedělní plný login zůstává
+  22:30 Europe/Prague.
 
   | Varianta | + | − |
   |---|---|---|
@@ -246,6 +262,12 @@ beze změny. Veřejná IP s 80/443 a Let's Encrypt ani Cloudflare Access nevznik
 - **Brána F6 na tasty** (#1803): v RTH sweep ≤ 90 s, 0 přetažených minut, CPU p95 a RAM
   ≤ 85 %. Zátěž s IBKR přeměří #1856 po zaplacení subskripce. Nesplnění = varianty pro
   vlastníka: plán B netcup x86 se stejnými skripty, placené OCPU, menší zátěž.
+
+  | Varianta | + | − |
+  |---|---|---|
+  | **A brána na tasty teď, IBKR po zaplacení (zvoleno 19. 11.)** | server a migrace (#1809) nečekají na platbu | zátěž IBKR na 2 OCPU změří až #1856; do té doby server sbírá degradovaně (bod 8) |
+  | B brána až s IBKR po zaplacení | měří plnou zátěž najednou | server i migrace stojí do platby |
+  | C bez brány | nic se neměří | přetažené minuty by se ukázaly až v provozu (ztracená minuta ES i NQ) |
 - **Místo:** boot volume 200 GB; server drží data i repo (~2× data), růst ~5,2 GB/měs. →
   měření komprese parquetů #1855 (dodatek ADR-0029) před první zálohou do repa (#1804),
   hlídka místa #1567.
@@ -257,9 +279,10 @@ beze změny. Veřejná IP s 80/443 a Let's Encrypt ani Cloudflare Access nevznik
   nový zapisovatel bez dotazu na roli je chyba.
 - Data se nemažou: výměna DB nechává pojistnou DB, `data/` se jen přepisuje změněnými
   soubory, data serveru z doby testů se před migrací odloží stranou (#1809).
-- Pravidla AGENTS.md platí na obou strojích beze změny: 100 lines, obchodní den
-  (`is_trading_session`), hlídače dat jen při otevřeném trhu a nově jen na aktivním stroji,
-  tajemství jen jménem.
+- Pravidla AGENTS.md platí na obou strojích: 100 lines, obchodní den (`is_trading_session`),
+  hlídače dat jen při otevřeném trhu, tajemství jen jménem. Nové jsou dvě věci: hlídače dat
+  běží jen na aktivním stroji (bod 2) a server do zaplacení subskripce dočasně odchyluje od
+  R5 a R1 (bod 8).
 - Rozhodnutí, která přijdou s měřením: komprese (#1855), brána F6 (#1803), přeměření s IBKR
   (#1856). Každé jde jako dodatek tohoto ADR nebo ADR-0029.
 

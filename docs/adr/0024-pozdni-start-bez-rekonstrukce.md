@@ -96,7 +96,8 @@ akumulátory.
 **Co už platí (z dnešních partic):** po restartu uprostřed seance se navazují kumulativní net
 objem z partice `netflow` (#232, #1460), CumΔ z partice `flow` (#638, `restore_cum`) a CVD
 podkladu (#1603). Čte se jen poslední měřený řádek **téže seance** (okno `session_bounds`,
-i předchozí UTC partice, #1002) a zdroje běžícího trackeru (ADR-0057 bod 8).
+i předchozí UTC partice, #1002); u CumΔ a net objemu navíc jen řádky zdroje běžícího trackeru
+(ADR-0057 bod 8), CVD podkladu bere poslední úroveň bez filtru zdroje.
 
 **Co se doplní (#1849):**
 
@@ -110,8 +111,9 @@ i předchozí UTC partice, #1002) a zdroje běžícího trackeru (ADR-0057 bod 8
    daty a cíl přepnutí ho má po dorovnání. Vyžaduje obsluhu SIGTERM a `stop_grace_period`
    enginu.
 3. **Navázání při startu:** checkpoint téže seance → akumulátory pokračují od uložených hodnot;
-   bez checkpointu (pád) se odvodí z dnešních partic, co jde. Checkpoint jiné seance se
-   nenačte nikdy (reset na hranici seance, #638, #1460, #1603).
+   bez checkpointu (pád) se odvodí z dnešních partic, co jde. Položky, které nejde odvodit,
+   začnou od nuly **viditelně** s popiskem „od HH:MM“ (bod 3), ne potichu. Checkpoint jiné
+   seance se nenačte nikdy (reset na hranici seance, #638, #1460, #1603).
 
 **Co se nenavazuje a proč:**
 
