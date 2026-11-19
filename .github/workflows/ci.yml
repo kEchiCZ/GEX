@@ -36,6 +36,40 @@ jobs:
       - run: uv run mypy engine/src engine/tests api/src api/tests news-engine/src news-engine/tests
       - run: uv run pytest
 
+  # Celá sada na arm64 (#1798, ADR-0063): server Oracle A1 je aarch64 (Ampere).
+  # Hlídá golden testy výpočtů (numpy/pyarrow na aarch64 sčítají jinými SIMD
+  # instrukcemi — riziko jiného zaokrouhlení float) a nativní wheely z uv.lock.
+  # Lint a mypy na architektuře nezávisí, běží jen v jobu `python`; jeho název
+  # se nemění, ruleset `main` ho vyžaduje jako povinný check. PG služba
+  # odpovídá jobu `python`.
+  python-arm64:
+    runs-on: ubuntu-24.04-arm
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gexlens
+          POSTGRES_PASSWORD: gexlens
+          POSTGRES_DB: gexlens
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gexlens"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      GEXLENS_TEST_PG_DSN: postgresql+psycopg://gexlens:gexlens@localhost:5432/gexlens
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-packages
+      # Pojistka, že runner je opravdu aarch64 (štítek runneru se může změnit)
+      - run: uv run python -c "import platform, sys; m = platform.machine(); print(m); sys.exit(m != 'aarch64')"
+      - run: uv run pytest
+
   frontend:
     runs-on: ubuntu-latest
     # 19. 8. visel job 3× přes 15 minut na stahování Chromia (#782) — bez

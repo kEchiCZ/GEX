@@ -4,11 +4,21 @@
 # postaví python image (engine/api/news-engine sdílejí jeden Dockerfile) a
 # frontend image a pushnou do GHCR; doma pak stačí `docker compose pull`.
 #
-# Bezpečnost: repo je veřejné → Actions minuty i veřejné balíčky GHCR jsou
-# zdarma. Do image jde jen to, co Dockerfile explicitně kopíruje (zdrojáky,
-# lockfile) — `.env*`, `data/` a `docs/` vylučuje `.dockerignore` a Dockerfile
-# nemá žádný `COPY . .`. Push používá automatický GITHUB_TOKEN workflow
-# (jen `packages: write` pro tento repozitář), žádný osobní token.
+# Dvě architektury (#1798, ADR-0063): PC je amd64, server Oracle A1 arm64.
+# Každý image se staví nativně na runneru své architektury (bez QEMU, které
+# by uv sync a vite zpomalilo řádově), před pushem projde smoke a pushne se
+# jen podle digestu. Job `manifest` pak oba digesty spojí do jednoho indexu
+# pod stávajícími tagy `latest` a `sha-<7>` — `docker compose pull` si na
+# každém stroji vezme svou architekturu sám a deploy skript ani návrat pinem
+# tagu se nemění. Selže-li jedna architektura, nový tag nevznikne vůbec:
+# oba stroje tak běží vždy na stejné revizi.
+#
+# Bezpečnost: repo je veřejné → Actions minuty (i arm64 runnery) a veřejné
+# balíčky GHCR jsou zdarma. Do image jde jen to, co Dockerfile explicitně
+# kopíruje (zdrojáky, lockfile) — `.env*`, `data/` a `docs/` vylučuje
+# `.dockerignore` a Dockerfile nemá žádný `COPY . .`. Push používá automatický
+# GITHUB_TOKEN workflow (jen `packages: write` pro tento repozitář), žádný
+# osobní token.
 name: Images
 
 on:
@@ -29,15 +39,43 @@ permissions:
   contents: read
   packages: write
 
+# bash s pipefail i bez `shell:` u kroku — jinak by chyba uprostřed roury zapadla
+defaults:
+  run:
+    shell: bash
+
 env:
   REGISTRY: ghcr.io
   # GHCR vyžaduje malá písmena; github.repository_owner je "kEchiCZ"
   OWNER: kechicz
 
 jobs:
-  python:
-    name: python image (engine, api, news-engine)
-    runs-on: ubuntu-latest
+  build:
+    name: ${{ matrix.image }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Druhá architektura doběhne i při pádu první — v logu jsou vidět obě
+      fail-fast: false
+      matrix:
+        image: [gex-python, gex-frontend]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - image: gex-python
+            file: docker/python.Dockerfile
+            title: gexlens-python
+            description: GEXLens engine / api / news-engine (jeden image, tři služby)
+            build-args: ""
+          - image: gex-frontend
+            file: docker/frontend.Dockerfile
+            title: gexlens-frontend
+            description: GEXLens frontend (statický bundle za nginx, /api proxy)
+            # Produkční hodnoty = výchozí ARG v Dockerfile (VITE_API_BASE=/api, bez
+            # VITE_GEXLENS_ENV); commit jde do exportu měřiče výkonu (#1409)
+            build-args: VITE_BUILD_SHA=${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
@@ -49,29 +87,90 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/gex-python
-          # `latest` = aktuální main; `sha-<7>` = přesná revize pro rollback
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-,format=short
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.image }}
+          # Label `org.opencontainers.image.revision` (= commit) čte deploy skript
+          # po pullu, aby nasadil právě HEAD main
           labels: |
-            org.opencontainers.image.title=gexlens-python
-            org.opencontainers.image.description=GEXLens engine / api / news-engine (jeden image, tři služby)
-      - uses: docker/build-push-action@v6
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+      # Nejdřív do lokálního daemonu runneru: smoke běží nad hotovým image
+      # dřív, než se cokoli pushne
+      - name: build
+        uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/python.Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          file: ${{ matrix.file }}
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: gexlens-smoke:local
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=python
-          cache-to: type=gha,scope=python,mode=max
+          build-args: ${{ matrix.build-args }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }},mode=max
+      # Smoke python image: nativní wheely (numpy, pyarrow, psycopg binary,
+      # pandas, matplotlib, curl_cffi, uvloop) se na aarch64 musí načíst
+      # a pyarrow zapsat a přečíst parquet; pg_dump musí být 16 kvůli
+      # serveru postgres:16 (#439). Běží přes entrypoint, takže ověří
+      # i přepnutí na neprivilegovaného uživatele (setpriv, #542).
+      - name: smoke python
+        if: matrix.image == 'gex-python'
+        run: |
+          docker run --rm gexlens-smoke:local python -c '
+          import platform
+          import curl_cffi, matplotlib, numpy, pandas, psycopg, uvloop
+          import pyarrow as pa, pyarrow.parquet as pq
+          import gexlens_api, gexlens_engine, gexlens_news
+          assert psycopg.pq.__impl__ == "binary", psycopg.pq.__impl__
+          pq.write_table(pa.table({"x": numpy.arange(3.0)}), "/tmp/smoke.parquet")
+          assert pq.read_table("/tmp/smoke.parquet").column("x").to_pylist() == [0.0, 1.0, 2.0]
+          print("smoke OK", platform.machine(), "numpy", numpy.__version__, "pyarrow", pa.__version__)
+          '
+          docker run --rm gexlens-smoke:local pg_dump --version | tee /dev/stderr \
+            | grep -Eq '^pg_dump \(PostgreSQL\) 16\.'
+      - name: smoke frontend
+        if: matrix.image == 'gex-frontend'
+        run: |
+          docker run --rm gexlens-smoke:local nginx -t
+          docker run --rm gexlens-smoke:local test -s /usr/share/nginx/html/index.html
+      # Druhý průchod je celý z cache builderu (stejné vrstvy, stejné labely);
+      # push jen podle digestu, tagy dostane až index v jobu `manifest`
+      - name: push podle digestu
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build-args }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+      - name: export digestu
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest='${{ steps.push.outputs.digest }}'
+          test -n "$digest"
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.image }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
 
-  frontend:
-    name: frontend image (nginx)
+  manifest:
+    name: manifest ${{ matrix.image }}
+    needs: build
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: [gex-python, gex-frontend]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -81,23 +180,35 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/gex-frontend
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.image }}
+          # `latest` = aktuální main, jen z main: workflow_dispatch z jiné větve
+          # (zkouška workflow) dostane jen svůj `sha-<7>` a produkční `latest`
+          # nepřepíše. `sha-<7>` = přesná revize pro návrat pinem (ADR-0047)
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
-          labels: |
-            org.opencontainers.image.title=gexlens-frontend
-            org.opencontainers.image.description=GEXLens frontend (statický bundle za nginx, /api proxy)
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/frontend.Dockerfile
-          push: true
-          # Produkční hodnoty = výchozí ARG v Dockerfile (VITE_API_BASE=/api, bez VITE_GEXLENS_ENV);
-          # commit jde do exportu měřiče výkonu (#1409)
-          build-args: |
-            VITE_BUILD_SHA=${{ github.sha }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,scope=frontend,mode=max
+      - name: index pod tagy
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.image }}
+        run: |
+          n=$(ls -1 | wc -l)
+          if [ "$n" -ne 2 ]; then
+            echo "::error::Čekám dva digesty (amd64 a arm64), je jich $n"; exit 1
+          fi
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+      # Kontrola výsledku z registru, ne z lokálního stavu: index tagu `sha-<7>`
+      # musí obsahovat obě architektury
+      - name: kontrola architektur
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.image }}
+        run: |
+          ref="$IMAGE:sha-${GITHUB_SHA::7}"
+          docker buildx imagetools inspect "$ref"
+          platforms=$(docker buildx imagetools inspect --raw "$ref" \
+            | jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' | sort -u)
+          echo "$platforms"
+          grep -qx 'linux/amd64' <<< "$platforms"
+          grep -qx 'linux/arm64' <<< "$platforms"
