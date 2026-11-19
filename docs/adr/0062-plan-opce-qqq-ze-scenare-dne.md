@@ -573,8 +573,9 @@ Odvozeno pro F4c (zapsal agent 16. 11., #1745; čtyři volby rozhodl vlastník v
 
 **Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
 nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test
-přecenění s pevným strikem je v F2c (#1769, `test_option_plan_reprice.py`), naměřený golden
-první seance přinese F6 (#1750).
+přecenění s pevným strikem je v F2c (#1769, `test_option_plan_reprice.py`). Naměřený golden
+plánu úplného v 9:15 je ze 16. 11. (F6 #1750, `option_plan_measured_20261116.json`); den
+s plánem sestaveným až v 9:31 doplní F6b (#1859), až nastane.
 
 **Důvod:** rychlost, protože plán přijde se scénářem v 15:15 SEČ, a relevance dat, protože přesné
 ceny po openu přijdou v 15:31 a o obchodu rozhodují živé ceny při spoušti (K12 A). Cena: dvě

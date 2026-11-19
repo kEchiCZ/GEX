@@ -712,6 +712,20 @@ počítá nezávisle skript přehrání #1756. Výsledek: vstup A 16:35 SEČ za 
 TP1 691,99, TP2 690,59, put 687 / 686. Při IV 31,4 % (ATM IV NQ 1DTE, AC) vychází R:R 4,45
 (přísně 2,69) a P4 −70 $, při IV fixture 30 % R:R 4,61 (2,82) a P4 −65 $.
 
+Naměřený golden (F6 #1750, Rozhodnuto 19. 11.): `engine/tests/golden/option_plan_measured_*.json`,
+jeden soubor na uložený plán, test `test_option_plan_measured_1750.py` projde všechny. Dataset
+generuje `scripts/build_option_plan_golden_measured.py --plan N` z `GET /option-plans/{id}`,
+`GET /scenarios` a partic. Obsahuje naměřený řetěz 0DTE a 1DTE snímku 9:15, 1DTE snímku 9:31
+a bary a kotace kontraktů od US openu do posledního rozhodnutí hlavního plánu i stínů,
+nejpozději do exitu. Test zamyká vznik, přecenění, vyhodnocení F3 a živý stav F3b proti
+uloženému řádku v PG. Pole závislá na účtu (verdikty variant při vzniku, třída rozpočtu, % účtu)
+v datasetu nejsou, test je ověří se syntetickými parametry. Model ceny opce (SL, TP1, TP2,
+přísné R:R, čerpání P4) skript přepočítá vlastním Black–Scholes, P&L výstupů přímo z kotací.
+Shoda s PG je podmínka zápisu. Plán sestavený až v 9:31 ET skript zatím odmítne (doplní F6b
+#1859). Den 16. 11. (plán #2, short, put 659 / 658): vstup A 15:50 SEČ za 670,56 pod PDL 671,69,
+TP1 16:00, TP2 16:01. Obě varianty vyřadilo P3 (ask 2,55, R:R 0,61 a 0,58), hypoteticky
++44 $ na TP1 a +92 $ na TP2 na kontrakt hlavní varianty. Okno má 31 barů a 62 kotací (85 KB).
+
 **Vznik plánu v 9:15 ET** (`option_plan_job.OptionPlanMaker`, F2b #1742, ADR-0062 K2 A a K4 C
 body 5 a 8) spojí dva vstupy, které přicházejí nezávisle:
 
