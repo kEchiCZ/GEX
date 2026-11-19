@@ -718,12 +718,14 @@ generuje `scripts/build_option_plan_golden_measured.py --plan N` z `GET /option-
 `GET /scenarios` a partic. Obsahuje naměřený řetěz 0DTE a 1DTE snímku 9:15, 1DTE snímku 9:31
 a bary a kotace kontraktů od US openu do posledního rozhodnutí hlavního plánu i stínů,
 nejpozději do exitu. Test zamyká vznik, přecenění, vyhodnocení F3 a živý stav F3b proti
-uloženému řádku v PG. Pole závislá na účtu (verdikty variant při vzniku, třída rozpočtu, % účtu)
-v datasetu nejsou, test je ověří se syntetickými parametry. Model ceny opce (SL, TP1, TP2,
+uloženému řádku v PG. Pole závislá na účtu (verdikty variant a plánu při vzniku, třída
+rozpočtu, `*_pct`) v datasetu nejsou. Verdikty a třídu rozpočtu test ověří se syntetickými
+parametry, „% účtu“ plán ani výsledek nenese (#1842). Model ceny opce (SL, TP1, TP2,
 přísné R:R, čerpání P4) skript přepočítá vlastním Black–Scholes, P&L výstupů přímo z kotací.
-Shoda s PG je podmínka zápisu. Plán sestavený až v 9:31 ET skript zatím odmítne (doplní F6b
-#1859). Den 16. 11. (plán #2, short, put 659 / 658): vstup A 15:50 SEČ za 670,56 pod PDL 671,69,
-TP1 16:00, TP2 16:01. Obě varianty vyřadilo P3 (ask 2,55, R:R 0,61 a 0,58), hypoteticky
+Shoda s PG je podmínka zápisu. Plán sestavený až v 9:31 ET skript zatím nezná a odmítne ho
+výslovnou chybou. Den, kdy běžel F3b, test porovná přehraný živý stav s odeslanými
+`live_alerts`. Den 16. 11. (plán #2, short, put 659 / 658): vstup A 15:50 SEČ za 670,56 pod PDL 671,69,
+TP1 16:00, TP2 16:01. Obě varianty vyřadilo P3 (ask 2,55 a 2,34, R:R 0,61 a 0,58), hypoteticky
 +44 $ na TP1 a +92 $ na TP2 na kontrakt hlavní varianty. Okno má 31 barů a 62 kotací (85 KB).
 
 **Vznik plánu v 9:15 ET** (`option_plan_job.OptionPlanMaker`, F2b #1742, ADR-0062 K2 A a K4 C

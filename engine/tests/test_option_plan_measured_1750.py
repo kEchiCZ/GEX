@@ -264,9 +264,10 @@ def test_budget_class_with_synthetic_limit(path: Path) -> None:
     limit = _day(path).account.max_loss_usd
     assert limit is not None
     parts = [got["main"], *got["shadows"].values()]
-    variants = [v for part in parts for v in part["variants"] if v["pricing"] is not None]
-    assert variants
-    for variant in variants:
+    for variant in (v for part in parts for v in part["variants"]):
+        if variant["pricing"] is None:
+            assert variant["budget"] is None
+            continue
         over = -variant["pricing"]["drawdown_usd"] > limit
         assert variant["budget"] == ("nad rozpočtem" if over else "v rozpočtu")
 
@@ -278,9 +279,10 @@ def test_model_matches_independent_black_scholes(path: Path) -> None:
     got = _evaluated(path)
     results = {"main": got["main"], **got["shadows"]}
     quotes = {(q.ts_min, q.strike, q.right): q for q in day.quotes}
-    checked = 0
     for key, items in day.expected["independent"].items():
         by_variant = {(v["role"], v["strike"]): v for v in results[key]["variants"]}
+        priced = {k for k, v in by_variant.items() if v["pricing"] is not None}
+        assert {(item["role"], item["strike"]) for item in items} == priced, key
         for item in items:
             variant = by_variant[(item["role"], item["strike"])]
             for field in ("paid", "at_stop", "at_tp1", "at_tp2", "rr", "rr_strict"):
@@ -297,16 +299,14 @@ def test_model_matches_independent_black_scholes(path: Path) -> None:
                 bid = quotes[(exit_ts - MINUTE, item["strike"], item["right"])].bid
                 assert bid is not None
                 assert variant[leg]["pnl_usd"] == pytest.approx((bid - ask) * 100, abs=1e-6)
-            checked += 1
-    assert checked > 0
 
 
 @measured
 def test_live_state_replays_result(path: Path) -> None:
-    """Živý stav F3b minutu po minutě: každý přechod jednou, v minutě své události (≤ 10 s).
+    """Živý stav F3b minutu po minutě: každý přechod jednou, hned v minutě, kdy nastal.
 
-    Poslední přechod je konečný a celá řada = události večerního výsledku F3 (#1757 bod 5).
-    Odeslané `live_alerts` z PG, pokud F3b v den plánu běžel, musí být táž řada.
+    Běžel-li F3b v den plánu, přehrání = odeslané `live_alerts` z PG (F6b #1859). Jinak
+    (16. 11.) = události večerního výsledku F3 spuštěného plánu, poslední konečná (#1757 bod 5).
     """
     day = _day(path)
     main = _built(path)["main"]
@@ -330,13 +330,15 @@ def test_live_state_replays_result(path: Path) -> None:
         if sent and sent[-1][2]:
             break
         until += MINUTE
-    events = day.expected["result"]["main"]["events"]
-    expected = [
-        (event["kind"], dt.datetime.fromisoformat(event["ts"]).isoformat(), i == len(events) - 1)
-        for i, event in enumerate(events)
-    ]
+    if day.raw["live_alerts"]:
+        expected = [(a["event"], a["ts"], a["final"]) for a in day.raw["live_alerts"]]
+    else:
+        result = day.expected["result"]["main"]
+        assert result["status"] == "spuštěno", "bez live_alerts golden zná jen spuštěný plán"
+        events = result["events"]
+        expected = [
+            (e["kind"], dt.datetime.fromisoformat(e["ts"]).isoformat(), i == len(events) - 1)
+            for i, e in enumerate(events)
+        ]
     assert [(event, ts, final) for event, ts, final, _ in sent] == expected
     assert all(dt.datetime.fromisoformat(ts) == at for _, ts, _, at in sent)
-    if day.raw["live_alerts"]:
-        alerts = [(a["event"], a["ts"], a["final"]) for a in day.raw["live_alerts"]]
-        assert alerts == expected

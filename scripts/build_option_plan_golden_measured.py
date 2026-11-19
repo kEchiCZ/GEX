@@ -327,10 +327,13 @@ def main() -> int:
     row, scenario = asyncio.run(fetch(args.api, args.plan))
     day = dt.date.fromisoformat(row["day"])
     plan = row["plan"]
-    if plan.get("main") is None or (plan.get("repricing") or {}).get("plan") is not None:
-        raise SystemExit(
-            "plán sestavený až v 9:31 ET (bez opce v 9:15) skript zatím nezná — doplní F6b #1859"
-        )
+    if plan.get("main") is None:
+        if (plan.get("repricing") or {}).get("plan") is not None:
+            raise SystemExit(
+                f"plán #{args.plan} je sestavený až v 9:31 ET (bez opce v 9:15): tuto větev F2c"
+                " skript nezná, golden pro ni zatím není"
+            )
+        raise SystemExit(f"plán #{args.plan} je bez opce, golden nemá co zamknout")
     if not plan["repricing"].get("prices"):
         raise SystemExit(
             f"plán #{args.plan}: přecenění 9:31 bez cen ({plan['repricing'].get('reasons')})"
