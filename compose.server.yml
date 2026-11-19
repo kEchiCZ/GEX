@@ -1,4 +1,4 @@
-# GEXLens — override pro Linux server (#1094): IB Gateway jako kontejner.
+# GEXLens — override pro Linux server (#1094, ADR-0063): IB Gateway jako kontejner.
 #
 # Použití (vždy S produkčním compose.yml, pořadí je závazné):
 #   docker compose -f compose.yml -f compose.server.yml up -d
@@ -16,14 +16,18 @@
 #   - Heslo jde Docker secretem ze souboru secrets/ibkr_password (mimo git,
 #     chmod 600, jeden řádek bez koncového newline). Username je v .env jako
 #     IBKR_DATA_USERID — DRUHÝ username účtu (#737), nikdy hlavní.
+#     Do zaplacení jeho subskripce IBKR market data nedodá (354; zpožděná
+#     engine odmítá) a data bere tasty fallbackem (ADR-0063 bod 8, #1856).
 #   - Reautentizace IBKR: denní AUTO_RESTART_TIME bez hesla, týdenní cyklus
-#     řeší nedělní TWS_COLD_RESTART + potvrzení IB Key push na telefonu
-#     (kap. 13.2). TWOFA_TIMEOUT_ACTION=restart: bez potvrzení se login
-#     opakuje, dokud push nepřijde.
+#     řeší nedělní TWS_COLD_RESTART 22:30 + potvrzení IB Key push na telefonu.
+#     ADR-0063 bod 11: nejvýš 3 pushe (první + 2 pokusy po ~10 min), pak
+#     Gateway stojí a server jede přes tasty. Limit pokusů implementuje #1850;
+#     do té doby TWOFA_TIMEOUT_ACTION=restart opakuje login, dokud push nepřijde.
 #
 # PAST (#446/#992): ibkr_host/ibkr_port uložené v DB ze Settings UI přebíjejí
 # hodnoty odsud. Po obnově dumpu z PC tam zůstává domácí host/port — po prvním
-# startu nastavit v Settings host `ib-gateway`, port `4003`.
+# startu nastavit v Settings host `ib-gateway`, port `4003`. Trvale to řeší
+# nastavení stroje mimo synchronizaci (ADR-0063 bod 3, #1847, #1848).
 services:
   ib-gateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
