@@ -1,6 +1,7 @@
 /** Karta plánu opce QQQ (F5a #1746, ADR-0062) v Briefingu → Scénář dne pod scénářem NQ, ze
-kterého plán vznikl (Rozhodnuto 18. 11. F5a Q2 A v #1738). Zobrazuje odpověď `GET /option-plans`
-a nic nepočítá: R:R, P3, P4, ceny opce a třídu rozpočtu má engine.
+kterého plán vznikl (Rozhodnuto 18. 11. F5a Q2 A, upřesněno 19. 11. na C v #1738: `compact` =
+jeden řádek, který jde rozbalit na celou kartu). Zobrazuje odpověď `GET /option-plans` a nic
+nepočítá: R:R, P3, P4, ceny opce a třídu rozpočtu má engine.
 
 - Před spouští (K12 A): opce s kotacemi z 9:15 a z přecenění v 9:31, model v TP1/TP2, vstup A,
   cíle, exit a P5. SL, R:R a rozpočet jsou známé až při spoušti.
@@ -77,6 +78,11 @@ export const OPTION_PLAN_TOOLTIPS = {
     'Třída rozpočtu (P4) podle Settings v době vyhodnocení:',
     '• čerpání P4 proti rozpočtu na obchod',
     '• hodnota rozpočtu se neukládá',
+  ].join('\n'),
+  expand: [
+    'Plán vyhodnoceného nebo nezobrazeného scénáře:',
+    '• sbalený na jeden řádek, ať je karta Scénář dne krátká',
+    '• rozbalený ukáže celou kartu: vstup, SL, R:R, P&L, nad rozpočtem a graf',
   ].join('\n'),
 } as const
 
@@ -437,17 +443,35 @@ export function OptionPlanCard({
   loadedAt = null,
 }: {
   plan: OptionPlanRow
+  /** Sbalený řádek s tlačítkem na celou kartu (plán vyhodnoceného nebo nezobrazeného scénáře) */
   compact?: boolean
   /** null = Settings se nenačetly */
   accountMissing: boolean | null
   /** Čas načtení seznamu plánů (ms) pro stáří živé osy */
   loadedAt?: number | null
 }) {
+  // Sbalený řádek jde rozbalit na celou kartu (Q2 C); graf se načte až po rozbalení
+  const [expanded, setExpanded] = useState(false)
   const main = plan.effective.main
-  if (compact) {
+  const toggle = (open: boolean) => (
+    <button
+      type="button"
+      className="chip"
+      aria-expanded={open}
+      title={OPTION_PLAN_TOOLTIPS.expand}
+      data-testid={`option-plan-toggle-${plan.id}`}
+      onClick={() => setExpanded(!open)}
+    >
+      {open ? '▾ sbalit' : '▸ celý plán'}
+    </button>
+  )
+  if (compact && !expanded) {
     return (
       <div className="option-plan-card option-plan-compact" data-testid={`option-plan-${plan.id}`}>
-        {headline(plan)} · <b>{stateLabel(plan)}</b>
+        <span data-testid={`option-plan-line-${plan.id}`}>
+          {headline(plan)} · <b>{stateLabel(plan)}</b>
+        </span>{' '}
+        {toggle(false)}
       </div>
     )
   }
@@ -457,6 +481,7 @@ export function OptionPlanCard({
         <strong>{headline(plan)}</strong>
         <span className="muted">plán z {plan.effective.slot} ET</span>
         <span className="scenario-verdict scenario-pending">{stateLabel(plan)}</span>
+        {compact && toggle(true)}
       </div>
       {accountMissing === true && (
         <p className="option-plan-warning" role="status" data-testid="option-plan-account-missing">

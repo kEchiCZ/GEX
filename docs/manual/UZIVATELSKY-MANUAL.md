@@ -773,7 +773,9 @@ nakreslí znovu z uložených hodnot plánu.
 ### Plán opce QQQ — karta v Briefingu (#1746)
 
 V **Briefing → Scénář dne** je pod scénářem NQ karta plánu opce QQQ, který z něj vznikl
-(ADR-0062). Nejnovější plán je celý, starší plány jsou jedním řádkem (den, směr a opce, stav).
+(ADR-0062). U otevřeného scénáře je karta celá. U vyhodnoceného scénáře je plán jedním řádkem
+(den, směr a opce, stav) a tlačítko **▸ celý plán** ho rozbalí na celou kartu včetně výsledku
+po close a grafu (**▾ sbalit** ho zase sbalí).
 Při zvoleném ES karta není, jen věta, že ze scénáře ES plán nevzniká (#1790). Karta nic
 nepočítá, ukáže plán tak, jak ho uložil engine.
 
@@ -789,7 +791,7 @@ nepočítá, ukáže plán tak, jak ho uložil engine.
   nese zpráva ve zvonku a na Telegramu (kap. 14), karta je neopakuje. Seznam plánů se obnoví
   sám, když přijde alert plánu (vznik, přecenění, průběh, výsledek). Jinak se karta na
   server neptá, proto je u osy čas načtení. Nejnovější plán, jehož scénář v kartě není
-  (smazaný, starší), se ukáže zvlášť s poznámkou.
+  (smazaný, starší), se ukáže zvlášť s poznámkou, sbalený jedním řádkem.
 - **Po vyhodnocení** (~15 min po close): *Výsledek* (spuštěno, bez vstupu, mezera, bez opce
   a průběh), vstup a SL na podkladu. Po variantách cena při spoušti s P3 a P4 (zaplaceno, cena
   při SL, R:R, ztráta při SL, čerpání P4, P&L TP1 / TP2 z modelu), naměřený výstup v TP1,

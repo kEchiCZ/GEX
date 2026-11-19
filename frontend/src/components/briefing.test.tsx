@@ -543,4 +543,29 @@ test('NQ: nejnovější plán bez scénáře v kartě se ukáže zvlášť, nezm
   render(<BriefingView />)
   expect((await screen.findByTestId('option-plan-orphan')).textContent).toContain('#71')
   expect(screen.getByTestId('option-plan-9')).toBeTruthy()
+  expect(screen.getByTestId('option-plan-toggle-9')).toBeTruthy() // sbalený, jde rozbalit
+})
+
+test('NQ: plán vyhodnoceného scénáře je řádek, rozbalí se na celou kartu (Q2 C)', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:plan')
+  URL.revokeObjectURL = vi.fn()
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  const evaluated = {
+    ...NQ_SCENARIO,
+    id: 69,
+    day: '2026-11-17',
+    evaluated_at: '2026-11-17T21:05:00+00:00',
+  }
+  mockApis({
+    scenarios: { scenarios: [NQ_SCENARIO, evaluated] },
+    optionPlans: { option_plans: [nqPlan(9, 70), nqPlan(8, 69)] },
+  })
+  render(<BriefingView />)
+  const full = await screen.findByTestId('option-plan-9')
+  expect(full.textContent).toContain('Bez opce: řetěz chybí')
+  expect(screen.queryByTestId('option-plan-toggle-9')).toBeNull()
+  expect(screen.getByTestId('option-plan-line-8')).toBeTruthy()
+  fireEvent.click(screen.getByTestId('option-plan-toggle-8'))
+  expect(screen.getByTestId('option-plan-8').textContent).toContain('Bez opce: řetěz chybí')
+  expect(screen.queryByTestId('option-plan-line-8')).toBeNull()
 })

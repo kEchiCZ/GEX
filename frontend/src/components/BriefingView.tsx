@@ -96,9 +96,10 @@ function formatSigned(value: number): string {
 
 /** Scénáře dne (#1173): otevřené (termín ≥ dnes) a poslední vyhodnocené.
 
-Pod scénářem NQ je plán opce QQQ, který z něj vznikl (F5a #1746, Rozhodnuto 18. 11. Q2 A):
-nejnovější plán celý, starší jedním řádkem. Nejnovější plán, jehož scénář tu není (smazaný,
-starší, nenačtené scénáře), se ukáže zvlášť, nezmizí. Plány, Settings a u NQ i scénáře se načtou
+Pod scénářem NQ je plán opce QQQ, který z něj vznikl (F5a #1746, Rozhodnuto 18. 11. Q2 A,
+upřesněno 19. 11. na C): u otevřeného scénáře celá karta, u vyhodnoceného jeden řádek, který jde
+rozbalit na celou kartu. Nejnovější plán, jehož scénář tu není (smazaný, starší, nenačtené
+scénáře), se ukáže zvlášť sbalený, nezmizí. Plány, Settings a u NQ i scénáře se načtou
 znovu jen po alertu plánu přes WS (`planAlertKey`; s plánem v 9:15 vzniká i scénář), polling ne
 (Q1 B). Ze scénáře ES plán nevzniká (#1790). */
 function ScenarioBlock({ symbol, planAlertKey }: { symbol: string; planAlertKey: string }) {
@@ -142,17 +143,17 @@ function ScenarioBlock({ symbol, planAlertKey }: { symbol: string; planAlertKey:
   const recent = rows.filter((row) => row.evaluated_at !== null).slice(0, 3)
   const planList = planned && plans?.result.ok ? plans.result.plans : []
   const newest = planList[0]
-  const card = (plan: OptionPlanRow) => (
+  const card = (plan: OptionPlanRow, compact: boolean) => (
     <OptionPlanCard
       plan={plan}
-      compact={plan.id !== newest?.id}
+      compact={compact}
       accountMissing={accountMissing}
       loadedAt={plans?.loadedAt ?? null}
     />
   )
-  const planOf = (scenarioId: number) => {
-    const plan = planList.find((item) => item.scenario_id === scenarioId)
-    return plan ? card(plan) : null
+  const planOf = (scenario: Scenario) => {
+    const plan = planList.find((item) => item.scenario_id === scenario.id)
+    return plan ? card(plan, scenario.evaluated_at !== null) : null
   }
   const shown = new Set([...open, ...recent].map((row) => row.id))
   const orphan =
@@ -162,7 +163,7 @@ function ScenarioBlock({ symbol, planAlertKey }: { symbol: string; planAlertKey:
           Plán opce QQQ ke scénáři #{newest.scenario_id}, který tu není (smazaný, starší, nebo se
           scénáře nenačetly):
         </p>
-        {card(newest)}
+        {card(newest, true)}
       </>
     ) : null
   const planNote = planned ? (
@@ -196,14 +197,14 @@ function ScenarioBlock({ symbol, planAlertKey }: { symbol: string; planAlertKey:
       {open.map((row) => (
         <Fragment key={row.id}>
           <ScenarioCard scenario={row} />
-          {planOf(row.id)}
+          {planOf(row)}
         </Fragment>
       ))}
       {recent.length > 0 && <p className="muted">Poslední vyhodnocené</p>}
       {recent.map((row) => (
         <Fragment key={row.id}>
           <ScenarioCard scenario={row} compact />
-          {planOf(row.id)}
+          {planOf(row)}
         </Fragment>
       ))}
       {orphan}

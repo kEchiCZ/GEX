@@ -1,7 +1,7 @@
 /** Karta plánu opce QQQ (F5a #1746): long a short, neobchodovat s důvodem, bez opce, živá osa,
 výsledek F3 s variantou nad rozpočtem, chybějící PNG a nenastavený účet. Čísla jsou syntetická
 (žádné hodnoty účtu ani skutečné plány). */
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { OptionPlanCard } from './OptionPlanCard'
 import type {
@@ -301,11 +301,33 @@ test('nenačtené Settings = výslovná hláška; kompaktní řádek nese stav a
   unmount()
   fetchMock.mockClear()
   render(<OptionPlanCard plan={plan({ id: 3 })} compact accountMissing />)
-  expect(screen.getByTestId('option-plan-3').textContent).toBe(
+  expect(screen.getByTestId('option-plan-line-3').textContent).toBe(
     'Plán opce QQQ · 18. 11. · long → call 505 · exp. 19. 11. · čeká',
   )
   expect(screen.queryByTestId('option-plan-account-missing')).toBeNull()
   expect(fetchMock).not.toHaveBeenCalled()
+})
+
+test('sbalený řádek jde rozbalit na celou kartu s grafem a zase sbalit (Q2 C)', async () => {
+  render(<OptionPlanCard plan={plan({ id: 3 })} compact accountMissing />)
+  const toggle = screen.getByTestId('option-plan-toggle-3')
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(toggle)
+  expect(screen.queryByTestId('option-plan-line-3')).toBeNull()
+  expect(screen.getByTestId('option-plan-account-missing')).toBeTruthy()
+  expect(screen.getByTestId('option-plan-3').textContent).toContain('vstup A')
+  await screen.findByTestId('option-plan-image')
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  const collapse = screen.getByTestId('option-plan-toggle-3')
+  expect(collapse.getAttribute('aria-expanded')).toBe('true')
+  fireEvent.click(collapse)
+  expect(screen.getByTestId('option-plan-line-3')).toBeTruthy()
+  expect(screen.queryByTestId('option-plan-image')).toBeNull()
+})
+
+test('celá karta bez compact tlačítko sbalit nemá', () => {
+  render(<OptionPlanCard plan={plan()} accountMissing={false} />)
+  expect(screen.queryByTestId('option-plan-toggle-7')).toBeNull()
 })
 
 test('stáří živé osy: čas načtení seznamu u řádku Průběh živě', () => {
