@@ -28,7 +28,7 @@
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
   #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
   #1744 (F4b), #1745 (F4c), #1746 (F5a), #1747 (F1b), #1748 (F3), #1757 (F3b), #1749 (F5b),
-  #1750 (F6); tento ADR #1739, zpětné přehrání #1756 (F0b).
+  #1750 (F6), #1859 (F6b); tento ADR #1739, zpětné přehrání #1756 (F0b).
 - **Podklad:** rozbor 2. 11. (issuecomment-6585788810); skripty
   `scripts/measure_option_plan_entries_1738.py` (jen čtení partic a GET API; měření 2. 11.
   a zpětné přehrání #1756) a `scripts/measure_matplotlib_png_1738.py`; měření v oddílu Kontext.
@@ -572,9 +572,10 @@ Odvozeno pro F4c (zapsal agent 16. 11., #1745; čtyři volby rozhodl vlastník v
       nenese text výjimky httpx, ten obsahuje URL s tokenem.
 
 **Golden a AC:** 2. 11. ranní řetěz uložený není, takže platí bod 5. Čísla K9 A a golden #1741 se
-nemění (vstup A 16:35 SEČ za 697,99). Pro plán úplný už v 9:15 golden z uloženého dne není. Test
-přecenění s pevným strikem je v F2c (#1769, `test_option_plan_reprice.py`), naměřený golden
-první seance přinese F6 (#1750).
+nemění (vstup A 16:35 SEČ za 697,99). Test přecenění s pevným strikem je v F2c (#1769,
+`test_option_plan_reprice.py`). Naměřený golden plánu úplného v 9:15 je ze 16. 11. (F6 #1750,
+`option_plan_measured_20261116.json`). Plán sestavený až v 9:31 skript goldenu zatím nezná
+a odmítne ho výslovnou chybou.
 
 **Důvod:** rychlost, protože plán přijde se scénářem v 15:15 SEČ, a relevance dat, protože přesné
 ceny po openu přijdou v 15:31 a o obchodu rozhodují živé ceny při spoušti (K12 A). Cena: dvě
