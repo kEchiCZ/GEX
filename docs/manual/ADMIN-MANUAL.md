@@ -112,12 +112,19 @@ docker compose down              # odstranění kontejnerů (volume pgdata zůst
   `${GEXLENS_<SLUŽBA>_TAG:-${GEXLENS_IMAGE_TAG:-latest}}`. Bez proměnných běží `latest`
   (aktuální main). Tagy `sha-<7>` staví workflow *Images* pro každý merge, který mění kód.
   Služby: `GEXLENS_ENGINE_TAG`, `GEXLENS_API_TAG`, `GEXLENS_NEWS_TAG`, `GEXLENS_FRONTEND_TAG`.
+- **Architektury (#1798, ADR-0063):** tagy `latest` a `sha-<7>` od #1798 ukazují na index pro
+  `linux/amd64` (PC) i `linux/arm64` (server Oracle A1); `docker compose pull` si na každém stroji
+  vezme svou architekturu sám, takže deploy skript i návrat pinem jsou na obou strojích stejné.
+  Tagy z doby před #1798 mají jen amd64 — na serveru nepoběží. Které architektury tag má:
+  `docker buildx imagetools inspect ghcr.io/kechicz/gex-python:sha-<rev>` (řádky `Platform:`).
 - **Návrat celé aplikace jedním krokem:** do `.env` (končí-li newline) `GEXLENS_IMAGE_TAG=sha-<rev>`,
   pak `docker compose pull engine api news-engine frontend; docker compose up -d --no-deps engine api news-engine frontend`
   (výčet služeb, aby se nestáhl a nerestartoval `postgres`). Jen jedna služba: `GEXLENS_ENGINE_TAG=sha-<rev>`,
   `docker compose pull engine` a `docker compose up -d --no-deps engine`. Zpět na aktuální main = řádek
   z `.env` odebrat a znovu `pull` + `up -d` týchž služeb. Digest (`sha-<rev>@sha256:…`) jde jen do
-  proměnné jedné služby — `gex-python` a `gex-frontend` mají různé digesty.
+  proměnné jedné služby — `gex-python` a `gex-frontend` mají různé digesty. Pinuje se digest
+  indexu (řádek `Digest:` z `imagetools inspect`), ne digest jedné architektury — ten by na druhém
+  stroji nešel.
 - **`deploy-engine-offhours.ps1`** nasazuje HEAD main; při nastaveném pinu (`GEXLENS_IMAGE_TAG`,
   `_ENGINE_`, `_API_`, `_FRONTEND_TAG`) skončí chybou, než cokoli restartuje — jinak by compose
   spustil pinovanou revizi a skript by čekal na `latest` marně. `start-prod.ps1 -Build` (nouzový
@@ -1299,7 +1306,7 @@ Vedle produkčního stacku (`compose.yml`, :8080) existuje dev stack (`compose.d
 Pravidla:
 
 - **Produkce pouští výhradně `main`.** `start-prod.ps1 -Build` odmítne stavět z jiné větve nebo ze špinavého stromu (`-Force` = vědomé obejití). Bez `-Build` se jen startují dřív postavené image. Dev pouští libovolnou rozpracovanou větev.
-- **Image se staví v CI, ne doma (#1139, 13. 9. 2026):** po mergi do `main` workflow *Images* postaví `ghcr.io/kechicz/gex-python` (engine, api, news-engine) a `ghcr.io/kechicz/gex-frontend` (tagy `latest` + `sha-<7>`, label `org.opencontainers.image.revision`). Doma se image jen stahují (`docker compose pull`), lokální build zůstává nouzový (`deploy-engine-offhours.ps1 -Build`, `start-prod.ps1 -Build`). Balíčky jsou **veřejné** (repo je veřejné, veřejné balíčky jsou zdarma bez limitu; soukromé by narazily na 500 MB) — stažení nevyžaduje přihlášení. Jednorázově po prvním pushi: na stránce balíčku (GitHub → Packages → gex-python / gex-frontend → Package settings → Change visibility → Public). Do image jde jen to, co Dockerfile kopíruje; `.env*`, `data/`, `docs/` vylučuje `.dockerignore`.
+- **Image se staví v CI, ne doma (#1139, 13. 9. 2026):** po mergi do `main` workflow *Images* postaví `ghcr.io/kechicz/gex-python` (engine, api, news-engine) a `ghcr.io/kechicz/gex-frontend` (tagy `latest` + `sha-<7>`, label `org.opencontainers.image.revision`). Od #1798 pro **amd64 i arm64**: každý image × architektura se staví nativně na vlastním runneru (`ubuntu-latest`, `ubuntu-24.04-arm`, bez QEMU), před pushem projde smoke (importy nativních wheelů, zápis a čtení parquetu, `pg_dump` 16, `nginx -t`) a pushne se jen podle digestu; job `manifest` oba digesty spojí do jednoho indexu pod tagy a ověří, že má obě architektury. Selže-li jedna architektura, nový tag nevznikne (oba stroje tak běží na stejné revizi). `latest` vzniká jen z `main` — ruční spuštění z jiné větve (`gh workflow run images.yml --ref <větev>`, zkouška workflow) dostane jen `sha-<7>` své revize. Doma se image jen stahují (`docker compose pull`), lokální build zůstává nouzový (`deploy-engine-offhours.ps1 -Build`, `start-prod.ps1 -Build`). Balíčky jsou **veřejné** (repo je veřejné, veřejné balíčky jsou zdarma bez limitu; soukromé by narazily na 500 MB) — stažení nevyžaduje přihlášení. Jednorázově po prvním pushi: na stránce balíčku (GitHub → Packages → gex-python / gex-frontend → Package settings → Change visibility → Public). Do image jde jen to, co Dockerfile kopíruje; `.env*`, `data/`, `docs/` vylučuje `.dockerignore`.
 - **Nasazení po mergi:** `git checkout main && git pull`, pak `.\scripts\deploy-engine-offhours.ps1` (stáhne image, počká na revizi HEAD, restartuje v okně). Starší cesta `.\scripts\start-prod.ps1 -Build` staví lokálně. Před nasazením, které sahá na schéma DB, vždy `.\scripts\backup-postgres.ps1` — izolace dev to nenahrazuje, je to druhá vrstva. Výchozí cíl záloh je od #439 (26. 8.) `D:\Programy\GEX\zalohy-pg` (dumpy zabíraly 3,6 GB na systémovém C:), vlastní složka přes `-Target`. Každý dump skript ověří celým čtením `pg_restore --file=/dev/null` (~1 min CPU kontejneru); při selhání ho přejmenuje na `.invalid` (mimo rotaci) a skončí chybou. Denně ho pouští úloha GEXLens backup-postgres (kap. 13.6, #1566).
 - Dev frontend nese v sidebaru oranžový badge **DEV** (build arg `VITE_GEXLENS_ENV`), ať se okna prohlížeče nespletou.
 - Dev stack je jednorázový: rozbitý dev = `docker compose -f compose.dev.yml down -v`, smazat `data-dev/`, `seed-dev.ps1` znovu.
@@ -1310,7 +1317,7 @@ Pravidla:
 
 - **Python** (~160): jednotkové + golden (GEX, levels, heatmap módy, walls, CumΔ, profil), mock-based integrační (scheduler, hot zóna, runtime), PG integrační (v CI přes service kontejner), **e2e smoke** — deterministický referenční den přes celou pipeline engine→storage→API proti golden hodnotám.
 - **Frontend** (~58): jednotkové (geometrie, barvy, contours, slice), komponentové (jsdom + testing-library, PointerEvent polyfill), Arrow round-trip loaderu, **e2e render smoke** (App nad /replay balíkem), vizuální regresní snapshoty renderu.
-- **CI** (GitHub Actions, na každý PR): python job (ruff, mypy strict, pytest + PostgreSQL service), frontend job (eslint, prettier, vitest, build). Výkonnostní testy s tvrdým limitem běží jen lokálně (`CI` env skip).
+- **CI** (GitHub Actions, na každý PR): python job (ruff, mypy strict, pytest + PostgreSQL service), python-arm64 job (celá sada pytest na `ubuntu-24.04-arm` pro server Oracle A1, #1798 — golden testy výpočtů a nativní wheely na aarch64), frontend job (eslint, prettier, vitest, build). Povinné checky ruleset `main` jsou `python`, `frontend`, `security`; `scripts/merge-when-green.sh` merguje jen po zelených **všech** checkách commitu, tedy i `python-arm64`. Výkonnostní testy s tvrdým limitem běží jen lokálně (`CI` env skip).
 
 ### Bezpečnostní kontroly v CI
 
