@@ -3940,6 +3940,50 @@ tr.setup-after-settle td {
   border-radius: 4px;
 }
 
+/* Karta plánu opce QQQ pod scénářem NQ (F5a #1746): odsazená, ať se čte jako část scénáře;
+   nad rozpočtem a varování účtu viditelně, mezera (chybí data) jako chyba */
+.option-plan-card {
+  margin: 0 0 6px 12px;
+  padding: 4px 0 6px 8px;
+  border-left: 2px solid var(--border);
+  font-size: 12px;
+}
+.option-plan-compact {
+  color: var(--muted, inherit);
+}
+.option-plan-table-wrap {
+  overflow-x: auto;
+}
+.option-plan-variants td,
+.option-plan-variants th {
+  padding: 1px 6px 1px 0;
+  text-align: left;
+  vertical-align: top;
+}
+.option-plan-variants tr.option-plan-rejected td {
+  opacity: 0.75;
+}
+.option-plan-lines {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.option-plan-go {
+  color: var(--up);
+}
+.option-plan-stop,
+.option-plan-gap {
+  color: var(--down);
+}
+.option-plan-warning {
+  color: var(--warn);
+}
+.option-plan-over {
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: rgba(231, 76, 60, 0.22);
+  color: var(--down);
+}
+
 /* Notifikace Telegram (#1175, #1284) — jeden řádek na přepínač, tooltip nese
    popis; hlavní vypínač nad dvěma skupinami, vypnutý = skupiny zešednou */
 .push-topic {

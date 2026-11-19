@@ -770,6 +770,43 @@ PNG, výsledky zůstávají). Do počtu „Snímky" a limitu 1 GB patří i PNG 
 QQQ (#1744) a tlačítko smaže i je; smazaný PNG plánu se při dalším otevření
 nakreslí znovu z uložených hodnot plánu.
 
+### Plán opce QQQ — karta v Briefingu (#1746)
+
+V **Briefing → Scénář dne** je pod scénářem NQ karta plánu opce QQQ, který z něj vznikl
+(ADR-0062). U otevřeného scénáře je karta celá. U vyhodnoceného scénáře je plán jedním řádkem
+(den, směr a opce, stav) a tlačítko **▸ celý plán** ho rozbalí na celou kartu včetně výsledku
+po close a grafu (**▾ sbalit** ho zase sbalí).
+Při zvoleném ES karta není, jen věta, že ze scénáře ES plán nevzniká (#1790). Karta nic
+nepočítá, ukáže plán tak, jak ho uložil engine.
+
+- **Před spouští:** verdikt plánu (`čeká — čeká na vstup A (úroveň)`, nebo
+  `neobchodovat — důvod`) a tabulka variant hlavní a záložní. V ní je kontrakt (call/put,
+  strike, expirace), kotace při vzniku a z přecenění v 9:31 ET (bid / ask, IV, delta, zdroj
+  a čas kotace), model ceny opce v TP1 / TP2 („model z naměřené IV“) a stav varianty. Pod
+  tabulkou úroveň vstupu A, TP1 a TP2 s časy cesty, exit a text P5 (podmíněný příkaz v TWS).
+  SL, cenu opce při SL, ztrátu při SL, P&L na TP1 / TP2 a R:R dá až spoušť (K12 A), ráno je
+  karta neodhaduje. Vstup B hlavní plán nemá, je jen stínem v track recordu.
+- **Od spouště do vyhodnocení:** řádek *Průběh živě* (se „stav k HH:MM“ = čas načtení) s časy
+  odeslaných přechodů (vstup A, TP1, TP2, SL, stop na vstupu, exit, u posledního „konec“). Ceny, R:R a verdikt při spoušti
+  nese zpráva ve zvonku a na Telegramu (kap. 14), karta je neopakuje. Seznam plánů se obnoví
+  sám, když přijde alert plánu (vznik, přecenění, průběh, výsledek). Jinak se karta na
+  server neptá, proto je u osy čas načtení. Nejnovější plán, jehož scénář v kartě není
+  (smazaný, starší), se ukáže zvlášť s poznámkou, sbalený jedním řádkem.
+- **Po vyhodnocení** (~15 min po close): *Výsledek* (spuštěno, bez vstupu, mezera, bez opce
+  a průběh), vstup a SL na podkladu. Po variantách cena při spoušti s P3 a P4 (zaplaceno, cena
+  při SL, R:R, ztráta při SL, čerpání P4, P&L TP1 / TP2 z modelu), naměřený výstup v TP1,
+  držení do TP2 a třída rozpočtu. Spoušť vyřazená P3 je ztlumená a označená „hypoteticky“,
+  varianta **⚠ nad rozpočtem** je červeně.
+- **Graf plánu** (PNG ze serveru, snímek stavu plánu) se načte s kartou. Když se nenakreslí,
+  karta ukáže důvod ze serveru, ne prázdný obrázek.
+- **Účet plánu nenastaven** (Settings → Plán opce QQQ — účet, kap. 13): žluté varování na
+  kartě. Když chybí kterákoli z obou hodnot, plán dá variantám „neobchodovat — rozpočet
+  nenastaven“. Plán čte hodnoty při vzniku (9:15 ET, plán sestavený až v 9:31 ET v 9:31), živé
+  upozornění a večerní vyhodnocení aktuální hodnotu.
+  „% účtu“ se zatím nikde nepočítá (#1842).
+- Selhané načtení plánů nebo Settings karta řekne výslovně („Plány opce QQQ se nenačetly:
+  HTTP …“), nic nedosazuje.
+
 ### Plán opce QQQ — vyhodnocení a track record (#1748)
 
 Plán opce QQQ ke scénáři dne NQ (ADR-0062) engine po close vyhodnotí z toho, co se
@@ -1214,6 +1251,7 @@ běží **odpočet do US openu** (9:30 New York, DST-korektně).
 |---|---|
 | **Shrnutí dne** (v1.16, #1090) | Přes celou šířku nahoře. **Trend a směr** (čtení z karty Trend); **Verdikt dne** — *Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk* z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule — **po útesu ≥ 50 % gammy minulé seance nebo ve stavu tenká mapa pozitivní gamma nehlasuje** (v1.18, #1241: tenká gamma netlumí; v1.21, #1245: při souběhu útesu a tenké mapy je to jeden nulový hlas s oběma důvody, ne dva); práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat"; High-impact zpráva před US openem = „Počkat na tisk". **Úrovně obratu** — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. **Zprávy dne** — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off"), typická velikost z naměřených reakcí kategorie (medián \|ret\| v 5/15/60 min, n), nebo poctivé „bez měřené reakce". Verdikt je **heuristika** a **počítá a ukládá ho engine** (#1595), ne Briefing — pro každou obchodní seanci a symbol, který engine sbírá (dnes ES a NQ), bez ohledu na to, jestli máš Briefing otevřený: od začátku seance (17:00 CT předchozího dne = 0:00 našeho času) každých 5 min, posledních 15 min před US openem (9:30 ET = 15:30 našeho času) každou minutu; v týdnech, kdy se USA a Evropa liší v přechodu na letní čas, jsou oba časy o hodinu jinak. Platí **poslední stav před openem**; od openu je verdikt zmrazený, protože se hodnotí pohyb od openu a hlas overnight by už nesl jeho část (#1585). Vstupy: **včerejší close (PDC) = close k settle předchozí obchodní seance** (16:00 ET, zkrácená seance 13:00 ET; v pondělí pátek), cena = živá cena enginu, gamma a ΔOI z **aktivní expirace enginu** — ne z expirace zvolené v hlavičce; při jiné zvolené expiraci se hlasy gammy a ΔOI mohou lišit od karet Režim a úrovně a ΔOI přes noc. Briefing verdikt **nepočítá, jen ukáže uložený řádek** (obnova každou minutu): před openem **předběžný** — „engine ho přepočítává každých 5 min, od 15:15 každou minutu; platí poslední stav před openem 15:30" a stáří („uloženo 15:25, před 3 min"); po openu **zmrazený** — „poslední zápis 15:29", bez živého přepočtu (ani „Počkat na tisk" se po vyjití zprávy nezmění). Když enginu chyběl některý vstup (výpadek čtení API, po restartu ještě bez levels nebo tendence, od mechaniky v6 i živá cena — „spot: poslední cena … stará N s“, #1600), karta to řekne: „předběžný, neúplný (chybí: gamma útes: HTTP 500) …" nebo „zmrazený, neúplný (chybí: …)"; úplný výpočet neúplný řádek přepíše, neúplný úplný nikdy. Bez řádku: „Verdikt zatím nevznikl" (seance běží), po openu viditelná mezera „Verdikt pro tuto seanci nevznikl" — nic se nedopočítává. Víkend a svátek NYSE: „Verdikt se nevydává — … není obchodní seance" (#1309). Symbol, který engine nesbírá (ad-hoc pohled, symbol nad limitem instrumentů): „Engine pro tento symbol verdikt nepočítá". Chyba čtení je výslovná, s kódem („Verdikt se nepodařilo načíst (HTTP 503)"), ne „bez verdiktu". Řádky do seance 16. 10. 2026 ukládal Briefing (jen když byl před openem otevřený, s PDC z poslední minuty Globexu), od 19. 10. engine — oboje pod verzí pravidel 3 (ADR-0035, dodatek 2026-10-17); zpětně se nic nedopočítává. Pět řádků z 9. 9.–2. 10. 2026 vzniklo nebo se přepsalo ještě po openu — track record je nepočítá (jejich hlasy už viděly část hodnoceného pohybu), ve výpisu zůstávají. Track record ukazuje **jen aktuální verzi pravidel** (od mechaniky v6 verze 4, předtím 3; Stats ji vypíše jako „Jen aktuální verze pravidel (v4)“, #1632): výsledky starších pravidel o současných nevypovídají, takže se nesčítají a po změně verze začíná track record od nuly (data zůstávají). Engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve **Stats → Verdikt dne** (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku; verdikt bere z uloženého řádku i s označením předběžný / zmrazený a časem zápisu, bez řádku ho vynechá — nikdy ho nepočítá. |
 | **Ranní checklist** (v1.18, #1241) | Sedm bodů, které 21. 9. 2026 (trendový den po kvartálním OPEX, NQ +580 b od 15:30) měly odpověď v datech, ale byly roztroušené po panelech: **útes gammy** minulé seance (≥ 50 % = den rozsahu, ne pinu), **stav mapy** (v1.21, #1245: tenká mapa = nic netlumí a nic nepinuje, setupy od zdi a pin vynechat; „—" = engine stav nevyhodnocuje, od mechaniky v6 i minuta bez živé ceny, #1657), **vyšší TF trend** (bias dne), **nejbližší zeď s dominancí** (< 25 % = slabá zeď → průraz pravděpodobnější než odraz), **gap vůči PDC a flipu** (≥ 0,4 % a držení = komprese před průrazem ve směru gapu), **tendence a Max Pain** (váhu mají až posledních 90 min do expirace; přes den jen informace, dokud se mapa hýbe), **riziko** (max 50 $ / obchod, −100 $ = konec dne, 15 min pauza po stopu, max 4 obchody). ▲ = signál pro dnešek, ● = sledovat, ○ = v normálu, — = bez dat. Viz kap. 21b. |
+| **Scénář dne → plán opce QQQ** (#1746) | Pod scénářem NQ karta plánu opce QQQ: opce s kotacemi 9:15 a 9:31, vstup A, cíle, exit, P5, průběh živě a výsledek po close, graf plánu; varování, když není nastaven účet plánu. U ES jen věta #1790. Detail v kap. 10 „Plán opce QQQ — karta v Briefingu“ |
 | **Trend** (v1.16, #1089) | Trend podkladu **shora dolů**: týden, den, 4h, 1h, 15m — per timeframe struktura trhu (HH/HL = rostoucí, LH/LL = klesající) a EMA20/EMA50; ● = struktura i EMA souhlasí, ○ = jen jedna z nich. Nad tabulkou čtení pro den: vyšší TF (týden, den) určuje směr, nižší načasování — souhlas = obchodovat ve směru, nesoulad = nižší TF korigují, čekat na návrat. Počty svíček W 80, D 120, 4h/1h/15m 120 — táž tabulka jako verdikt dne v enginu (#1595); hlasy trendu v uloženém verdiktu jsou ale stav před openem, karta je živá. Málo svíček = „málo dat", nic se nedosazuje. Metoda v ADR-0035. |
 | **Režim a úrovně** | Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště |
 | **Volatilita** | Volatilitní režim dne, expected move a jak často EM drží — viz níže |
@@ -1392,6 +1430,7 @@ které se přepne hned.
 | **Tastytrade** (v1.10) | Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, řádek **tastytrade** se stavovým tlačítkem a badgem zdroje (v1.16, #1108; obě větve běží záměrně souběžně — IBKR primární, tastytrade OI fill, tisky, extended expirace a záloha řetězu/spotu), trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží |
 | **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
 | **Trading** | **Traders mode** — přepínač trading vrstev (viz kap. 11e); **velikost účtu + riziko na obchod** pro kalkulačku pozice u setup karty. Vše jen v prohlížeči, na server neodchází |
+| **Plán opce QQQ — účet** (#1746) | Dva parametry plánu opce QQQ ze scénáře dne (ADR-0062 K2 A): **Velikost účtu ($)** a **Rozpočet na obchod — max. čerpání P4 ($ na kontrakt)**. Bez výchozí hodnoty, prázdné pole = nenastaveno a plán pak (chybí-li kterákoli) dá „neobchodovat — rozpočet nenastaven“. Platí kladné číslo (i s desetinnou čárkou), jinak pole ukáže chybu a Uložit nejde; chybu serveru sekce vypíše. Ukládá se tlačítkem **Uložit účet plánu** na server, jen změněné pole; hodnoty se nelogují. Plán je čte při vzniku (9:15 ET, plán sestavený až v 9:31 ET v 9:31), živé upozornění a vyhodnocení aktuální |
 | **Vzhled** | Téma **Dark/Light** (přepne se ihned), jazyk |
 | **Seance** | Historické pole (JSON) — markery seancí se nově generují **automaticky** z časů světových burz; checkbox Sessions v grafu |
 

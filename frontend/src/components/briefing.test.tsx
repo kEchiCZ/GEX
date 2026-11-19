@@ -20,6 +20,7 @@ function appState(overrides: Record<string, unknown> = {}) {
     setJournalDraft,
     setView,
     status: { engine: 'online' },
+    alerts: [],
     ...overrides,
   }
 }
@@ -91,6 +92,12 @@ function mockApis(overrides: Record<string, unknown> = {}) {
       const byTf = (overrides['candles'] ?? {}) as Record<string, unknown[]>
       return body({ candles: byTf[tf] ?? [] })
     }
+    if (path.includes('/option-plans/') && path.endsWith('/image'))
+      return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve(new Blob(['png'])) }) // prettier-ignore
+    if (path.includes('/option-plans'))
+      return body(overrides['optionPlans'] ?? { option_plans: [] }, (overrides['optionPlansStatus'] as number) ?? 200) // prettier-ignore
+    if (path.includes('/scenarios')) return body(overrides['scenarios'] ?? { scenarios: [] })
+    if (path.includes('/settings')) return body(overrides['settings'] ?? { settings: {} })
     return body({})
   })
 }
@@ -422,4 +429,143 @@ test('Včera a overnight (#1596): v pondělí páteční settle = RTH close, gap
     .map((url) => new URL(url, 'http://x').searchParams.get('date'))
   expect(barDates).not.toContain('2026-10-18')
   expect(barDates).not.toContain('2026-10-17')
+})
+
+/** Scénář NQ dne a plán opce QQQ z něj (F5a #1746); čísla syntetická. */
+const NQ_SCENARIO = {
+  id: 70,
+  symbol: 'NQ',
+  day: '2026-11-18',
+  created_at: '2026-11-18T14:15:00+00:00',
+  deadline: '2026-11-18',
+  deadline_ts: '2026-11-18T21:00:00+00:00',
+  entry: 20000,
+  targets: [19950, 19900],
+  path: [],
+  annotation_id: null,
+  note: null,
+  has_image: false,
+  image_bytes: 0,
+  evaluated_at: null,
+  result: null,
+  source: 'auto',
+  rationale: null,
+}
+
+function nqPlan(id: number, scenarioId: number) {
+  return {
+    id,
+    scenario_id: scenarioId,
+    day: '2026-11-18',
+    created_at: '2026-11-18T14:15:00+00:00',
+    rules_version: 1,
+    status: 'bez opce',
+    verdict: null,
+    evaluated_at: null,
+    result: null,
+    has_image: false,
+    live_alerts: [],
+    effective: { slot: '9:15', main: null, prices: null, reasons: ['řetěz chybí'], repricing_reasons: null }, // prettier-ignore
+  }
+}
+
+test('NQ: plán opce pod scénářem, ze kterého vznikl; nenastavený účet = varování', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:plan')
+  URL.revokeObjectURL = vi.fn()
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  mockApis({
+    scenarios: { scenarios: [NQ_SCENARIO] },
+    optionPlans: { option_plans: [nqPlan(9, 70), nqPlan(8, 69)] },
+    settings: { settings: { option_plan_account_usd: 1000, option_plan_max_loss_usd: null } },
+  })
+  render(<BriefingView />)
+  const card = await screen.findByTestId('option-plan-9')
+  expect(card.previousElementSibling?.getAttribute('data-testid')).toBe('scenario-70')
+  expect(card.textContent).toContain('Bez opce: řetěz chybí')
+  expect(await screen.findByTestId('option-plan-account-missing')).toBeTruthy()
+  expect(screen.queryByTestId('option-plan-8')).toBeNull() // scénář 69 v Briefingu není
+  expect(screen.queryByTestId('option-plan-other-symbol')).toBeNull()
+})
+
+test('NQ: chyba seznamu plánů je výslovná, žádná náhradní data', async () => {
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  mockApis({ scenarios: { scenarios: [NQ_SCENARIO] }, optionPlansStatus: 503 })
+  render(<BriefingView />)
+  expect((await screen.findByTestId('option-plan-list-error')).textContent).toBe(
+    'Plány opce QQQ se nenačetly: HTTP 503',
+  )
+  expect(screen.queryByTestId('option-plan-9')).toBeNull()
+})
+
+test('ES: plán opce ze scénáře ES nevzniká (#1790), seznam plánů se nečte', async () => {
+  mockApis({ scenarios: { scenarios: [{ ...NQ_SCENARIO, symbol: 'ES' }] } })
+  render(<BriefingView />)
+  expect((await screen.findByTestId('option-plan-other-symbol')).textContent).toContain('#1790')
+  const urls = fetchMock.mock.calls.map((call) => String(call[0]))
+  expect(urls.some((url) => url.includes('/option-plans'))).toBe(false)
+  expect(urls.some((url) => url.includes('/settings'))).toBe(false)
+})
+
+test('NQ: alert plánu přes WS načte plány znovu, jiný alert ne (polling není)', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:plan')
+  URL.revokeObjectURL = vi.fn()
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  mockApis({
+    scenarios: { scenarios: [NQ_SCENARIO] },
+    optionPlans: { option_plans: [nqPlan(9, 70)] },
+  })
+  const { rerender } = render(<BriefingView />)
+  await screen.findByTestId('option-plan-9')
+  const planCalls = () =>
+    fetchMock.mock.calls.filter((call) => /\/option-plans\?/.test(String(call[0]))).length
+  expect(planCalls()).toBe(1)
+  const setupAlert = { kind: 'setup', symbol: 'NQ', message: 'setup', ts: 1 }
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ', alerts: [setupAlert] }))
+  rerender(<BriefingView />)
+  expect(planCalls()).toBe(1)
+  const planAlert = {
+    kind: 'option_plan_state',
+    symbol: 'QQQ',
+    message: 'VSTUP',
+    ts: 2,
+    event: 'vstup',
+  }
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ', alerts: [setupAlert, planAlert] }))
+  rerender(<BriefingView />)
+  await waitFor(() => expect(planCalls()).toBe(2))
+})
+
+test('NQ: nejnovější plán bez scénáře v kartě se ukáže zvlášť, nezmizí', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:plan')
+  URL.revokeObjectURL = vi.fn()
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  mockApis({ scenarios: { scenarios: [] }, optionPlans: { option_plans: [nqPlan(9, 71)] } })
+  render(<BriefingView />)
+  expect((await screen.findByTestId('option-plan-orphan')).textContent).toContain('#71')
+  expect(screen.getByTestId('option-plan-9')).toBeTruthy()
+  expect(screen.getByTestId('option-plan-toggle-9')).toBeTruthy() // sbalený, jde rozbalit
+})
+
+test('NQ: plán vyhodnoceného scénáře je řádek, rozbalí se na celou kartu (Q2 C)', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:plan')
+  URL.revokeObjectURL = vi.fn()
+  useAppStateMock.mockReturnValue(appState({ symbol: 'NQ' }))
+  const evaluated = {
+    ...NQ_SCENARIO,
+    id: 69,
+    day: '2026-11-17',
+    evaluated_at: '2026-11-17T21:05:00+00:00',
+  }
+  mockApis({
+    scenarios: { scenarios: [NQ_SCENARIO, evaluated] },
+    optionPlans: { option_plans: [nqPlan(9, 70), nqPlan(8, 69)] },
+  })
+  render(<BriefingView />)
+  const full = await screen.findByTestId('option-plan-9')
+  expect(full.textContent).toContain('Bez opce: řetěz chybí')
+  expect(screen.queryByTestId('option-plan-toggle-9')).toBeNull()
+  expect(screen.getByTestId('option-plan-line-8')).toBeTruthy()
+  fireEvent.click(screen.getByTestId('option-plan-toggle-8'))
+  expect(screen.getByTestId('option-plan-8').textContent).toContain('Bez opce: řetěz chybí')
+  expect(screen.queryByTestId('option-plan-line-8')).toBeNull()
 })
