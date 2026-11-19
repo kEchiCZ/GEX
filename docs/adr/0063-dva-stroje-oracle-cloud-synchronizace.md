@@ -1,8 +1,11 @@
 # ADR-0063: Dva stroje (PC a Oracle Cloud ARM), vždy jeden aktivní — role, synchronizace na záloze, přepnutí, zálohy za aktivním strojem
 
-- **Stav:** navrženo, čeká na schválení vlastníkem v PR (`needs-decision`). Body zapisují
-  rozhodnutí vlastníka z 12., 13. a 19. 11. 2026 v epice #1094 (sekce Rozhodnuto). Plán epiky
-  vlastník schválil 19. 11. komentářem „schvaluji“ (#1094 issuecomment-7021302156).
+- **Stav:** **přijato 19. 11. 2026** (vlastník v chatu k PR #1861: „1. Schvaluji, 2. A, 3. A,
+  4. Ano“ — ADR jako celek, přesun souborů chybějících ve snímku zdroje do karantény (bod 4),
+  zpožděná data IBKR na serveru ne (bod 8, varianta A), denní restart Gateway v 16:05 CT
+  (bod 11)). Body zapisují rozhodnutí vlastníka z 12., 13. a 19. 11. 2026 v epice #1094 (sekce
+  Rozhodnuto). Plán epiky vlastník schválil 19. 11. komentářem „schvaluji“ (#1094
+  issuecomment-7021302156).
 - **Datum:** 2026-11-19
 - **Mění:** SPEC kap. 8 „Bezpečnost: Vše lokální; API bind na localhost“ (bod 9). Dočasně
   R5 a R1 na serveru do zaplacení subskripce druhého username (bod 8, konec po #1856).
@@ -99,7 +102,8 @@ Synchronizace stojí na téže záloze, kterou stroj dělá každou noc (restic)
    `data/` se přepíše změněnými soubory. Soubor, který ve snímku zdroje chybí (zdroj ho
    přesunul, např. do `quarantine/`), se na cíli **nemaže, ale přesune** do
    `quarantine/sync-<datum>/` a vypíše ve výsledku synchronizace. Jinak by se přesunutá
-   podezřelá partice na cíli vrátila do UI (odvozeno 19. 11. po ověřovateli, #1800, #1851).
+   podezřelá partice na cíli vrátila do UI (Rozhodnuto 19. 11., varianta A; zamítnuto B nechat
+   na místě a C smazat; #1800, #1851).
 
 Kanálem je **repozitář restic na serveru** (sftp v tailnetu), takže synchronizace nezávisí
 na úložišti záloh PC (bod 7):
@@ -214,7 +218,7 @@ Noční restic snapshot dělá **jen aktivní stroj**, služba `ops` je stejná 
 | **A druhý username (zvoleno 19. 11.)** | PC ani mobil se serverem neruší; souběh relací | do zaplacení subskripce server bez dat IBKR (dočasná odchylka R5/R1) |
 | B týž username s tlačítkem „Znovu připojit“ | data IBKR hned | každé přihlášení serveru shodí PC nebo mobil; vlastník přepíná ručně |
 | C server trvale bez IBKR | nic se neplatí | trvalá odchylka od R5 a R1 na serveru |
-| D přijímat zpožděná data IBKR (typ 3) do zaplacení | data IBKR hned a zdarma | zpožděné hodnoty by se v téže minutě míchaly s živými z tasty a heatmapa by ukazovala minulost jako přítomnost (point-in-time); engine zpožděná data dnes odmítá a musel by nést zpoždění v každém bodě → **nedoporučeno** |
+| D přijímat zpožděná data IBKR (typ 3) do zaplacení | data IBKR hned a zdarma | zpožděné hodnoty by se v téže minutě míchaly s živými z tasty a heatmapa by ukazovala minulost jako přítomnost (point-in-time); engine zpožděná data dnes odmítá a musel by nést zpoždění v každém bodě → **zamítnuto 19. 11.** (vlastník: A) |
 
 ### 9. Přístup jen v tailnetu (odchylka od SPEC kap. 8)
 Tailscale na serveru, PC i mobilu. UI obou strojů je dostupné jen v tailnetu přes
@@ -251,7 +255,8 @@ beze změny. Veřejná IP s 80/443 a Let's Encrypt ani Cloudflare Access nevznik
   Gateway stojí a server jede přes tasty. Po otevření trhu Telegram a tlačítko „Přihlásit IBKR
   na serveru“ (#1850). Denní restart bez hesla zůstává **vždy v pauze Globexu**: dnešní
   `AUTO_RESTART_TIME` 23:05 Europe/Prague padne v týdnech posunu letního času do otevřeného
-  trhu, proto ho #1850 převede do pásma America/Chicago (16:05 CT). Nedělní plný login zůstává
+  trhu, proto ho #1850 převede do pásma America/Chicago (16:05 CT, Rozhodnuto 19. 11.). Nedělní
+  plný login zůstává
   22:30 Europe/Prague.
 
   | Varianta | + | − |
