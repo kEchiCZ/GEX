@@ -85,3 +85,41 @@ způsobem:
 
 Součet profilu okna proto může převýšit `window.opt_vol` téhož okna, a to
 o objem výpadku uvnitř okna. Uživatelský manuál to přiznává (okenní profil).
+
+## Dodatek 2026-11-19 (#1094, ADR-0063): navázání denního stavu i uprostřed seance
+
+Rozhodnuto 19. 11. v #1094: **navázání denního stavu ano**, i uprostřed seance. Přepnutí
+aktivního stroje (ADR-0063 bod 5) je řízené zastavení zdroje a start cíle s dnešními daty
+z dorovnání. Bez navázání by cíl začínal jako pozdní start a přepnutí by stálo denní
+akumulátory.
+
+**Co už platí (z dnešních partic):** po restartu uprostřed seance se navazují kumulativní net
+objem z partice `netflow` (#232, #1460), CumΔ z partice `flow` (#638, `restore_cum`) a CVD
+podkladu (#1603). Čte se jen poslední měřený řádek **téže seance** (okno `session_bounds`,
+i předchozí UTC partice, #1002) a zdroje běžícího trackeru (ADR-0057 bod 8).
+
+**Co se doplní (#1849):**
+
+1. **Inventura** stavu, který engine drží přes den jen v paměti a z partic ho neodvodí
+   (např. stav detektorů setupů a tendence, živá upozornění plánu QQQ, postup OI archivu).
+   Tabulka položek s odpovědí „odvodit z partic / checkpoint / nenavazuje se“ přijde do
+   tohoto dodatku s implementací.
+2. **Checkpoint při řádném zastavení** (přechod do prohlížení, `docker stop`, nasazení):
+   engine dopíše minutu a uloží denní stav jako **součást dat dne** pod klíčem obchodního dne
+   (`trading_session_date`, ne UTC partice). Proto se zálohuje i synchronizuje s ostatními
+   daty a cíl přepnutí ho má po dorovnání. Vyžaduje obsluhu SIGTERM a `stop_grace_period`
+   enginu.
+3. **Navázání při startu:** checkpoint téže seance → akumulátory pokračují od uložených hodnot;
+   bez checkpointu (pád) se odvodí z dnešních partic, co jde. Checkpoint jiné seance se
+   nenačte nikdy (reset na hranici seance, #638, #1460, #1603).
+
+**Co se nenavazuje a proč:**
+
+* **Díra zůstává dírou.** Minuty mezi poslední zapsanou minutou zdroje a první minutou cíle
+  se nedokreslují ani neinterpolují (bod 2). První sweep po startu nese `catch_up` (bod 3),
+  protože denní kumulativní objem IBKR v sobě má i objem díry.
+* **Tok za dobu díry** chybí: CumΔ pokračuje od uložené hodnoty, tisky z mezery v něm nejsou.
+  Mezera se ukáže v ose jako u každé jiné díry (#516).
+* **Opční vrstva** za dobu díry — bod 1 (zamítnutí varianty A) platí beze změny.
+* Popisek „CumΔ od HH:MM“ (bod 3) zůstává pro den, kdy stroj nemá z téže seance žádná
+  starší data (první start v seanci bez dorovnání).
