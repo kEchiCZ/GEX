@@ -250,7 +250,7 @@ Nástroje šipka / linie / freehand, výběr barvy, mazání; persistence per in
 | Integrita | Každá buňka heatmapy nese stáří dat; stale > 5 min vizuálně odlišeno |
 | Odolnost | Reconnect bez ztráty intraday dat; pacing chyby nikdy neshodí engine |
 | Objem | ~30–60 MB/den; 14denní okno < 1 GB; OI archiv růst ~KB/den |
-| Bezpečnost | Vše lokální; žádná telemetrie; API bind na localhost (konfig.) |
+| Bezpečnost | Vše lokální; žádná telemetrie; API bind na localhost (konfig.) — *na serveru přístup jen v tailnetu, loopback bind beze změny, viz ADR-0063 bod 9* |
 | Testy | Jednotkové testy výpočtů proti golden datasetu; integrační test enginu proti ib_async mocku; e2e smoke |
 | Provoz | Jeden příkaz start (docker compose nebo `make run`); engine schopný headless běhu u IB Gateway |
 
@@ -297,5 +297,5 @@ nový řádek v této tabulce ve stejném PR (viz `AGENTS.md`, Definition of don
 | Trading kouč (vyhodnocení chyb, smyčka zlepšování setupů) | 0030, 0033, 0034 | #1187, #1244 | USER kap. 11d–11e |
 | Persistence UI voleb, provizorní bar, deep-linky | 0005, 0007 | — | USER kap. 13, 16 |
 | Autopilot M8 (exekuce strategií) — **zatím jen zadání** | *ADR čeká (#925)* | #924–#934 | — |
-| Provoz: dev/prod stack, zálohy PG, bezpečnostní CI, hosting | — | #696, #542, #1094 | ADMIN kap. 3, 9, 10, 14 |
+| Provoz: dev/prod stack, zálohy, bezpečnostní CI; dva stroje (PC a Oracle Cloud ARM), vždy jeden aktivní — synchronizace, přepnutí, zálohy za aktivním strojem | 0063 | #696, #542, #1094 | ADMIN kap. 3, 9, 10, 14 |
 | Měřič výkonu grafu (snímky, dlouhé úlohy, počítadla vykreslení, export) | 0047 | #1385, #1386, #1274 | ADMIN kap. 8 |

@@ -2025,7 +2025,8 @@ frontendu být nesmí, ten si stáhne kdokoli.
 ### Síť
 
 `compose.yml` nepublikuje nic na `0.0.0.0`. Adresu řídí `GEXLENS_BIND_ADDR`
-(default `127.0.0.1`); na serveru sem patří Tailscale IP. **Nikdy `0.0.0.0`** —
+(default `127.0.0.1`); na serveru zůstává loopback a UI zpřístupní v tailnetu
+`tailscale serve` (ADR-0063 bod 9). **Nikdy `0.0.0.0`** —
 Docker zapisuje publikaci do řetězce `DOCKER`, který se na Linuxu vyhodnocuje
 před UFW, takže port publikovaný bez adresy je veřejný i se „zapnutým firewallem".
 
@@ -2036,14 +2037,16 @@ nástroje na hostiteli (zálohy, sondy) — pro provoz je potřeba nemá.
 ### Checklist před nasazením na VPS
 
 1. `pwsh scripts/init-secrets.ps1` na serveru; ověřit, že `.env` má práva 600.
-2. `GEXLENS_BIND_ADDR` = Tailscale IP serveru.
+2. `GEXLENS_BIND_ADDR` zůstává loopback; UI v tailnetu přes `tailscale serve` (ADR-0063 bod 9).
 3. `GEXLENS_ALLOWED_ORIGINS` = adresa UI, pod kterou se bude otevírat (jinak
    prohlížeč zablokuje fetch a WS handshake skončí na kontrole Origin).
-4. UFW: povolit jen SSH a Tailscale; ověřit `nmap` z venku, že 8080/8010/55432
+4. UFW: na veřejném rozhraní nepouštět nic, ani 22 (SSH jen přes Tailscale, ADR-0063 bod 9);
+   ověřit `nmap` z venku, že 22/8080/8010/55432
    nejsou vidět (kontrolovat zvenčí, ne `ufw status` — viz past s DOCKER chainem).
 5. SSH: klíče, `PasswordAuthentication no`, root login zakázaný.
 6. IB Gateway: **VNC nikdy veřejně**, jen přes tunel.
-7. Zálohy: `scripts/backup-postgres.ps1` (nebo cron s `pg_dump`) mimo server,
+7. Zálohy: za aktivním strojem podle ADR-0063 bod 7 (restic, #1804); do té doby
+   `scripts/backup-postgres.ps1` (nebo cron s `pg_dump`) mimo server,
    šifrovaně — dump obsahuje celý OI archiv a historii setupů.
 8. `docker compose up -d --build`, pak ověřit, že engine publikuje (`/status`
    ukazuje `engine: online`) — chybějící token se pozná tak, že UI zůstane bez
@@ -2051,22 +2054,23 @@ nástroje na hostiteli (zálohy, sondy) — pro provoz je potřeba nemá.
 
 ### Linux server: IB Gateway v kontejneru a rozdíly proti PC (#1094)
 
-Postup zprovoznění krok za krokem (netcup RS 1000 G12, Tailscale, přenos dat,
-přepnutí v pauze Globexu) je v issue #1094. Co k tomu má repo:
+Provoz na dvou strojích (PC a server Oracle Cloud ARM, vždy jeden aktivní, synchronizace
+a přepnutí tlačítkem, zálohy za aktivním strojem) určuje **ADR-0063**; fáze a postup
+zprovoznění serveru jsou v epice #1094 (bootstrap #1802). Co k tomu má repo dnes:
 
 | Co | Kde | Poznámka |
 |---|---|---|
 | IB Gateway jako služba | `compose.server.yml` | vždy `-f compose.yml -f compose.server.yml`; image `ghcr.io/gnzsnz/ib-gateway:stable` (IBC + Xvfb), **API na `ib-gateway:4003`** (socat relay — 4001 je uvnitř kontejneru jen localhost), nic nepublikuje, VNC vypnuté |
-| Username a heslo | `.env` → `IBKR_DATA_USERID`; `secrets/ibkr_password` (mimo git, chmod 600) | **druhý (datový) username** účtu (#737), nikdy hlavní — souběh s mobilem by shodil Gateway |
-| Reautentizace | `AUTO_RESTART_TIME` 23:05, `TWS_COLD_RESTART` neděle 22:30 (TZ kontejneru Europe/Prague) | pondělní IB Key push zůstává ruční (kap. 13.2); `TWOFA_TIMEOUT_ACTION=restart` login opakuje, dokud push nepřijde |
-| Past host/port v DB | Settings UI → host `ib-gateway`, port `4003` | hodnota z DB přebíjí `.env` i compose (#446/#992); po obnově dumpu z PC tam zůstal domácí `4001` |
+| Username a heslo | `.env` → `IBKR_DATA_USERID`; `secrets/ibkr_password` (mimo git, chmod 600) | **druhý (datový) username** účtu (#737), nikdy hlavní — souběh s PC nebo mobilem by shodil Gateway. Do zaplacení subskripce druhého username IBKR market data nedodá (354, zpožděná engine odmítá) a server bere data z tasty fallbackem (kap. 11): dočasná odchylka od R5 a R1, konec po #1856 (ADR-0063 bod 8) |
+| Reautentizace | `AUTO_RESTART_TIME` 23:05 (denně bez hesla), `TWS_COLD_RESTART` neděle 22:30 (plný login, TZ kontejneru Europe/Prague) | IB Key push v neděli 22:30 potvrzuje vlastník na telefonu. Podle ADR-0063 bod 11 nejvýš 3 pushe (první + 2 pokusy po ~10 min), pak Gateway stojí, server jede přes tasty, po otevření trhu Telegram a tlačítko „Přihlásit IBKR na serveru“ — limit pokusů implementuje #1850; do té doby `TWOFA_TIMEOUT_ACTION=restart` login opakuje, dokud push nepřijde |
+| Past host/port v DB | Settings UI → host `ib-gateway`, port `4003` | hodnota z DB přebíjí `.env` i compose (#446/#992); po obnově dumpu z PC tam zůstal domácí `4001`. Trvale řeší nastavení stroje mimo synchronizaci (ADR-0063 bod 3, #1847, #1848) |
 | Název projektu | `compose.yml` → `name: gex` | kontejnery `gex-*` a image `gex-engine` nezávisle na názvu adresáře (`/srv/gexlens`) — deploy skript a rollback tag s nimi počítají |
 | Deploy | `pwsh scripts/deploy-engine-offhours.ps1 -Server` | `-Server` přidá override; zóna Chicago se hledá jako `America/Chicago` i `Central Standard Time` |
 | Walk-forward | `scripts/systemd/gexlens-walkforward.{service,timer}` | náhrada Task Scheduleru; po–pá 23:30, `Persistent=true` |
 | Ostatní úlohy hostitele | kap. 13.6 | co z Task Scheduleru PC na serveru odpadá a co chybí (úklid a hlídka místa #1567, upozornění na výpadek Dockeru, záloha PG #1566) |
 | Přístup k UI | `tailscale serve --bg --https=443 localhost:8080` | `GEXLENS_BIND_ADDR` zůstává loopback, `GEXLENS_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net`; UFW nepouští nic, SSH přes Tailscale |
 | Docker × UFW | řetězec `DOCKER-USER` v `/etc/ufw/after.rules` zahazuje vše z veřejného rozhraní do kontejnerů | druhá pojistka vedle loopback bindu; kontrola vždy `nmap` zvenčí |
-| Swap na 8 GB | `zram-tools`, `PERCENT=25` | naměřeno 5,3 GB (kap. 13.2 + `docker stats` 9. 9. 2026); zram kryje špičky RTH, práh pro větší plán je 85 % |
+| Swap | `zram-tools`, `PERCENT=25` | naměřeno 5,3 GB (kap. 13.2 + `docker stats` 9. 9. 2026): Oracle A1 12 GB (~44 %), plán B 8 GB; zram kryje špičky RTH, práh pro větší plán je 85 % (brána F6, ADR-0063 bod 11) |
 
 ### Návrat zpět (rollback)
 
