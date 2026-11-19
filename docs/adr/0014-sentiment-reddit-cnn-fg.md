@@ -29,3 +29,30 @@
 
 - Bez registrace Reddit app se #290 nasadí jen s CNN F&G + PCR; Reddit část za config flagem (prázdné credentials → zdroj vypnutý, ne degraded).
 - CNN endpoint se může kdykoli změnit nebo přitvrdit bot-detekci — crowd vrstva je doplňková (mimo SentIndex, SPEC 5.8), výpadek nemá dopad na core modul.
+
+## Dodatek 2026-11-19: Reddit ukončil RSS, veřejné Data API končí (#1845)
+
+**Zjištění (ověřeno 19. 11. 2026):**
+- Zdroj `reddit_rss` (nativní RSS, #578) přestal chodit **17. 11. 2026 17:39 UTC**. Každá adresa
+  `.rss` na `www.reddit.com` vrací **404** s prázdným Atomem `<title>Not Found</title>`
+  z `rss.reddit.com`, i s User-Agentem prohlížeče; `old.reddit.com/…/.rss` přesměruje na přihlášení
+  a `hot.json` vrací 403. Reddit to oznámil 30. 9. 2026 s termínem konce RSS **13. 11. 2026**.
+- Veřejné Data API: nové žádosti o přístup **uzavřené od 31. 10. 2026**, od **12. 1. 2027** odpojování
+  aplikací, které se nezaregistrovaly, a v **březnu 2027** konec zbytku veřejného přístupu (aplikace
+  mají přejít na Developer Platform). Placený přístup k datům jen individuální smlouvou, ceník není
+  veřejný. Bod „Free tier Data API“ výše tím pro novou aplikaci neplatí. Údaje jsou ze sekundárních
+  zdrojů (TechCrunch 30. 9. 2026, redditwatch.org); původní příspěvky v r/redditdev a r/modnews Reddit
+  anonymně nezobrazí.
+- Dopad: `reddit_rss` dával 0,4 % zpráv k ES a relevantních z nich bylo 2 % (audit #1473); tier
+  obsahu NULL (ADR-0059), strop importance 1 (ADR-0045).
+
+**Rozhodnutí vlastníka (19. 11. 2026):** zdroj se **vypíná přepínačem v registru** `news_sources.enabled`
+(záložka News → Zdroje zpráv), ne změnou výchozího `GEXLENS_NEWS_REDDIT_RSS_ENABLED` — dva vypínače
+na totéž by se v UI rozcházely. Kód collectoru i seznam subredditů zůstávají kvůli možnému placenému
+zapnutí v budoucnu.
+
+**Důsledky:**
+- Placený přístup vrátí jen OAuth API, ne RSS. Opětovné zapnutí tedy znamená collector nad API
+  (základ OAuth `client_credentials` a hot listingu je v `crowd.py`), ne přepnutí `reddit_rss`.
+- Crowd collector Reddit z tohoto ADR se bez přihlašovacích údajů nespouští a novou aplikaci už
+  zaregistrovat nejde; řady `wsb_hot_avg` a `stocks_hot_avg` tedy nevznikají.

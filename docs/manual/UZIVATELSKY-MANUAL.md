@@ -964,7 +964,7 @@ proklik** — otevře téma v panelu Témata i se zdrojovými zprávami.
 - **Filtry** nahoře: kategorie a minimální důležitost (vše / 2+ / 3).
 - **„Co hýbe trhem"** — aktivní témata s příspěvkem k indexu (🏛 Fed +0,42 …).
 - **Panel Témata** (v1.12) — viz níže.
-- **Crowd sentiment** — externí kontrariánské ukazatele: Fear & Greed, Put/Call ratio, Reddit průměry.
+- **Crowd sentiment** — externí kontrariánské ukazatele: Fear & Greed, Put/Call ratio. Reddit průměry jen s přístupem k Reddit API, který Reddit pro nové aplikace uzavřel (#1845).
 - **Nadcházející** — nejbližší plánované události s odpočtem a konsensem (např. „CPI za 1 h 12 m · konsensus 2,9 (min. 3,0)").
 - **Tabulka zpráv** — čas, kategorie, titulek, typ, důležitost, skóre. U řádků s nejistou klasifikací je tužka ✎ — můžeš **ručně opravit směr nebo kategorii** (uloží se jako korekce, model se z ní učí — review fronta).
 - **Zdroje zpráv** (dole) — audit všech používaných zdrojů: co má téct vs. co
@@ -973,7 +973,8 @@ proklik** — otevře téma v panelu Témata i se zdrojovými zprávami.
   a **přepínač Aktivní** — vypnutý zdroj se při startu news-engine vůbec
   nespustí. Pod tabulkou jsou **editovatelné seznamy**: Bluesky kurátoři
   (handle nebo `did:…`, jejichž každý post se bere), Reddit subreddity
-  a vlastní RSS feedy. Každá položka má **checkbox** — vypnutí je **vratné**
+  a vlastní RSS feedy. Zdroj Reddit RSS je od 19. 11. 2026 vypnutý, protože Reddit
+  RSS feedy 13. 11. ukončil. Seznam subredditů zůstává pro případné zapnutí (#1845). Každá položka má **checkbox** — vypnutí je **vratné**
   (položka zůstává v seznamu přeškrtnutá a jde kdykoli zase zapnout);
   **✕ položku smaže nevratně** — smazané defaulty se už nevracejí.
   Bluesky kurátoři se projeví za běhu do ~10 minut; subreddity, vlastní feedy
@@ -1542,7 +1543,7 @@ Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a je
 | Obálka na stropu | Pásmo strikes dosáhlo maxima šířky — vzdálený okraj se posouvá za cenou | Diagnostika modelu (vyp.) |
 | **Svíčky se přestaly kreslit** | Real-time bary z TWS nechodí při otevřeném trhu (mrtvé TWS farmy po noční přestávce) — i když stojí i cena, to je zamrzlý stream (v1.31, #1347); pomáhá restart TWS, díra se po návratu doplní sama | Svíčky nechodí (vyp.) |
 | Svíčky zase jedou | Bary se vrátily — díra ve svíčkách se doplní backfillem | Svíčky nechodí (vyp.) |
-| **Feed zpráv nefunguje** | Jeden RSS feed zpráv (Fed, Yahoo, CNBC, MarketWatch, Reddit, vlastní feed) selhává bez přerušení déle než hodinu — zrušená adresa, chyba serveru nebo nečitelná odpověď. Ostatní feedy chodí dál, ale zprávy z tohoto chybí a zpětně se nedoplní. Hlásí se jednou za výpadek, i o víkendu, protože zprávy vycházejí pořád (v1.31, #1451) | Feed zpráv nefunguje (zap.) |
+| **Feed zpráv nefunguje** | Jeden RSS feed zpráv (Fed, Yahoo, CNBC, MarketWatch, vlastní feed) selhává bez přerušení déle než hodinu — zrušená adresa, chyba serveru nebo nečitelná odpověď. Ostatní feedy chodí dál, ale zprávy z tohoto chybí a zpětně se nedoplní. Hlásí se jednou za výpadek, i o víkendu, protože zprávy vycházejí pořád (v1.31, #1451) | Feed zpráv nefunguje (zap.) |
 | Feed zpráv zase odpovídá | První úspěšné stažení po ohlášeném výpadku, s jeho délkou | Feed zpráv nefunguje (zap.) |
 | **Vol koncentrace** | Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop). **Při zavřeném trhu** (víkend, denní pauza) se nehlásí: objem je zmrzlý z poslední seance (#1309) | Koncentrace opčního objemu (zap.) |
 | **Nový setup** | Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring). Od v1.27 nese šablonu s číslem (T7 trend_continuation), stádium buňky (AUTO / STÍN / ZKOUŠKA 3/10 s čerpáním) a druhý řádek s ØR hrubě a čistě, n / n potřebné a verdiktem brány — se štítkem **edge neprokázán:**, když dolní mez ØR není kladná, jinak **Důkaz:**. Na Telegram jen obchodovatelný setup | Nový setup (zap.) |
