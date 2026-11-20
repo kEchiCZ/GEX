@@ -2063,9 +2063,10 @@ nástroje na hostiteli (zálohy, sondy) — pro provoz je potřeba nemá.
 2. `GEXLENS_BIND_ADDR` zůstává loopback; UI v tailnetu přes `tailscale serve` (ADR-0063 bod 9).
 3. `GEXLENS_ALLOWED_ORIGINS` = adresa UI, pod kterou se bude otevírat (jinak
    prohlížeč zablokuje fetch a WS handshake skončí na kontrole Origin).
-4. UFW: na veřejném rozhraní nepouštět nic, ani 22 (SSH jen přes Tailscale, ADR-0063 bod 9);
-   ověřit `nmap` z venku, že 22/8080/8010/55432
-   nejsou vidět (kontrolovat zvenčí, ne `ufw status` — viz past s DOCKER chainem).
+4. Firewall: na veřejném rozhraní nepouštět nic, ani 22 (SSH jen přes Tailscale, ADR-0063 bod 9);
+   na Oracle iptables image + prázdný ingress Security Listu, jinde UFW (`bootstrap.sh`).
+   Ověřit `nmap -Pn -p-` zvenku, že žádný port (ani 22/2222/8080/8010/55432) není vidět
+   (kontrolovat zvenčí, ne `ufw status` / `iptables -S` — viz past s DOCKER chainem).
 5. SSH: klíče, `PasswordAuthentication no`, root login zakázaný.
 6. IB Gateway: **VNC nikdy veřejně**, jen přes tunel.
 7. Zálohy: za aktivním strojem podle ADR-0063 bod 7 (restic, #1804); do té doby
@@ -2091,9 +2092,119 @@ zprovoznění serveru jsou v epice #1094 (bootstrap #1802). Co k tomu má repo d
 | Deploy | `pwsh scripts/deploy-engine-offhours.ps1 -Server` | `-Server` přidá override; zóna Chicago se hledá jako `America/Chicago` i `Central Standard Time` |
 | Walk-forward | `scripts/systemd/gexlens-walkforward.{service,timer}` | náhrada Task Scheduleru; po–pá 23:30, `Persistent=true` |
 | Ostatní úlohy hostitele | kap. 13.6 | co z Task Scheduleru PC na serveru odpadá a co chybí (úklid a hlídka místa #1567, upozornění na výpadek Dockeru, záloha PG #1566) |
-| Přístup k UI | `tailscale serve --bg --https=443 localhost:8080` | `GEXLENS_BIND_ADDR` zůstává loopback, `GEXLENS_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net`; UFW nepouští nic, SSH přes Tailscale |
-| Docker × UFW | řetězec `DOCKER-USER` v `/etc/ufw/after.rules` zahazuje vše z veřejného rozhraní do kontejnerů | druhá pojistka vedle loopback bindu; kontrola vždy `nmap` zvenčí |
-| Swap | `zram-tools`, `PERCENT=25` | naměřeno 5,3 GB (kap. 13.2 + `docker stats` 9. 9. 2026): Oracle A1 12 GB (~44 %), plán B 8 GB; zram kryje špičky RTH, práh pro větší plán je 85 % (brána F6, ADR-0063 bod 11) |
+| Přístup k UI | `tailscale serve --bg --https=443 http://127.0.0.1:8080` (nastaví `bootstrap.sh`) | `GEXLENS_BIND_ADDR` zůstává loopback, `GEXLENS_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net` (bootstrap ho doplní do `.env`); na veřejném rozhraní nic dovnitř, SSH přes Tailscale |
+| Docker × firewall | řetězec `DOCKER-USER` zahazuje vše z veřejného rozhraní do kontejnerů; Oracle v `/etc/iptables/rules.v4`, jinde v `/etc/ufw/after.rules` (`bootstrap.sh`) | druhá pojistka vedle loopback bindu; kontrola vždy `nmap` zvenčí |
+| Swap | `zram-tools`, `ALGO=zstd`, `PERCENT=25` (`bootstrap.sh`) | naměřeno 5,3 GB (kap. 13.2 + `docker stats` 9. 9. 2026): Oracle A1 12 GB (~44 %), plán B 8 GB; zram kryje špičky RTH, práh pro větší plán je 85 % (brána F6, ADR-0063 bod 11) |
+
+### Oracle Cloud — založení serveru (#1802)
+
+Server je **Always Free bez PAYG** (`VM.Standard.A1.Flex` 2 OCPU / 12 GB, Ubuntu 24.04 aarch64,
+boot volume 200 GB, home region Frankfurt). Běží-li ještě Free Trial, zakládají se jen zdroje
+označené *Always Free-eligible*: při konci trialu Oracle vypne A1 instance nad limit a placené
+zdroje z kreditu smaže. Odhad ceny v konzoli Always Free nezapočítává (ukáže cenu i za 200 GB boot).
+Kroky v konzoli a přihlášení dělá vlastník; hesla ani klíče nejdou do chatu, issue ani repa
+(OCID a adresy jen do `~/.oci/` a negitovaného `CLAUDE.local.md`).
+
+1. **API klíč (vlastník):** profil vpravo nahoře → *User settings* → *Tokens and keys* →
+   *API keys* → *Add API key* → *Generate API key pair* → *Download private key* → *Add*.
+   Soukromý klíč přesunout do `~/.oci/oci_api_key.pem` a do správce hesel, z okna
+   *Configuration file preview* zkopírovat blok `[DEFAULT]` do `~/.oci/config` s řádkem
+   `key_file=~/.oci/oci_api_key.pem`. Na Windows práva jen pro uživatele:
+   `icacls <soubor> /inheritance:r /grant:r "<uživatel>:F"` (`oci setup repair-file-permissions`
+   z Git Bash selže, viz bod 2). OCI CLI bez admin práv: `uv tool install oci-cli`.
+2. **VM:** konzole u A1 často hlásí „Out of capacity“ ve všech AD (20. 11. 2026 AD-1 až AD-3).
+   Založení pak opakuje `scripts/server/oci-launch-retry.sh` (Git Bash na PC):
+   - idempotentně založí VCN `gex-vcn` (10.0.0.0/16), internet gateway, route 0.0.0.0/0,
+     veřejnou podsíť `gex-subnet` a ve výchozím security listu nechá jen **TCP 22 z adresy PC /32**
+     (bez ICMP 3/4 pro Path MTU Discovery, Rozhodnuto 20. 11.; zasekávají-li se spojení, přidat
+     pravidlo ICMP typ 3 kód 4, žádný port neotevírá);
+   - před každým pokusem jedním vyhledáváním v celé tenancy ověří, že tam není jiná instance,
+     boot ani block volume (jinak skončí chybou, Always Free by se překročil);
+   - pokus po 60 s přes AD dokola, „Out of host capacity“ = další AD, 429 = pauza 5 min,
+     výpadek spojení = další pokus, jiná chyba = konec; jedno volání OCI CLI stojí na PC
+     ~2,4 s CPU, proto 2 volání na pokus;
+   - log s časem pokusu `~/.oci/oci-launch-retry.log`, na konci veřejná IPv4; další spuštění
+     s existující VM jen vypíše IP a síť nemění. Proměnné prostředí jsou v hlavičce skriptu.
+
+   Na pozadí (přežije zavření terminálu), zastavení přes PID v `~/.oci/oci-launch-retry.log.lock/pid`:
+   ```powershell
+   Start-Process 'C:\Program Files\Git\bin\bash.exe' -WindowStyle Hidden -ArgumentList `
+     "-l -c `"'/d/<repo>/scripts/server/oci-launch-retry.sh' >> ~/.oci/oci-launch-retry.out 2>&1`""
+   ```
+   Past na Windows: OCI CLI kontroluje práva klíče přes `powershell.exe` 5.1 a zděděný
+   `PSModulePath` z PowerShellu 7 mu rozbije `Get-Acl`; skript ho proto na Windows ruší.
+3. **Bootstrap** `scripts/server/bootstrap.sh` (idempotentní, amd64 i arm64, druhý běh hlásí
+   `Hotovo: změn 0`): první běh přes dočasné veřejné SSH. Skript běží jako systemd jednotka
+   na serveru, takže přežije výpadek spojení nebo ukončení klienta na PC (`--wait` jen čeká na
+   konec); výstup jde do `/var/log/gex-bootstrap.log`, na konci souhrn změn a řádky `ZBÝVÁ:`.
+   ```bash
+   ssh ubuntu@<IP> uname -m        # aarch64
+   scp scripts/server/bootstrap.sh ubuntu@<IP>:bootstrap.sh
+   ssh ubuntu@<IP> sudo systemd-run --wait --collect --unit=gex-bootstrap \
+     -p StandardOutput=append:/var/log/gex-bootstrap.log -p StandardError=inherit \
+     /bin/bash /home/ubuntu/bootstrap.sh
+   ssh ubuntu@<IP> sudo tail -n 8 /var/log/gex-bootstrap.log
+   ```
+   Další běhy stejně, se skriptem z klonu `/srv/gexlens/scripts/server/bootstrap.sh` (po
+   `git pull` uživatelem `gex`); parametry (`--close-public-ssh`) za cestu skriptu, proměnné
+   prostředí přes `-E NAZEV=hodnota`. První běh trvá ~20 min (`apt full-upgrade`, Docker),
+   po něm `sudo reboot` kvůli jádru (bootstrap to hlásí v `ZBÝVÁ:`).
+   Co skript nastaví, je v jeho hlavičce (Docker z oficiálního repa, Tailscale, firewall,
+   zram, unattended-upgrades bez rebootu a bez Dockeru, PowerShell 7 a uv se sha256, uživatel
+   `gex` ve skupině `docker`, `/srv/gexlens`, `data/local/instance.json` s rolí prohlížení).
+   Tajemství nezakládá: `.env` (600) a `secrets/` (700) zůstanou prázdné.
+4. **Tailscale (vlastník):** Tailscale na PC a mobilu, na serveru
+   `sudo tailscale up --ssh --hostname=gex-server` a odkaz z výpisu otevřít v prohlížeči
+   přihlášeném do tailnetu (*Connect*). V admin konzoli Tailscale:
+   - *DNS*: *MagicDNS* zapnuté, *HTTPS Certificates* → *Enable*;
+   - *Machines* → `gex-server` → ⋯ → *Disable key expiry* (jinak po 180 dnech odhlášení a server
+     bez veřejného SSH nedostupný);
+   - *Access controls* → *Tailscale SSH*: pravidlo `autogroup:member` → `autogroup:self`, uživatelé
+     jen `autogroup:nonroot`, akce **`accept`** (Rozhodnuto 20. 11.; výchozí `check` chce každých
+     12 h ověření v prohlížeči a neinteraktivní SSH ze session by stálo).
+
+   Pak bootstrap znovu (bod 3): doplní Tailscale SSH, `tailscale serve` a `GEXLENS_ALLOWED_ORIGINS`.
+   První požadavek na `https://gex-server.<tailnet>.ts.net` trvá ~15 s (vydání certifikátu).
+5. **Zavření veřejného SSH** (Rozhodnuto 19. 11., před vložením tajemství), až `ssh ubuntu@gex-server`
+   i `ssh gex@gex-server` přes Tailscale fungují z PC:
+   - bootstrap s `--close-public-ssh` (bod 3, přes `ssh ubuntu@gex-server`)
+     odebere dočasný klíč PC (komentář `gex-pc`) z `authorized_keys` a pravidlo 22 z iptables;
+   - v konzoli Oracle smazat ingress 22 (*Networking* → *Virtual cloud networks* → `gex-vcn` →
+     *Security* → *Default Security List* → *Security rules* → *Delete*), nebo dokud platí API
+     klíč `oci network security-list update --security-list-id <id> --ingress-security-rules '[]' --force`
+     (egress zůstane);
+   - na PC smazat `~/.ssh/id_ed25519` a `id_ed25519.pub`, v konzoli smazat API klíč
+     (*Tokens and keys* → ⋮ → *Delete*) a `~/.oci/oci_api_key.pem`;
+   - `nmap -Pn -p- <veřejná IP>` z jiné sítě (mobilní hotspot): 0 otevřených TCP portů (bez `-p-`
+     jen top 1000, sshd ale poslouchá i na 2222). Bez `nmap` stačí TCP connect na všech 65 535
+     portů z PC (20. 11. 2026: 0 otevřených, všechny zahozené už Security Listem).
+6. **Uživatel `restic`** (sftp z PC pro synchronizaci a kopii záloh, #1805, #1851): na adrese
+   tailnetu obsluhuje port 22 Tailscale SSH a `sshd_config` tam neplatí, proto má restic vlastní
+   **port 2222** v OpenSSH: `ForceCommand internal-sftp`, chroot `/srv/restic` (repo
+   `/srv/restic/repo`), bez shellu a bez skupiny `docker`, jen klíč. Veřejné rozhraní port
+   nepustí, v tailnetu projde. Klíč PC: bootstrap s `GEX_RESTIC_PUBKEY='<veřejný klíč>'`;
+   repo z PC `sftp://restic@gex-server:2222//repo`.
+7. **Ověření** (po bodech 3–6, přes `ssh gex@gex-server`):
+   - `docker run --rm hello-world` vypíše `(arm64v8)`; `cat /srv/gexlens/data/local/instance.json`
+     má `"role": "viewer"`;
+   - UI bez stacku: `docker run -d --rm --name gex-test-nginx -p 127.0.0.1:8080:80 nginx:alpine`,
+     `https://gex-server.<tailnet>.ts.net` z PC i mobilu ukáže stránku nginx, pak
+     `docker rm -f gex-test-nginx`;
+   - restic: s klíčem z `GEX_RESTIC_PUBKEY` projde `sftp -P 2222 restic@gex-server` a `put`
+     do `/repo`; zápis do `/`, `ls /etc`, `ssh -p 2222 restic@gex-server` (shell) a `-W`
+     (přeposlání portu) skončí odmítnutím.
+
+**Aktualizace Dockeru** (jen ručně v pauze Globexu, restart daemonu = výpadek sběru): bootstrap
+drží balíky Dockeru přes `apt-mark hold`, takže je nezmění ani `apt full-upgrade`, ani
+unattended-upgrades. Postup: `sudo apt-mark unhold docker-ce docker-ce-cli docker-ce-rootless-extras
+docker-buildx-plugin docker-compose-plugin containerd.io`, `sudo apt-get install --only-upgrade`
+týchž balíků, pak bootstrap (hold vrátí).
+
+**Plán B (jiný poskytovatel):** stejný `bootstrap.sh` na čistém Ubuntu 24.04. Bez image Oracle
+skript použije UFW (nic dovnitř kromě `tailscale0`, `DOCKER-USER` v `/etc/ufw/after.rules`);
+první běh přes veřejné SSH potřebuje `GEX_SSH_CIDR=<IP PC>/32`, jinak by zapnutí UFW SSH
+zavřelo. Poskytovatel bez cloudového firewallu (netcup) má jen UFW, proto `nmap` zvenku vždy.
+Větev UFW zatím na serveru neběžela (ověřená jen `shellcheck` v CI).
 
 ### Návrat zpět (rollback)
 

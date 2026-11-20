@@ -125,6 +125,12 @@ jobs:
           # Server override (#1094): IB Gateway kontejner + secret ze souboru
           mkdir -p secrets && echo ci > secrets/ibkr_password
           GEXLENS_PG_PASSWORD=ci GEXLENS_API_TOKEN=ci IBKR_DATA_USERID=ci             docker compose -f compose.yml -f compose.server.yml config -q
+      # Skripty serveru (#1802) běží jen při zakládání a bootstrapu serveru, chyba v nich
+      # by se jinak ukázala až tam. shellcheck je v runner image předinstalovaný.
+      - name: shellcheck scripts/server
+        run: |
+          shellcheck --version
+          shellcheck scripts/server/*.sh
       - name: gitleaks
         run: |
           docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \

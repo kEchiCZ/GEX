@@ -31,7 +31,8 @@ uv run pytest                                  # jeden test: uv run pytest engin
 cd frontend; npm ci; npm run lint; npm run format; npm test; npm run build   # build = tsc -b + vite
 ```
 POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `python-arm64`, `frontend`, `security`
-(gitleaks celé historie, pip-audit, npm audit; lokálně `pwsh scripts/security-scan.ps1`).
+(gitleaks celé historie, pip-audit, npm audit; lokálně `pwsh scripts/security-scan.ps1`; navíc `shellcheck`
+skriptů serveru `scripts/server/*.sh`, lokálně `uvx --from shellcheck-py shellcheck` v Git Bash).
 - Frontend ověřuj **`npm run build`**, ne jen `tsc --noEmit` — CI staví `tsc -b` a spadne jinde.
 - IBKR se v testech **nikdy** nevolá živě — mock vrstva `engine/ibkr/mock.py`.
 - Výpočty (GEX, levels, walls, CumΔ, profil…) mají golden testy v `engine/tests/golden/`;

@@ -16,6 +16,26 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-11-20 — `bootstrap.sh` zapsal konfiguraci zram a hlásil úspěch, swap ale běžel s výchozími lz4 / 256 MiB (#1802).**
+  Konfigurace šla do `/etc/default/zram-tools` podle jména balíku, `zramswap` z zram-tools 0.3
+  čte `/etc/default/zramswap` a chybějící soubor tiše nahradí výchozími hodnotami; kontrola
+  `systemctl is-active` prošla. Na VM to odhalil až `zramctl`. Týž běh ukázal další dvě pasti
+  idempotence: `stat %U` vypíše `UNKNOWN` pro uid bez jména (10001), takže porovnání vlastníka
+  nikdy nesedělo, a `printf … | put_file` běží v subshellu, takže se změna nezapočítala do souhrnu.
+  → Stav ověřovat na výsledku (zařízení, port, uid:gid číselně), ne podle zapsaného souboru
+  nebo běžící služby; funkce, které mění globální stav skriptu, nevolat v rouře.
+- **2026-11-20 — Tailscale SSH bere port 22 na adrese tailnetu, takže sftp-only uživatel v `sshd_config` by přes tailnet neplatil (#1802).**
+  Návrh F5 chtěl pro restic `ForceCommand internal-sftp` a chroot v OpenSSH a zároveň `tailscale up --ssh`.
+  Tailscale SSH ale spojení na port 22 z tailnetu obslouží sám (oprávnění z politiky tailnetu,
+  `sshd_config` nečte) → omezení uživatele by se obešlo. Odhalilo to dohledání chování Tailscale SSH
+  před psaním `bootstrap.sh`. → Omezený uživatel má vlastní port OpenSSH (2222) jen v tailnetu;
+  u každého omezení přes `sshd` ověřit, kdo port skutečně obsluhuje.
+- **2026-11-20 — OCI CLI v Git Bash zaplnil stderr chybou `Get-Acl … could not be loaded` (#1802).**
+  OCI CLI na Windows ověřuje práva klíče přes `powershell.exe` 5.1; zděděný `PSModulePath`
+  z PowerShellu 7 mu podstrčí moduly 7 a `Get-Acl` se nenačte (stejně selže i
+  `oci setup repair-file-permissions`). Odhalil to první čtecí dotaz. → `scripts/server/oci-launch-retry.sh`
+  na Windows `PSModulePath` ruší; práva klíče nastavit `icacls`. Platí pro každý nástroj, který
+  z PowerShellu 7 nebo Git Bash volá Windows PowerShell 5.1.
 - **2026-11-16 — VHDX Dockeru narostl z 33 na 74 GB za 4 týdny a disk D: měl 7,6 GB volných, protože úklid hledal rollback tagy podle starého jména (#1825).**
   Od #1139 se image stahují z GHCR a ruční nasazení tagují `ghcr.io/kechicz/gex-python:pre-*`.
   `docker-cleanup.ps1` ale vybíral regexem `\|gex-python:pre-`, takže je nikdy neviděl. Mazal jen
