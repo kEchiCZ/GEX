@@ -59,7 +59,7 @@ RECONSTRUCTION = [
     "Řetěz QQQ 1DTE (expirace 3. 11.) se 2. 11. nesbíral, tato fixture je REKONSTRUKCE.",
     "Kontrakty: striky po 1 $ v pásmu ±3 % kolem spotu 9:31 ET, call i put.",
     "Mid = Black–Scholes (r = q = 0) se spotem 9:31 ET, τ do settle 3. 11. a jednou IV 30 %.",
-    "IV 30 % ověřila ADR-0062 (Kontext) proti naměřeným bodům putu 687: fill vlastníka 1,40 $ "
+    "IV 30 % ověřila ADR-0062 (Kontext) proti naměřeným bodům putu 687: naměřená cena 1,40 $ "
     "v 16:50 SEČ → model 1,42 (+1 %), kotace 2,68/2,70 v 18:31 SEČ → model 2,58 (−4 %). "
     "IV z těchto bodů vychází 29,8–30,6 %.",
     "Bid/ask = mid ∓ 0,01 zaokrouhlené na centy (spread 0,02 jako kotace 2,68/2,70); kontrakty "
