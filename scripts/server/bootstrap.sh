@@ -3,21 +3,21 @@
 # Stejný skript pro Oracle Cloud A1 i plán B (jiný poskytovatel): firewall volí podle toho,
 # co image má (iptables image Oracle se zachovají, jinde UFW), cesty žádného poskytovatele.
 #
-# Spuštění (jako root):
-#   první běh z PC přes dočasné veřejné SSH:
-#     ssh ubuntu@<IP> 'sudo bash -s' < scripts/server/bootstrap.sh
-#   další běhy přes Tailscale SSH (po `tailscale up`):
-#     ssh ubuntu@gex-server sudo bash /srv/gexlens/scripts/server/bootstrap.sh
-#   zavření veřejného SSH, až Tailscale SSH z PC funguje (před vložením tajemství):
-#     ssh ubuntu@gex-server sudo bash /srv/gexlens/scripts/server/bootstrap.sh --close-public-ssh
+# Spuštění (jako root) jako systemd jednotka, aby přežila výpadek SSH (ADMIN-MANUAL kap. 14):
+#   ssh ubuntu@<host> sudo systemd-run --wait --collect --unit=gex-bootstrap \
+#     -p StandardOutput=append:/var/log/gex-bootstrap.log -p StandardError=inherit \
+#     /bin/bash <cesta>/bootstrap.sh [--close-public-ssh]
+#   První běh: skript přes scp do /home/ubuntu a dočasné veřejné SSH; další běhy z klonu
+#   /srv/gexlens/scripts/server/ přes Tailscale SSH; --close-public-ssh, až Tailscale SSH z PC
+#   funguje (před vložením tajemství). Proměnné prostředí přes `systemd-run -E NAZEV=hodnota`.
 #
 # Každý krok mění systém jen při rozdílu proti cíli a hlásí „ZMĚNA“; na konci počet změn
 # a kroky pro vlastníka. Druhý běh bez nových balíků v archivu = 0 změn.
 #
 # Co dělá:
 #   - apt full-upgrade, pásmo Europe/Prague, hostname, zram swap (zstd, 25 % RAM);
-#   - unattended-upgrades bez rebootu a bez Dockeru (balíky Dockeru na blacklistu, needrestart
-#     Docker ani containerd nerestartuje; Docker se aktualizuje jen ručně v pauze Globexu);
+#   - unattended-upgrades bez rebootu a bez Dockeru (balíky Dockeru apt-mark hold a na blacklistu,
+#     needrestart Docker ani containerd nerestartuje; Docker jen ručně v pauze Globexu, kap. 14);
 #   - journald strop 500 MB, Docker Engine + compose plugin z download.docker.com, log limity;
 #   - uživatel gex ve skupině docker (přístup jen přes Tailscale SSH, žádný klíč);
 #   - Tailscale z pkgs.tailscale.com; po přihlášení vlastníka Tailscale SSH a
@@ -48,6 +48,7 @@ readonly TZ_WANT=Europe/Prague
 readonly APP_UID=10001 # uživatel kontejnerů engine, api a news-engine (#542)
 readonly RESTIC_USER=restic RESTIC_CHROOT=/srv/restic RESTIC_HOME=/var/lib/restic-sftp RESTIC_PORT=2222
 readonly SERVE_TARGET=http://127.0.0.1:8080
+readonly DOCKER_PKGS=(docker-ce docker-ce-cli docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin containerd.io)
 readonly STATE_DIR=/etc/gexlens
 readonly CLOSED_MARKER=$STATE_DIR/public-ssh-closed
 readonly PWSH_VERSION=7.6.9 UV_VERSION=0.11.26
@@ -110,9 +111,9 @@ apt_update() {
 ensure_pkgs() {
   local missing=() p
   for p in "$@"; do
-    # formát dpkg-query, ne proměnná shellu
+    # formát dpkg-query, ne proměnná shellu; „hold ok installed“ po apt-mark hold je také nainstalováno
     # shellcheck disable=SC2016
-    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || missing+=("$p")
+    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q ' ok installed$' || missing+=("$p")
   done
   ((${#missing[@]})) || return 0
   apt_update
@@ -184,6 +185,8 @@ EOF
 stage_updates_policy() {
   put_file /etc/apt/apt.conf.d/52gexlens-unattended-upgrades 644 root:root <<'EOF' || true
 // GEXLens bootstrap (#1802): bez automatického rebootu; Docker jen ručně v pauze Globexu
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
 Unattended-Upgrade::Automatic-Reboot "false";
 Unattended-Upgrade::Package-Blacklist {
     "docker-ce";
@@ -222,6 +225,16 @@ EOF
     APT_UPDATED=0
   fi
   ensure_pkgs docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  # Hold: `apt full-upgrade` dalších běhů bootstrapu ani unattended-upgrades Docker neaktualizují
+  # (postinst restartuje daemon = výpadek sběru); ručně v pauze Globexu (ADMIN-MANUAL kap. 14).
+  local pkg held
+  held=$(apt-mark showhold)
+  for pkg in "${DOCKER_PKGS[@]}"; do
+    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q ' ok installed$' || continue
+    grep -qx "$pkg" <<<"$held" && continue
+    apt-mark hold "$pkg" >/dev/null
+    changed "apt-mark hold $pkg"
+  done
   if put_file /etc/docker/daemon.json 644 root:root <<'EOF'; then
 {
   "log-driver": "json-file",
@@ -496,6 +509,9 @@ stage_repo() {
   fi
   ensure_dir "$ROOT/data" 755 "$APP_UID:$APP_UID"
   ensure_dir "$ROOT/data/local" 755 "$APP_UID:$APP_UID"
+  # data/reports je verzovaný (git clone ho založí pro gex), zapisuje do něj engine (uid 10001,
+  # KPI tasty) i gex (walk-forward, git pull): vlastník 10001, skupina gex se zápisem a setgid
+  ensure_dir "$ROOT/data/reports" 2775 "$APP_UID:gex"
   ensure_dir "$ROOT/secrets" 700 gex:gex
   if [[ ! -f $ROOT/.env ]]; then
     put_file "$ROOT/.env" 600 gex:gex </dev/null || true
@@ -506,8 +522,8 @@ stage_repo() {
   fi
   # Stav stroje (#1847): server začíná v prohlížení, PC bez souboru zůstává aktivní (ADR-0063 bod 3).
   if [[ ! -f $ROOT/data/local/instance.json ]]; then
-    printf '{"role": "viewer", "epoch": 0, "changed_at": "%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" |
-      put_file "$ROOT/data/local/instance.json" 644 "$APP_UID:$APP_UID" || true
+    put_file "$ROOT/data/local/instance.json" 644 "$APP_UID:$APP_UID" \
+      <<<"{\"role\": \"viewer\", \"epoch\": 0, \"changed_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" || true
   fi
   # Adresa UI v tailnetu (kap. 14); hodnotu nastavenou ručně nepřepisuje, obsah .env nevypisuje.
   if [[ $TS_STATE == Running && $TS_DNS != - ]] && ! grep -q '^GEXLENS_ALLOWED_ORIGINS=' "$ROOT/.env"; then
@@ -523,32 +539,43 @@ close_public_ssh() {
   [[ $TS_STATE == Running ]] || die "Tailscale neběží, veřejné SSH nezavírám (byl by to jediný přístup)"
   [[ $(tailscale debug prefs | python3 -c 'import json, sys; print(json.load(sys.stdin).get("RunSSH", False))') == True ]] ||
     die "Tailscale SSH není zapnuté, veřejné SSH nezavírám"
-  local f
+  local f keys=0 rules_closed=0
   for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
     [[ -f $f ]] || continue
     if grep -q " $TEMP_KEY_COMMENT\$" "$f"; then
       sed -i "/ $TEMP_KEY_COMMENT\$/d" "$f"
       changed "$f: odebrán dočasný klíč $TEMP_KEY_COMMENT"
+      keys=$((keys + 1))
     fi
   done
   if [[ $FIREWALL == oracle-iptables ]]; then
     local rules=/etc/iptables/rules.v4 line tmp
     local -a rule
     while IFS= read -r line; do
-      read -r -a rule <<<"${line#-A }"
-      if iptables -C "${rule[@]}" 2>/dev/null; then iptables -D "${rule[@]}"; fi
       tmp=$(mktemp)
       grep -vxF -- "$line" "$rules" >"$tmp" || true
       cat "$tmp" >"$rules" # přepis obsahu, práva a vlastník souboru zůstanou
       rm -f "$tmp"
-      changed "iptables: zavřeno $line"
+      changed "$rules: odebráno $line"
+      rules_closed=$((rules_closed + 1))
     done < <(grep -E '^-A INPUT .*--dport 22 .*-j ACCEPT$' "$rules" || true)
+    # živě zvlášť: i pravidlo, které v rules.v4 není (ruční zásah)
+    while IFS= read -r line; do
+      read -r -a rule <<<"${line#-A }"
+      iptables -D "${rule[@]}"
+      changed "iptables (živě): odebráno $line"
+      rules_closed=$((rules_closed + 1))
+    done < <(iptables -S INPUT | grep -E '^-A INPUT .*--dport 22 .*-j ACCEPT$' || true)
   else
     local num
     while num=$(ufw status numbered | awk -F'[][]' '/gex-temp-ssh/ {gsub(/ /, "", $2); print $2; exit}') && [[ -n $num ]]; do
       ufw --force delete "$num" >/dev/null
       changed "ufw: smazáno dočasné 22"
+      rules_closed=$((rules_closed + 1))
     done
+  fi
+  if [[ ! -f $CLOSED_MARKER ]] && ((keys == 0 || rules_closed == 0)); then
+    log "VAROVÁNÍ: první zavření nenašlo dočasný klíč $TEMP_KEY_COMMENT (nalezeno $keys) nebo pravidlo 22 ($rules_closed) — ověř authorized_keys a firewall ručně"
   fi
   if [[ ! -f $CLOSED_MARKER ]]; then
     install -d -m 755 "$STATE_DIR"
@@ -556,7 +583,7 @@ close_public_ssh() {
     changed "$CLOSED_MARKER"
   fi
   CLOSE_PUBLIC_SSH=1
-  todo "Oracle: smazat ingress 22 v Security Listu VCN (konzole nebo OCI CLI), pak nmap -Pn zvenku = 0 otevřených TCP portů"
+  todo "Oracle: smazat ingress 22 v Security Listu VCN (konzole nebo OCI CLI), pak nmap -Pn -p- <veřejná IP> zvenku = 0 otevřených TCP portů"
   todo "PC: smazat soubory dočasného klíče ~/.ssh/id_ed25519 a id_ed25519.pub (Rozhodnuto 19. 11.)"
 }
 

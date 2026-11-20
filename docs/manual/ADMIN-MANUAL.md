@@ -2063,9 +2063,10 @@ nástroje na hostiteli (zálohy, sondy) — pro provoz je potřeba nemá.
 2. `GEXLENS_BIND_ADDR` zůstává loopback; UI v tailnetu přes `tailscale serve` (ADR-0063 bod 9).
 3. `GEXLENS_ALLOWED_ORIGINS` = adresa UI, pod kterou se bude otevírat (jinak
    prohlížeč zablokuje fetch a WS handshake skončí na kontrole Origin).
-4. UFW: na veřejném rozhraní nepouštět nic, ani 22 (SSH jen přes Tailscale, ADR-0063 bod 9);
-   ověřit `nmap` z venku, že 22/8080/8010/55432
-   nejsou vidět (kontrolovat zvenčí, ne `ufw status` — viz past s DOCKER chainem).
+4. Firewall: na veřejném rozhraní nepouštět nic, ani 22 (SSH jen přes Tailscale, ADR-0063 bod 9);
+   na Oracle iptables image + prázdný ingress Security Listu, jinde UFW (`bootstrap.sh`).
+   Ověřit `nmap -Pn -p-` zvenku, že žádný port (ani 22/2222/8080/8010/55432) není vidět
+   (kontrolovat zvenčí, ne `ufw status` / `iptables -S` — viz past s DOCKER chainem).
 5. SSH: klíče, `PasswordAuthentication no`, root login zakázaný.
 6. IB Gateway: **VNC nikdy veřejně**, jen přes tunel.
 7. Zálohy: za aktivním strojem podle ADR-0063 bod 7 (restic, #1804); do té doby
@@ -2174,13 +2175,30 @@ Kroky v konzoli a přihlášení dělá vlastník; hesla ani klíče nejdou do c
      (egress zůstane);
    - na PC smazat `~/.ssh/id_ed25519` a `id_ed25519.pub`, v konzoli smazat API klíč
      (*Tokens and keys* → ⋮ → *Delete*) a `~/.oci/oci_api_key.pem`;
-   - `nmap -Pn <veřejná IP>` z jiné sítě (mobilní hotspot): 0 otevřených TCP portů.
+   - `nmap -Pn -p- <veřejná IP>` z jiné sítě (mobilní hotspot): 0 otevřených TCP portů (bez `-p-`
+     jen top 1000, sshd ale poslouchá i na 2222). Bez `nmap` stačí TCP connect na všech 65 535
+     portů z PC (20. 11. 2026: 0 otevřených, všechny zahozené už Security Listem).
 6. **Uživatel `restic`** (sftp z PC pro synchronizaci a kopii záloh, #1805, #1851): na adrese
    tailnetu obsluhuje port 22 Tailscale SSH a `sshd_config` tam neplatí, proto má restic vlastní
    **port 2222** v OpenSSH: `ForceCommand internal-sftp`, chroot `/srv/restic` (repo
    `/srv/restic/repo`), bez shellu a bez skupiny `docker`, jen klíč. Veřejné rozhraní port
    nepustí, v tailnetu projde. Klíč PC: bootstrap s `GEX_RESTIC_PUBKEY='<veřejný klíč>'`;
    repo z PC `sftp://restic@gex-server:2222//repo`.
+7. **Ověření** (po bodech 3–6, přes `ssh gex@gex-server`):
+   - `docker run --rm hello-world` vypíše `(arm64v8)`; `cat /srv/gexlens/data/local/instance.json`
+     má `"role": "viewer"`;
+   - UI bez stacku: `docker run -d --rm --name gex-test-nginx -p 127.0.0.1:8080:80 nginx:alpine`,
+     `https://gex-server.<tailnet>.ts.net` z PC i mobilu ukáže stránku nginx, pak
+     `docker rm -f gex-test-nginx`;
+   - restic: s klíčem z `GEX_RESTIC_PUBKEY` projde `sftp -P 2222 restic@gex-server` a `put`
+     do `/repo`; zápis do `/`, `ls /etc`, `ssh -p 2222 restic@gex-server` (shell) a `-W`
+     (přeposlání portu) skončí odmítnutím.
+
+**Aktualizace Dockeru** (jen ručně v pauze Globexu, restart daemonu = výpadek sběru): bootstrap
+drží balíky Dockeru přes `apt-mark hold`, takže je nezmění ani `apt full-upgrade`, ani
+unattended-upgrades. Postup: `sudo apt-mark unhold docker-ce docker-ce-cli docker-ce-rootless-extras
+docker-buildx-plugin docker-compose-plugin containerd.io`, `sudo apt-get install --only-upgrade`
+týchž balíků, pak bootstrap (hold vrátí).
 
 **Plán B (jiný poskytovatel):** stejný `bootstrap.sh` na čistém Ubuntu 24.04. Bez image Oracle
 skript použije UFW (nic dovnitř kromě `tailscale0`, `DOCKER-USER` v `/etc/ufw/after.rules`);
