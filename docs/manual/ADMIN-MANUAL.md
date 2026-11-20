@@ -2152,15 +2152,26 @@ Kroky v konzoli a přihlášení dělá vlastník; hesla ani klíče nejdou do c
    zram, unattended-upgrades bez rebootu a bez Dockeru, PowerShell 7 a uv se sha256, uživatel
    `gex` ve skupině `docker`, `/srv/gexlens`, `data/local/instance.json` s rolí prohlížení).
    Tajemství nezakládá: `.env` (600) a `secrets/` (700) zůstanou prázdné.
-4. **Tailscale (vlastník):** `ssh ubuntu@<IP>` → `sudo tailscale up --ssh --hostname=gex-server`
-   a přihlásit v prohlížeči. V admin konzoli Tailscale zapnout *MagicDNS* a *HTTPS Certificates*.
+4. **Tailscale (vlastník):** Tailscale na PC a mobilu, na serveru
+   `sudo tailscale up --ssh --hostname=gex-server` a odkaz z výpisu otevřít v prohlížeči
+   přihlášeném do tailnetu (*Connect*). V admin konzoli Tailscale:
+   - *DNS*: *MagicDNS* zapnuté, *HTTPS Certificates* → *Enable*;
+   - *Machines* → `gex-server` → ⋯ → *Disable key expiry* (jinak po 180 dnech odhlášení a server
+     bez veřejného SSH nedostupný);
+   - *Access controls* → *Tailscale SSH*: pravidlo `autogroup:member` → `autogroup:self`, uživatelé
+     jen `autogroup:nonroot`, akce **`accept`** (Rozhodnuto 20. 11.; výchozí `check` chce každých
+     12 h ověření v prohlížeči a neinteraktivní SSH ze session by stálo).
+
    Pak bootstrap znovu (bod 3): doplní Tailscale SSH, `tailscale serve` a `GEXLENS_ALLOWED_ORIGINS`.
+   První požadavek na `https://gex-server.<tailnet>.ts.net` trvá ~15 s (vydání certifikátu).
 5. **Zavření veřejného SSH** (Rozhodnuto 19. 11., před vložením tajemství), až `ssh ubuntu@gex-server`
    i `ssh gex@gex-server` přes Tailscale fungují z PC:
    - bootstrap s `--close-public-ssh` (bod 3, přes `ssh ubuntu@gex-server`)
      odebere dočasný klíč PC (komentář `gex-pc`) z `authorized_keys` a pravidlo 22 z iptables;
    - v konzoli Oracle smazat ingress 22 (*Networking* → *Virtual cloud networks* → `gex-vcn` →
-     *Security* → *Default Security List* → *Security rules* → *Delete*);
+     *Security* → *Default Security List* → *Security rules* → *Delete*), nebo dokud platí API
+     klíč `oci network security-list update --security-list-id <id> --ingress-security-rules '[]' --force`
+     (egress zůstane);
    - na PC smazat `~/.ssh/id_ed25519` a `id_ed25519.pub`, v konzoli smazat API klíč
      (*Tokens and keys* → ⋮ → *Delete*) a `~/.oci/oci_api_key.pem`;
    - `nmap -Pn <veřejná IP>` z jiné sítě (mobilní hotspot): 0 otevřených TCP portů.
