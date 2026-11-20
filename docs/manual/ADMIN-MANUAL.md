@@ -2133,22 +2133,31 @@ Kroky v konzoli a přihlášení dělá vlastník; hesla ani klíče nejdou do c
    Past na Windows: OCI CLI kontroluje práva klíče přes `powershell.exe` 5.1 a zděděný
    `PSModulePath` z PowerShellu 7 mu rozbije `Get-Acl`; skript ho proto na Windows ruší.
 3. **Bootstrap** `scripts/server/bootstrap.sh` (idempotentní, amd64 i arm64, druhý běh hlásí
-   0 změn): první běh přes dočasné veřejné SSH, ověření architektury:
+   `Hotovo: změn 0`): první běh přes dočasné veřejné SSH. Skript běží jako systemd jednotka
+   na serveru, takže přežije výpadek spojení nebo ukončení klienta na PC (`--wait` jen čeká na
+   konec); výstup jde do `/var/log/gex-bootstrap.log`, na konci souhrn změn a řádky `ZBÝVÁ:`.
    ```bash
    ssh ubuntu@<IP> uname -m        # aarch64
-   ssh ubuntu@<IP> 'sudo bash -s' < scripts/server/bootstrap.sh
+   scp scripts/server/bootstrap.sh ubuntu@<IP>:bootstrap.sh
+   ssh ubuntu@<IP> sudo systemd-run --wait --collect --unit=gex-bootstrap \
+     -p StandardOutput=append:/var/log/gex-bootstrap.log -p StandardError=inherit \
+     /bin/bash /home/ubuntu/bootstrap.sh
+   ssh ubuntu@<IP> sudo tail -n 8 /var/log/gex-bootstrap.log
    ```
+   Další běhy stejně, se skriptem z klonu `/srv/gexlens/scripts/server/bootstrap.sh` (po
+   `git pull` uživatelem `gex`); parametry (`--close-public-ssh`) za cestu skriptu, proměnné
+   prostředí přes `-E NAZEV=hodnota`. První běh trvá ~20 min (`apt full-upgrade`, Docker),
+   po něm `sudo reboot` kvůli jádru (bootstrap to hlásí v `ZBÝVÁ:`).
    Co skript nastaví, je v jeho hlavičce (Docker z oficiálního repa, Tailscale, firewall,
    zram, unattended-upgrades bez rebootu a bez Dockeru, PowerShell 7 a uv se sha256, uživatel
    `gex` ve skupině `docker`, `/srv/gexlens`, `data/local/instance.json` s rolí prohlížení).
    Tajemství nezakládá: `.env` (600) a `secrets/` (700) zůstanou prázdné.
 4. **Tailscale (vlastník):** `ssh ubuntu@<IP>` → `sudo tailscale up --ssh --hostname=gex-server`
    a přihlásit v prohlížeči. V admin konzoli Tailscale zapnout *MagicDNS* a *HTTPS Certificates*.
-   Pak bootstrap znovu přes Tailscale (`ssh ubuntu@gex-server sudo bash /srv/gexlens/scripts/server/bootstrap.sh`):
-   doplní Tailscale SSH, `tailscale serve` a `GEXLENS_ALLOWED_ORIGINS`.
+   Pak bootstrap znovu (bod 3): doplní Tailscale SSH, `tailscale serve` a `GEXLENS_ALLOWED_ORIGINS`.
 5. **Zavření veřejného SSH** (Rozhodnuto 19. 11., před vložením tajemství), až `ssh ubuntu@gex-server`
    i `ssh gex@gex-server` přes Tailscale fungují z PC:
-   - `ssh ubuntu@gex-server sudo bash /srv/gexlens/scripts/server/bootstrap.sh --close-public-ssh`
+   - bootstrap s `--close-public-ssh` (bod 3, přes `ssh ubuntu@gex-server`)
      odebere dočasný klíč PC (komentář `gex-pc`) z `authorized_keys` a pravidlo 22 z iptables;
    - v konzoli Oracle smazat ingress 22 (*Networking* → *Virtual cloud networks* → `gex-vcn` →
      *Security* → *Default Security List* → *Security rules* → *Delete*);

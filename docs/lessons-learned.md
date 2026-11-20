@@ -16,6 +16,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-11-20 — `bootstrap.sh` zapsal konfiguraci zram a hlásil úspěch, swap ale běžel s výchozími lz4 / 256 MiB (#1802).**
+  Konfigurace šla do `/etc/default/zram-tools` podle jména balíku, `zramswap` z zram-tools 0.3
+  čte `/etc/default/zramswap` a chybějící soubor tiše nahradí výchozími hodnotami; kontrola
+  `systemctl is-active` prošla. Na VM to odhalil až `zramctl`. Týž běh ukázal další dvě pasti
+  idempotence: `stat %U` vypíše `UNKNOWN` pro uid bez jména (10001), takže porovnání vlastníka
+  nikdy nesedělo, a `printf … | put_file` běží v subshellu, takže se změna nezapočítala do souhrnu.
+  → Stav ověřovat na výsledku (zařízení, port, uid:gid číselně), ne podle zapsaného souboru
+  nebo běžící služby; funkce, které mění globální stav skriptu, nevolat v rouře.
 - **2026-11-20 — Tailscale SSH bere port 22 na adrese tailnetu, takže sftp-only uživatel v `sshd_config` by přes tailnet neplatil (#1802).**
   Návrh F5 chtěl pro restic `ForceCommand internal-sftp` a chroot v OpenSSH a zároveň `tailscale up --ssh`.
   Tailscale SSH ale spojení na port 22 z tailnetu obslouží sám (oprávnění z politiky tailnetu,
