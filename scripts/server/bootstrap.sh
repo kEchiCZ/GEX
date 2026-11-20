@@ -154,15 +154,22 @@ stage_base() {
     changed "hostname $HOSTNAME_WANT"
   fi
   modprobe -q zram || die "jádro $(uname -r) nemá modul zram (zram-tools by nefungoval)"
-  if put_file /etc/default/zram-tools 644 root:root <<'EOF'; then
+  # zramswap z balíku zram-tools 0.3 čte /etc/default/zramswap; bez něj tiše běží s výchozími
+  # lz4 a 256 MiB. Stav se proto ověřuje na zařízení, ne podle zapsaného souboru.
+  local algo restart=0
+  put_file /etc/default/zramswap 644 root:root <<'EOF' && restart=1
 # GEXLens bootstrap (#1802): swap v RAM se zstd, 25 % paměti (kryje špičky RTH, ADMIN-MANUAL kap. 14)
 ALGO=zstd
 PERCENT=25
 PRIORITY=100
 EOF
+  algo=$(zramctl --noheadings --output ALGORITHM /dev/zram0 2>/dev/null | tr -d '[:space:]')
+  if ((restart)) || [[ $algo != zstd ]]; then
     systemctl restart zramswap
+    changed "zramswap s konfigurací (zstd, 25 % RAM)"
+    algo=$(zramctl --noheadings --output ALGORITHM /dev/zram0 2>/dev/null | tr -d '[:space:]')
   fi
-  systemctl is-active --quiet zramswap || die "zramswap neběží (journalctl -u zramswap)"
+  [[ $algo == zstd ]] || die "zram0 neběží se zstd (journalctl -u zramswap)"
 }
 
 stage_updates_policy() {
