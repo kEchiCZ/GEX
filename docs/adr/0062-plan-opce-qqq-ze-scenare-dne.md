@@ -27,7 +27,8 @@
 - **Mění:** nic. Scénář dne NQ (ADR-0035, #1173) zůstává beze změny, plán QQQ je nadstavba.
 - **Implementace:** epika #1738, sub-issues #1740 (F1a), #1768 (F1c, ranní snímek 9:15 ET),
   #1741 (F2a), #1742 (F2b), #1769 (F2c, přecenění 9:31 ET), #1743 (F4a),
-  #1744 (F4b), #1745 (F4c), #1746 (F5a), #1747 (F1b), #1748 (F3), #1757 (F3b), #1749 (F5b),
+  #1744 (F4b), #1745 (F4c), #1746 (F5a), #1747 (F1b), #1748 (F3), #1757 (F3b), #1841 (F4d),
+  #1749 (F5b),
   #1750 (F6), #1859 (F6b); tento ADR #1739, zpětné přehrání #1756 (F0b).
 - **Podklad:** rozbor 2. 11. (issuecomment-6585788810); skripty
   `scripts/measure_option_plan_entries_1738.py` (jen čtení partic a GET API; měření 2. 11.
@@ -65,7 +66,7 @@ Měření, o která se opírají K1–K4 (partice `data/`, jen čtení; skript v
 | matplotlib Agg, graf 1200 × 700 px (lokálně, Windows) | +54 MB RSS, import 1,4–1,6 s (první spuštění 8,5 s), kreslení 0,2–0,3 s, PNG 40 kB | `measure_matplotlib_png_1738.py` |
 | podproces `chart_render` v kontejneru z image `gex-python` (13. 11., F4b #1744) | kreslení 2,3–2,5 s včetně startu a importu, špička RSS podprocesu 145 MB, PNG 103 kB (1200 × 820 px); import bez cache fontů 2,2 s; `site-packages` +95 MiB | `measure_matplotlib_png_1738.py --render` |
 | paměť kontejnerů 2. 11. ~22:00 SEČ | engine 1,2 GB, api 0,84 GB (strop Dockeru 5,8 GB) | `docker stats` |
-| model ceny putu 687 (`compute/gexfield.bs_price`, jedna IV 30 %) | fill 1,40 $ v 16:50 SEČ → 1,42 (+1 %); kotace 2,68/2,70 v 18:31 → 2,58 (−4 %) | skript |
+| model ceny putu 687 (`compute/gexfield.bs_price`, jedna IV 30 %) | naměřená cena 1,40 $ v 16:50 SEČ → 1,42 (+1 %); kotace 2,68/2,70 v 18:31 → 2,58 (−4 %) | skript |
 
 ## Rozhodnutí
 
@@ -136,7 +137,7 @@ a epiky liší, říká to poznámka u pravidla.
   `em_respect` seance v té chvíli ještě neexistuje, vzniká po close.
 - **Ceny opce při SL, TP1 a TP2** spočítá Black–Scholes (`compute/gexfield.bs_price`) s IV
   kontraktu ze snímku. Ponesou štítek „model z naměřené IV“, naměřené ceny přinese až
-  vyhodnocení. 2. 11. vyšel model s jednou IV 30 % proti fillu o +1 % a proti kotaci v 18:31 o
+  vyhodnocení. 2. 11. vyšel model s jednou IV 30 % proti naměřené ceně o +1 % a proti kotaci v 18:31 o
   −4 %. IV QQQ 1DTE v minutě vzniku se 2. 11. neměřila.
 - **Pásmo snímku a rozpočet tasty:** ±3 % kolem spotu v 0DTE i 1DTE (strike \|delta\| 0,25 1DTE
   ležel 2. 11. 1,3 % od spotu, největší GEX 0,5 %). To je ~170 kontraktů × 3 eventy (Quote,
@@ -183,6 +184,8 @@ K variantě A dál patří:
   `neobchodovat — rozpočet nenastaven`. Tichý default není. *(F4a #1743: zápis přes
   `PUT /settings`; platná hodnota je kladné konečné číslo, `null` nebo prázdná = nenastaveno.
   API i engine ji posuzují jednou funkcí `compute/option_plan.account_value`.)*
+  *(20. 11., krok 6: „% účtu“ zatím nikde nevzniká, karta i zprávy jsou v $ na kontrakt. Velikost účtu je dnes jen
+  podmínka „rozpočet nastaven“ ve verdiktu varianty. Rozpor řeší nález #1842, Rozhodnuto 18. 11. Q4 A a 20. 11. Q1 A v #1738.)*
 
 **Rozhodnuto 2. 11.: A** včetně dílčích voleb výše (vlastník).
 
@@ -202,7 +205,7 @@ exitu (settle − 15 min, 21:45 SEČ). Put s časem ztrácí, takže pozdější
 | **nejbližší z {flip, ONH/ONL, PDH/PDL, call/put wall} proti směru do 1 EM** = flip 697,65 | 16:40 za 697,62 | 699,79 | 2,53 | 1,24 / 0,85 (−39 $) / 2,58 (+134 $) | 3,40 (2,27) | −72 $ |
 | jen ONH/ONL = 698,35 | 16:35 za 698,12 | 699,79 | 3,59 | 1,16 / 0,85 (−31 $) / 2,58 (+142 $) | 4,63 (2,83) | −63 $ |
 | nejbližší ze všech úrovní = těžiště 696,34 | 16:55 za 696,24 | 699,79 | 1,16 | 1,51 / 0,85 (−66 $) / 2,58 (+107 $) | 1,63 (1,26) → neobchodovat | −98 $ |
-| úroveň 697,0 z ručního plánu (obchod vlastníka) | 16:50 za 696,78 | 699,79 | 1,55 | 1,40 / 0,85 (−55 $) / 2,58 (+118 $) | 2,16 (1,59) | −87 $ |
+| úroveň 697,0 z ručního plánu 2. 11. | 16:50 za 696,78 | 699,79 | 1,55 | 1,40 / 0,85 (−55 $) / 2,58 (+118 $) | 2,16 (1,59) | −87 $ |
 
 TP1 zasáhly všechny varianty v 5min baru 18:30–18:35 SEČ, SL žádná. Rezerva SL u úrovně flip:
 0 → SL 699,49, R:R opce 3,80 (přísně 2,42) · **0,05 EM → 699,79, 3,40 (2,27)** · 0,1 EM →
