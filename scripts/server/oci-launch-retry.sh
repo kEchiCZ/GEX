@@ -11,13 +11,16 @@
 #   2. síť: VCN gex-vcn, internet gateway gex-igw, výchozí route table 0.0.0.0/0 → IGW,
 #      veřejná podsíť gex-subnet; výchozí security list VCN = jen TCP 22 z adresy PC /32
 #      (dočasně, do Tailscale SSH) a egress vše;
-#   3. před KAŽDÝM pokusem ověří, že v tenancy není jiná instance, boot ani block volume
-#      (Always Free = 2 OCPU / 12 GB / 200 GB celkem; další zdroj by čerpal kredit nebo peníze),
-#      jinak skončí chybou;
+#   3. před KAŽDÝM pokusem jedním vyhledáváním v celé tenancy ověří, že tam není jiná instance,
+#      boot ani block volume (Always Free = 2 OCPU / 12 GB / 200 GB celkem; další zdroj by čerpal
+#      kredit nebo peníze), jinak skončí chybou; najde-li gex-server, vypíše IP a skončí 0;
 #   4. launch 2 OCPU / 12 GB, nejnovější Canonical Ubuntu 24.04 aarch64, boot 200 GB,
 #      veřejná IPv4, klíč z ~/.ssh/id_ed25519.pub. „Out of host capacity“ = další AD po pauze,
-#      429 = delší pauza, výpadek spojení = další pokus (kontrola z bodu 1 odhalí instanci,
-#      kdyby přesto vznikla), jiná chyba (autorizace, limit, parametr) = konec s chybou.
+#      429 = delší pauza, výpadek spojení = další pokus (přesný výpis instancí před ním odhalí
+#      instanci, kdyby přesto vznikla), jiná chyba (autorizace, limit, parametr) = konec s chybou.
+#
+# Zátěž PC: jedno volání OCI CLI stojí ~2,4 s CPU a 6–8 s (start Pythonu, měřeno 20. 11. 2026),
+# proto 2 volání na pokus a pokus po 60 s (~8 % jednoho jádra; vlastník 20. 11., #1094).
 #
 # Použití (PC, Git Bash; OCI CLI: `uv tool install oci-cli`, API klíč: ADMIN-MANUAL kap. 14):
 #   scripts/server/oci-launch-retry.sh
@@ -26,7 +29,7 @@
 #   OCI_COMPARTMENT_ID      kompartment pro síť a VM, výchozí kořen tenancy
 #   GEX_SSH_PUBKEY          veřejný klíč, výchozí ~/.ssh/id_ed25519.pub
 #   GEX_SSH_CIDR            zdroj ingress 22, výchozí veřejná IPv4 PC /32 (checkip.amazonaws.com)
-#   GEX_OCI_PAUSE           pauza po pokusu v s, výchozí 40 → každá ze 3 AD zhruba po 2 min
+#   GEX_OCI_PAUSE           pauza po pokusu v s, výchozí 60 → každá ze 3 AD zhruba po 3 min
 #   GEX_OCI_PAUSE_THROTTLE  pauza po 429 v s, výchozí 300
 #   GEX_OCI_LOG             log s časem každého pokusu, výchozí ~/.oci/oci-launch-retry.log
 #                           (OCID a IP sem patří, do repa ani issues ne)
@@ -43,7 +46,7 @@ readonly RUNNING_TIMEOUT=1800
 CONFIG_FILE=${OCI_CLI_CONFIG_FILE:-$HOME/.oci/config}
 PROFILE=${OCI_CLI_PROFILE:-DEFAULT}
 PUBKEY=${GEX_SSH_PUBKEY:-$HOME/.ssh/id_ed25519.pub}
-PAUSE=${GEX_OCI_PAUSE:-40}
+PAUSE=${GEX_OCI_PAUSE:-60}
 PAUSE_THROTTLE=${GEX_OCI_PAUSE_THROTTLE:-300}
 LOG_FILE=${GEX_OCI_LOG:-$HOME/.oci/oci-launch-retry.log}
 LOCK_DIR=$LOG_FILE.lock
@@ -254,7 +257,8 @@ load_ads() {
   log "AD: ${ADS[*]##*:}"
 }
 
-# INSTANCE_ID = gex-server mimo TERMINATED v kompartmentu (výpis instancí je hned konzistentní).
+# INSTANCE_ID = gex-server mimo TERMINATED v kompartmentu. Výpis instancí je hned konzistentní
+# (vyhledávání se indexuje se zpožděním), proto na startu a po nejasném výsledku launch.
 existing_instance() {
   oci_read compute instance list --compartment-id "$COMPARTMENT" --display-name "$NAME" --all \
     --query 'data[?"lifecycle-state" != `"TERMINATED"`] | [0].id' --raw-output
@@ -262,17 +266,25 @@ existing_instance() {
   [[ -n $INSTANCE_ID ]]
 }
 
-# Always Free = 2 OCPU / 12 GB / 200 GB celkem: s jinou instancí nebo svazkem v tenancy nic nezakládat.
-guard_free_tier() {
+# Kontrola před každým pokusem jedním voláním přes celou tenancy (všechny kompartmenty):
+# běží-li gex-server → INSTANCE_ID a 0; jiná instance, boot nebo block volume → konec s chybou,
+# protože by s novou VM překročily Always Free (2 OCPU / 12 GB / 200 GB celkem); nic → 1.
+check_tenancy() {
+  local type name state id others=''
   oci_read search resource structured-search \
     --query-text "query instance, bootvolume, volume resources where lifecycleState != 'TERMINATED'" \
-    --query 'join(`", "`, data.items[].join(`" "`, ["resource-type", "display-name", "lifecycle-state"]))' \
+    --query 'join(`"\n"`, data.items[].join(`"|"`, ["resource-type", "display-name", "lifecycle-state", identifier]))' \
     --raw-output
-  [[ -z $OUT ]] || die "v tenancy už existuje: $OUT. Další instance nebo svazek by překročil Always Free (2 OCPU / 12 GB / 200 GB), nic nezakládám"
-  oci_read compute instance list --compartment-id "$COMPARTMENT" --all \
-    --query 'join(`", "`, data[?"lifecycle-state" != `"TERMINATED"`].join(`" "`, ["display-name", "lifecycle-state"]))' \
-    --raw-output
-  [[ -z $OUT ]] || die "v kompartmentu už existuje instance: $OUT, nic nezakládám"
+  while IFS='|' read -r type name state id; do
+    [[ -n $type ]] || continue
+    if [[ $type == Instance && $name == "$NAME" ]]; then
+      INSTANCE_ID=$id
+      return 0
+    fi
+    others+="${others:+, }$type $name $state"
+  done <<<"$OUT"
+  [[ -z $others ]] || die "v tenancy už existuje: $others. Další VM by překročila Always Free (2 OCPU / 12 GB / 200 GB), nic nezakládám"
+  return 1
 }
 
 report_instance() {
@@ -293,13 +305,17 @@ report_instance() {
 }
 
 launch_loop() {
-  local i=0 attempt=0 ad short
+  local i=0 attempt=0 ad short recheck=0
   while :; do
-    if existing_instance; then
+    if ((recheck)) && existing_instance; then
       report_instance
       return 0
     fi
-    guard_free_tier
+    recheck=0
+    if check_tenancy; then
+      report_instance
+      return 0
+    fi
     ad=${ADS[i % ${#ADS[@]}]}
     short=${ad##*:}
     attempt=$((attempt + 1))
@@ -323,7 +339,9 @@ launch_loop() {
       log "  $short: 429 TooManyRequests, pauza ${PAUSE_THROTTLE} s"
       sleep "$PAUSE_THROTTLE"
     elif is_transport_error; then
+      # Požadavek mohl dojít: před dalším pokusem přesný výpis instancí (ne jen vyhledávání).
       log "  $short: výpadek spojení ($(err_summary)), další pokus za ${PAUSE} s"
+      recheck=1
       sleep "$PAUSE"
     else
       die "launch v $short selhal: $(err_summary)"
