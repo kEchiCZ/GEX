@@ -14,7 +14,11 @@
 #     nezapíná vůbec (kap. 14 ADMIN-MANUAL: VNC nikdy veřejně; při potřebě
 #     dočasně přidat VNC_SERVER_PASSWORD a SSH tunel).
 #   - Heslo jde Docker secretem ze souboru secrets/ibkr_password (mimo git,
-#     chmod 600, jeden řádek bez koncového newline). Username je v .env jako
+#     jeden řádek; koncový newline image odřízne). Práva 644 v adresáři
+#     secrets/ s právy 700 (#1803): compose mimo Swarm secret jen připojí
+#     (uid/gid/mode ignoruje) a Gateway v kontejneru běží jako uid 1000, ne
+#     jako gex — s 600 skončí čtení na Permission denied. Na hostiteli soubor
+#     chrání adresář 700 (projde jen gex a root). Username je v .env jako
 #     IBKR_DATA_USERID — DRUHÝ username účtu (#737), nikdy hlavní.
 #     Do zaplacení jeho subskripce IBKR market data nedodá (354; zpožděná
 #     engine odmítá) a data bere tasty fallbackem (ADR-0063 bod 8, #1856).
