@@ -70,12 +70,21 @@ changed() {
 }
 todo() { TODO+=("$*"); }
 
+# Vlastník jako uid:gid. stat %U vypíše UNKNOWN pro uid bez jména (10001 z image, #542),
+# porovnání podle jmen by se proto nikdy neshodlo.
+numeric_owner() {
+  local user=${1%%:*} group=${1##*:} uid gid
+  uid=$(id -u "$user" 2>/dev/null) || uid=$user
+  gid=$(getent group "$group" | cut -d: -f3) || true
+  printf '%s:%s' "$uid" "${gid:-$group}"
+}
+
 # Zapíše stdin do souboru jen při rozdílu obsahu, práv nebo vlastníka. 0 = změněno, 1 = beze změny.
 put_file() {
   local path=$1 mode=$2 owner=$3 tmp
   tmp=$(mktemp)
   cat >"$tmp"
-  if [[ -f $path ]] && cmp -s "$tmp" "$path" && [[ $(stat -c '%a %U:%G' "$path") == "$mode $owner" ]]; then
+  if [[ -f $path ]] && cmp -s "$tmp" "$path" && [[ $(stat -c '%a %u:%g' "$path") == "$mode $(numeric_owner "$owner")" ]]; then
     rm -f "$tmp"
     return 1
   fi
@@ -87,7 +96,7 @@ put_file() {
 # Adresář s právy a vlastníkem (bez rekurze: data se nepřevlastňují).
 ensure_dir() {
   local path=$1 mode=$2 owner=$3
-  if [[ -d $path && $(stat -c '%a %U:%G' "$path") == "$mode $owner" ]]; then return 0; fi
+  if [[ -d $path && $(stat -c '%a %u:%g' "$path") == "$mode $(numeric_owner "$owner")" ]]; then return 0; fi
   install -d -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$path"
   changed "adresář $path ($mode $owner)"
 }
@@ -391,10 +400,13 @@ stage_sshd() {
   ensure_dir "$RESTIC_HOME/.ssh" 700 "$RESTIC_USER:$RESTIC_USER"
   if [[ -n ${GEX_RESTIC_PUBKEY:-} ]]; then
     [[ $GEX_RESTIC_PUBKEY =~ ^ssh-(ed25519|rsa)\ [A-Za-z0-9+/=]+( .*)?$ ]] || die "GEX_RESTIC_PUBKEY není veřejný SSH klíč"
-    printf 'restrict %s\n' "$GEX_RESTIC_PUBKEY" | put_file "$RESTIC_HOME/.ssh/authorized_keys" 600 "$RESTIC_USER:$RESTIC_USER" || true
-  elif [[ ! -f $RESTIC_HOME/.ssh/authorized_keys ]]; then
-    : | put_file "$RESTIC_HOME/.ssh/authorized_keys" 600 "$RESTIC_USER:$RESTIC_USER" || true
-    todo "klíč PC pro uživatele $RESTIC_USER: bootstrap s GEX_RESTIC_PUBKEY='<veřejný klíč>' (#1804, #1851)"
+    # bez roury: put_file v subshellu by změnu nezapočítal do CHANGES
+    put_file "$RESTIC_HOME/.ssh/authorized_keys" 600 "$RESTIC_USER:$RESTIC_USER" <<<"restrict $GEX_RESTIC_PUBKEY" || true
+  else
+    [[ -f $RESTIC_HOME/.ssh/authorized_keys ]] \
+      || put_file "$RESTIC_HOME/.ssh/authorized_keys" 600 "$RESTIC_USER:$RESTIC_USER" </dev/null || true
+    [[ -s $RESTIC_HOME/.ssh/authorized_keys ]] \
+      || todo "klíč PC pro uživatele $RESTIC_USER: bootstrap s GEX_RESTIC_PUBKEY='<veřejný klíč>' (#1804, #1851)"
   fi
 
   if put_file /etc/ssh/sshd_config.d/10-gexlens.conf 644 root:root <<EOF; then
@@ -486,7 +498,7 @@ stage_repo() {
   ensure_dir "$ROOT/data/local" 755 "$APP_UID:$APP_UID"
   ensure_dir "$ROOT/secrets" 700 gex:gex
   if [[ ! -f $ROOT/.env ]]; then
-    : | put_file "$ROOT/.env" 600 gex:gex || true
+    put_file "$ROOT/.env" 600 gex:gex </dev/null || true
   elif [[ $(stat -c '%a %U:%G' "$ROOT/.env") != "600 gex:gex" ]]; then
     chown gex:gex "$ROOT/.env"
     chmod 600 "$ROOT/.env"
