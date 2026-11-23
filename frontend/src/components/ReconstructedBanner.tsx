@@ -28,19 +28,43 @@ function reconstructionFingerprint(
 const fingerprintRevive: Revive<string> = (value, fallback) =>
   typeof value === 'string' && value.length <= 200 ? value : fallback
 
+/** Druh úseku z tastytrade: rekonstrukce svíček po startu (#617), nebo bar
+z tisků za výpadku barů IBKR (#1772). Každý má vlastní text a paměť zavření. */
+export type TastyBarsKind = 'reconstructed' | 'tasty'
+
+const KIND_STORAGE: Record<TastyBarsKind, string> = {
+  reconstructed: 'reconstructedBannerDismissed',
+  tasty: 'tastyBarsBannerDismissed',
+}
+
+function bannerText(kind: TastyBarsKind, count: number, range: string): string {
+  if (kind === 'tasty') {
+    return (
+      `Z tastytrade ${count} min (${range}) — real-time bary IBKR nechodily, ` +
+      'svíčky, setupy i paper šly z tisků front future (záložní zdroj).'
+    )
+  }
+  return (
+    `Rekonstruováno ${count} min z dxFeed (${range}) ` +
+    '— cena a objem doplněné po pozdním startu, CumΔ za ten úsek chybí.'
+  )
+}
+
 export function ReconstructedBanner({
   symbol,
   date,
   reconstructedIso,
+  kind = 'reconstructed',
 }: {
   symbol: string
   date: string
-  /** Seřazené ISO časy doplněných minut (`DayData.reconstructedIso`). */
+  /** Seřazené ISO časy minut úseku (`DayData.reconstructedIso` / `tastyBarsIso`). */
   reconstructedIso: string[]
+  kind?: TastyBarsKind
 }) {
   const fingerprint = reconstructionFingerprint(symbol, date, reconstructedIso)
   const [dismissed, setDismissed] = usePersistentState<string>(
-    'reconstructedBannerDismissed',
+    KIND_STORAGE[kind],
     '',
     fingerprintRevive,
   )
@@ -51,18 +75,20 @@ export function ReconstructedBanner({
     <div
       className="stale-banner stale-banner-closable"
       role="status"
-      data-testid="reconstructed-banner"
+      data-testid={kind === 'tasty' ? 'tasty-bars-banner' : 'reconstructed-banner'}
     >
       <span>
-        {`Rekonstruováno ${reconstructedIso.length} min z dxFeed ` +
-          `(${minuteLabel(first)}–${minuteLabel(last)}) ` +
-          '— cena a objem doplněné po pozdním startu, CumΔ za ten úsek chybí.'}
+        {bannerText(kind, reconstructedIso.length, `${minuteLabel(first)}–${minuteLabel(last)}`)}
       </span>
       <button
         type="button"
         className="stale-banner-close"
-        aria-label="Zavřít upozornění na rekonstrukci"
-        title="Zavřít — znovu se ukáže jen při nové rekonstrukci"
+        aria-label={
+          kind === 'tasty'
+            ? 'Zavřít upozornění na bary z tastytrade'
+            : 'Zavřít upozornění na rekonstrukci'
+        }
+        title="Zavřít — znovu se ukáže jen při novém úseku"
         onClick={() => setDismissed(fingerprint)}
       >
         ×

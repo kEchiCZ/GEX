@@ -858,17 +858,20 @@ async def test_setup_engine_mezera_cumdelta_kontra_rezim_nepotvrdi(
 
 
 @pytest.mark.parametrize("prints", [False, True])
-@pytest.mark.parametrize(("gap_cum", "created"), [(320.0, 1), (None, 0)])
+@pytest.mark.parametrize("gap_cum", [320.0, None])
 async def test_setup_engine_mezera_v_minute_bez_baru_nese_dalsi_radek(
-    tmp_path: Path, prints: bool, gap_cum: float | None, created: int
+    tmp_path: Path, prints: bool, gap_cum: float | None
 ) -> None:
     """ADR-0057 bod 3 (#1460): minuta bez baru do historie nevstoupí (#1346), její
     NULL CumΔ se ale neztratí — `cum_gap_before` dostane další přidaný řádek.
 
     Rozdíl CumΔ reclaimu proti oknu kontra-režimu by bez příznaku vynechal tok
-    z mezery. Na mechanice nezávisí (NULL dává jen zdroj z tisků, midpoint ne).
-    Kontrola: měřená minuta bez baru příznak nenastaví a setup vznikne.
+    z mezery. NULL dává jen zdroj z tisků, midpoint ne. Pod v6 je mezerou
+    i samotná přeskočená minuta (W1, #1772): okno přes ni se nepotvrdí ani
+    s měřenou CumΔ; pod v5 měřená minuta bez baru příznak nenastaví a setup vznikne.
     """
+    gap = gap_cum is None or prints
+    created = 0 if gap else 1
     engine, repository, fake = _bare_engine(tmp_path, cumdelta_prints=prints)
     runtime = cast(EngineRuntime, fake)
     await _warmup_and_break(engine, fake)
@@ -881,7 +884,7 @@ async def test_setup_engine_mezera_v_minute_bez_baru_nese_dalsi_radek(
     )
     await engine.on_minute(TS + dt.timedelta(minutes=32), 7501, [reclaim], runtime)
 
-    assert engine._history[-1].cum_gap_before is (gap_cum is None)
+    assert engine._history[-1].cum_gap_before is gap
     assert len(repository.active_for("ES")) == created
 
     # Příznak nese jen první řádek po mezeře
@@ -890,6 +893,25 @@ async def test_setup_engine_mezera_v_minute_bez_baru_nese_dalsi_radek(
     )
     await engine.on_minute(TS + dt.timedelta(minutes=33), 7501, [after], runtime)
     assert engine._history[-1].cum_gap_before is False
+
+
+@pytest.mark.parametrize("prints", [False, True])
+async def test_setup_engine_vynechany_cyklus_je_mezera_pod_v6(tmp_path: Path, prints: bool) -> None:
+    """W1 (#1772): vynechaný cyklus (žádné `on_minute`, přetažená iterace) je mezi
+    řádky historie přeskočená minuta — pod v6 mezera, okno T1 přes ni se nepotvrdí."""
+    engine, repository, fake = _bare_engine(tmp_path, cumdelta_prints=prints)
+    runtime = cast(EngineRuntime, fake)
+    await _warmup_and_break(engine, fake)
+
+    fake.last_flow = FakeFlow(330.0)
+    reclaim = Bar(
+        ts=TS + dt.timedelta(minutes=31), open=7496, high=7502, low=7495, close=7501, volume=1.0
+    )
+    # Cyklus 31 neproběhl vůbec — další je až 32
+    await engine.on_minute(TS + dt.timedelta(minutes=32), 7501, [reclaim], runtime)
+
+    assert engine._history[-1].cum_gap_before is prints
+    assert len(repository.active_for("ES")) == (0 if prints else 1)
 
 
 def _utc(year: int, month: int, day: int, hour: int, minute: int) -> dt.datetime:
@@ -972,10 +994,17 @@ async def test_setup_engine_kontra_rezim_pres_reset_seance(
     assert len(repository.active_for("ES")) == created
 
 
-async def test_setup_engine_opozdeny_bar_detekuje_dalsi_minuta(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prints", [False, True])
+async def test_setup_engine_opozdeny_bar_detekuje_dalsi_minuta(
+    tmp_path: Path, prints: bool
+) -> None:
     """#1346: bar, který do cyklu nestihl dorazit, přijde v další dávce a detekce
-    proběhne nad ním — vstup = close posledního baru, ne spot minuty bez baru."""
-    engine, repository, fake = _bare_engine(tmp_path)
+    proběhne nad ním — vstup = close posledního baru, ne spot minuty bez baru.
+
+    Pod v6 je minuta bez řádku historie mezera (W1, #1772): okno přes ni se
+    nepotvrdí. Živě takovou minutu pokryje bar z tisků tasty (#1772), takže
+    řádek historie nevypadne; mezerou zůstane jen výpadek obou zdrojů."""
+    engine, repository, fake = _bare_engine(tmp_path, cumdelta_prints=prints)
     runtime = cast(EngineRuntime, fake)
     await _warmup_and_break(engine, fake)
 
@@ -992,6 +1021,10 @@ async def test_setup_engine_opozdeny_bar_detekuje_dalsi_minuta(tmp_path: Path) -
     await engine.on_minute(TS + dt.timedelta(minutes=32), 7501, [late, current], runtime)
 
     active = repository.active_for("ES")
+    if prints:
+        assert engine._history[-1].cum_gap_before is True
+        assert active == []
+        return
     assert len(active) == 1
     assert active[0].template == "failed_break"
     assert active[0].entry == 7501
@@ -1192,8 +1225,12 @@ async def test_setup_engine_blocks_direction_after_stop_streak(tmp_path: Path) -
     idx += 1
     assert repository.active_for("ES") == []
 
-    # Po uplynutí blokace (90 min) tentýž vzor projde
+    # Po uplynutí blokace (90 min) tentýž vzor projde. Skok času je pod v6
+    # přeskočená minuta (W1, #1772) — okno se nejdřív znovu naplní klidem
     idx += 95
+    for _ in range(30):
+        await step(idx, 7505, 7506, 7504, 7505, float(idx * 10))
+        idx += 1
     await step(idx, 7500, 7500, 7494, 7496, float(idx * 10))
     idx += 1
     await step(idx, 7496, 7502, 7495, 7501, float(idx * 10))

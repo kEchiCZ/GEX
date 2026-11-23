@@ -386,7 +386,9 @@ class SetupEngine:
             # živé upozornění, vstup za cenu několik minut starou nejde zadat.
             # Otevřené setupy se vyhodnocují dál (díry řeší #1320).
             # Mezera CumΔ té minuty (NULL řádek toku) se ale ztratit nesmí:
-            # rozdíl CumΔ přes ni je neúplný, nese ho další řádek historie.
+            # rozdíl CumΔ přes ni je neúplný, nese ho další řádek historie
+            # (pod v6 ho nese i samotná přeskočená minuta, W1 #1772).
+            # Za výpadku barů IBKR sem dávka nespadne, dokud má bar tasty (#1772).
             flow = runtime.last_flow
             if flow is None or flow.cum_delta is None:
                 self._cum_gap_pending = True
@@ -396,12 +398,18 @@ class SetupEngine:
         flow = runtime.last_flow
         # Hranice seance (#1581): CumΔ se v 17:00 CT nuluje (#638) v témž cyklu
         # (`trading_session_date(ts_min)` v run_cycle), rozdíl přes ni je
-        # „≈0 − CumΔ minulé seance". Jen pod CumΔ z tisků (mechanika v6, ADR-0034 §6).
+        # „≈0 − CumΔ minulé seance". Přeskočená minuta mezi řádky historie (W1,
+        # #1772: minuta bez baru, vynechaný cyklus) je mezera taky — okno přes ni
+        # pokrývá jiný úsek, než o kterém podmínka mluví. Obojí jen pod CumΔ
+        # z tisků (mechanika v6, ADR-0034 §6); přehrání totéž (`attach_cum_delta`).
         previous = self._history[-1] if self._history else None
         cum_gap_before = self._cum_gap_pending or (
             self.cumdelta_prints
             and previous is not None
-            and trading_session_date(previous.ts) != trading_session_date(now)
+            and (
+                trading_session_date(previous.ts) != trading_session_date(now)
+                or now - previous.ts > dt.timedelta(minutes=1)
+            )
         )
         self._cum_gap_pending = False
         self._refresh_max_pain(runtime.expiry, now.date())

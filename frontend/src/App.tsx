@@ -2299,6 +2299,14 @@ function MainContent() {
               date={viewDate}
               reconstructedIso={day.reconstructedIso}
             />
+            {/* Bar z tisků tastytrade za výpadku barů IBKR (#1772): změřený,
+                ale jiným zdrojem — tiché přepnutí zdroje zakazuje ADR-0025. */}
+            <ReconstructedBanner
+              symbol={symbol}
+              date={viewDate}
+              reconstructedIso={day.tastyBarsIso}
+              kind="tasty"
+            />
             {staleData && (
               <div className="stale-banner" role="status" data-testid="stale-banner">
                 {`Data se nedaří obnovit (${staleData.failures}× po sobě) — zobrazen stav z ` +

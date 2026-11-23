@@ -89,6 +89,9 @@ export interface ReplayDay {
   /** ISO minuty doplněné backfillem z dxFeed Candle (#617), vzestupně.
   Doplněná minuta má cenu a objem, ale žádný tok — v UI se musí odlišit. */
   reconstructedIso: string[]
+  /** ISO minuty s barem z tisků tastytrade za výpadku barů IBKR (#1772), vzestupně.
+  Bar je změřený živě, ale jiným zdrojem než IBKR — zdroj musí být vidět (ADR-0025). */
+  tastyBarsIso: string[]
   /** Dyn GEX profil per minuta (ADR-0009); null = minuta profil nemá. */
   gexProfile: (GexProfileRow | null)[]
   /** Modelované pole budoucích sloupců (ADR-0009 fáze 2); null = bez pole. */
@@ -134,6 +137,9 @@ export interface LadderMinuteRow {
 /** Hodnota `source` u minut doplněných backfillem (#617) — musí sedět s enginem
 (`storage/parquet_store.BAR_SOURCE_RECONSTRUCTED`). */
 export const BAR_SOURCE_RECONSTRUCTED = 'tasty_candle'
+/** Bar minuty z tisků tastytrade za výpadku barů IBKR (#1772) — musí sedět s enginem
+(`storage/parquet_store.BAR_SOURCE_TASTY_TRADES`). */
+export const BAR_SOURCE_TASTY_TRADES = 'tasty_trades'
 
 const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2', 'call_wall_dom', 'put_wall_dom', 'call_wall_2_dom', 'put_wall_2_dom', 'fa_flip', 'fa_call_wall', 'fa_put_wall', 'oi_call_wall', 'oi_put_wall', 'oi_call_share', 'oi_put_share'] as const // prettier-ignore
 
@@ -149,6 +155,8 @@ interface BarInput {
   /** Minuta doplněná backfillem z dxFeed Candle po pozdním startu (#617).
   Doplněná minuta NENÍ změřená — nese cenu a objem, ale žádný tok (CumΔ). */
   reconstructed?: boolean
+  /** Bar z tisků tastytrade za výpadku barů IBKR (#1772): změřený, ale jiným zdrojem. */
+  fromTasty?: boolean
 }
 interface LevelsInput {
   tsIso: string
@@ -711,6 +719,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
       low: Number.isFinite(low) ? low : undefined,
       final: tsIso !== liveMinuteIso,
       reconstructed: bar.source === BAR_SOURCE_RECONSTRUCTED,
+      fromTasty: bar.source === BAR_SOURCE_TASTY_TRADES,
     }
   })
   // Levels + sekundární zdi (vlastní řada levels2, ADR-0008) sloučené per minuta
@@ -1284,6 +1293,7 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   const price: PriceBar[] = []
   const provisionalMinutes: number[] = []
   const reconstructedIso: string[] = []
+  const tastyBarsIso: string[] = []
   let previousClose = Number.NaN
   // Bary se řadí podle osy, ne podle pořadí příchodu (#459): dozadu doplněná
   // minuta (backfill, opožděný bar) by jinak skončila na konci pole a `up` by
@@ -1294,8 +1304,10 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
   // tichá ztráta, kterou má #617 řešit: doplněno ≠ změřeno, a musí to být vidět.
   for (const bar of inputs.bars) {
     if (bar.reconstructed) reconstructedIso.push(bar.tsIso)
+    if (bar.fromTasty) tastyBarsIso.push(bar.tsIso)
   }
   reconstructedIso.sort()
+  tastyBarsIso.sort()
 
   const orderedBars = [...inputs.bars].sort(
     (a, b) => (minuteIndex.get(a.tsIso) ?? -1) - (minuteIndex.get(b.tsIso) ?? -1),
@@ -1696,6 +1708,7 @@ function assembleDay(inputs: ReplayInputs): ReplayDay {
     profileByMinute,
     provisionalMinutes,
     reconstructedIso,
+    tastyBarsIso,
     gexProfile,
     gexField: inputs.gexField,
     gexProfileFa,

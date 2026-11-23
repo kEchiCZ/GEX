@@ -12,6 +12,7 @@ zatím ne — discovery podkladu hledá jen futures kontrakty (ADR-0003).
 import asyncio
 import datetime as dt
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from functools import partial
@@ -23,6 +24,7 @@ from sqlalchemy.engine import Engine
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.facalibration import FA_MIN_DAYS
+from gexlens_engine.compute.futures_bars import BarAgreement, FuturesMinuteBar
 from gexlens_engine.compute.gexforward import ForwardContract, forward_field
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import (
@@ -55,7 +57,7 @@ from gexlens_engine.ibkr.scheduler import (
     RepairStallDetector,
     SweepMetrics,
 )
-from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
+from gexlens_engine.ibkr.underlying import BACKFILL_CONTRACT_TOLERANCE, Bar, BarsStallDetector
 from gexlens_engine.ivrank import IvRankCollector
 from gexlens_engine.mapstate import MapStateCollector
 from gexlens_engine.option_plan_eval import OptionPlanCollector
@@ -446,6 +448,10 @@ class InstrumentPipeline:
     # Živý fallback barů z dxFeed Candle během stall (#614 doplněk): doplní
     # minuty [since, until) chybějící v particích; None = bez tasty větve
     bar_gap_fill: Callable[[dt.datetime, dt.datetime], Awaitable[int]] | None = None
+    # Bar minuty z tisků tasty pro všechny konzumenty za výpadku barů IBKR (#1772,
+    # ADR-0025 dodatek): úplný bar minuty (začátek minuty, UTC), jinak None;
+    # None = bez tasty větve, minuta bez baru IBKR zůstává mezerou
+    tasty_bar: Callable[[dt.datetime], FuturesMinuteBar | None] | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
     # Den, ke kterému patří `oi_available`/`oi_final` (#494): pipeline symbolu
     # s nedenní nejbližší expirací přežije půlnoc a bez resetu by včerejší
@@ -482,6 +488,17 @@ class InstrumentPipeline:
     _settle_jobs_task: asyncio.Task[None] | None = field(default=None, repr=False)
     # Kolik barů zatím doplnil tasty fallback během běžícího stall (do logu při zotavení)
     _gap_filled: int = field(default=0, repr=False)
+    # Shoda barů IBKR × tasty (#1772): stráž kontraktu a hodinový log
+    _bar_agreement: BarAgreement = field(default_factory=BarAgreement, repr=False)
+    # Minuty, jejichž bar dostali konzumenti z tasty — pozdní bar IBKR téže
+    # minuty se už nedoručí (bar minuty je jeden, #1772)
+    _tasty_minutes: deque[dt.datetime] = field(
+        default_factory=lambda: deque(maxlen=120), repr=False
+    )
+    # Bary z tisků tasty během běžícího stall (do logu při zotavení)
+    _tasty_live: int = field(default=0, repr=False)
+    # Stráž kontraktu bar z tasty zahodila — varování jen na hraně
+    _tasty_rejected: bool = field(default=False, repr=False)
     # Vol koncentrace (#208): už ohlášené strany (expirace, strike, right) —
     # jeden alert per leader; pipeline se denně překlápí, reset je přirozený
     _vol_alerted: set[tuple[str, float, str]] = field(default_factory=set, repr=False)
@@ -1558,12 +1575,16 @@ class InstrumentPipeline:
                     },
                 )
 
-        bars = list(self.minute_bars)
+        ibkr_bars = list(self.minute_bars)
         self.minute_bars.clear()
         forming = self.forming_bar()
-        # Hlídání barů PŘED cyklem — alert musí odejít, i kdyby sweep selhal (#221)
+        # Bar minuty se rozhodne jednou a stejný dostanou všichni konzumenti níž
+        # (#1772): IBKR, za jeho výpadku bar z tisků tasty
+        bars, from_tasty = self._minute_bars(now, ibkr_bars)
+        # Hlídání barů PŘED cyklem — alert musí odejít, i kdyby sweep selhal (#221).
+        # Hlídá se stream IBKR: bar z tasty jeho výpadek nezakrývá
         await self._collect_news_ticks(now)
-        await self._watch_bars(now, spot, bars, forming)
+        await self._watch_bars(now, spot, ibkr_bars, forming, from_tasty=from_tasty)
         metrics = await self.runtime.run_cycle(now, spot, bars, forming)
         await self._watch_greeks(now, metrics)
         await self._watch_repair(now, metrics)
@@ -1832,8 +1853,69 @@ class InstrumentPipeline:
                 },
             )
 
+    def _minute_bars(self, now: dt.datetime, ibkr_bars: list[Bar]) -> tuple[list[Bar], bool]:
+        """Dávka barů cyklu pro všechny konzumenty (#1772, ADR-0025 dodatek 23. 11.).
+
+        Bar minuty M−1 je z IBKR; když ho dávka nemá, je z tisků tasty — jen
+        úplný (`FuturesBarAggregator.take`) a jen když stráž kontraktu (#1232)
+        nehlásí jiný kontrakt. Jinak zůstává minuta mezerou jako dosud.
+        Pozdní bar IBKR minuty, kterou už konzumenti dostali z tasty, se
+        nedoručí: zápis, push, detektor i paper mají mít tutéž minutu.
+        Vrací dávku a zda je v ní bar z tasty.
+        """
+        if self.tasty_bar is None:
+            return ibkr_bars, False
+        if self._tasty_minutes:
+            late = [bar for bar in ibkr_bars if bar.ts in self._tasty_minutes]
+            if late:
+                logger.info(
+                    "Pozdní bar IBKR %s %s nedoručen — minutu už dostali konzumenti z tasty",
+                    self.symbol,
+                    ", ".join(bar.ts.strftime("%H:%M") for bar in late),
+                )
+                ibkr_bars = [bar for bar in ibkr_bars if bar.ts not in self._tasty_minutes]
+        minute = now.replace(second=0, microsecond=0) - dt.timedelta(minutes=1)
+        try:
+            tasty = self.tasty_bar(minute)
+        except Exception:
+            logger.exception("Bar %s z tisků tasty selhal — minuta jen z IBKR", self.symbol)
+            tasty = None
+        if now.minute == 0:
+            summary = self._bar_agreement.hourly_summary()
+            if summary is not None:
+                logger.info("Shoda barů %s IBKR × tasty za hodinu: %s", self.symbol, summary)
+        measured = next((bar for bar in ibkr_bars if bar.ts == minute), None)
+        if measured is not None:
+            if tasty is not None:
+                self._bar_agreement.add(measured, tasty)
+            return ibkr_bars, False
+        if tasty is None:
+            return ibkr_bars, False
+        deviation = self._bar_agreement.contract_deviation(tasty.streamer)
+        if deviation is not None and deviation > BACKFILL_CONTRACT_TOLERANCE:
+            if not self._tasty_rejected:
+                logger.warning(
+                    "Bar %s z tasty (%s) nepoužit — od posledních barů IBKR se liší o %.2f %%, "
+                    "jiný kontrakt (#1232); minuta zůstává mezerou",
+                    self.symbol,
+                    tasty.streamer,
+                    deviation * 100,
+                )
+            self._tasty_rejected = True
+            return ibkr_bars, False
+        self._tasty_rejected = False
+        self._tasty_minutes.append(minute)
+        self._tasty_live += 1
+        return sorted([*ibkr_bars, tasty.bar], key=lambda bar: bar.ts), True
+
     async def _watch_bars(
-        self, now: dt.datetime, spot: float, bars: Sequence[Bar], forming: Bar | None
+        self,
+        now: dt.datetime,
+        spot: float,
+        bars: Sequence[Bar],
+        forming: Bar | None,
+        *,
+        from_tasty: bool = False,
     ) -> None:
         """Tichá ztráta 5s barů (#221): alert při výpadku, po návratu re-backfill díry.
 
@@ -1842,6 +1924,8 @@ class InstrumentPipeline:
 
         Bar aktivita = uzavřené minuty NEBO rozdělaná agregace aktuální minuty;
         zaseknutý agregátor drží starou rozdělanou minutu, ta se nepočítá.
+        `bars` jsou jen bary IBKR; `from_tasty` = bar minuty dodala tasty (#1772),
+        mění jen text upozornění.
         """
         detector = self.stall_detector
         if detector is None:
@@ -1862,23 +1946,37 @@ class InstrumentPipeline:
         event = detector.observe(bar_activity=bar_activity, market_open=True)
         if event == "stalled":
             spot_note = "spot přitom žije" if spot_moving else "stojí i spot (zamrzlý stream)"
+            candles = "bar minuty dodává tastytrade" if from_tasty else "svíčky se nekreslí"
             logger.error(
                 "Real-time bary %s nechodí ≥ %d min při otevřeném trhu, %s — mrtvý "
                 "reqRealTimeBars stream (výpadek TWS farem / Error 1100?); "
-                "svíčky se nekreslí, stream se obnovuje",
+                "%s, stream se obnovuje",
                 self.symbol,
                 self.settings.bars_stall_alert_minutes,
                 spot_note,
+                candles,
             )
+            if from_tasty:
+                message = (
+                    f"Real-time bary {self.symbol} z TWS nechodí ≥ "
+                    f"{self.settings.bars_stall_alert_minutes} min při otevřeném trhu, "
+                    f"{spot_note}. Bar minuty teď dodává tastytrade (tisky front future) — "
+                    "graf, setupy i paper běží dál. Engine stream obnovuje sám; když to "
+                    "nepomůže, pomáhá restart TWS."
+                )
+            else:
+                message = (
+                    f"Svíčky {self.symbol} se přestaly kreslit — real-time "
+                    f"bary z TWS nechodí ≥ {self.settings.bars_stall_alert_minutes} min "
+                    f"při otevřeném trhu, {spot_note}. Engine stream obnovuje sám; když "
+                    "to nepomůže, pomáhá restart TWS. Díra se po návratu doplní backfillem."
+                )
             await self.publisher.publish(
                 "alerts",
                 {
                     "kind": "bars_stalled",
                     "symbol": self.symbol,
-                    "message": f"Svíčky {self.symbol} se přestaly kreslit — real-time "
-                    f"bary z TWS nechodí ≥ {self.settings.bars_stall_alert_minutes} min "
-                    f"při otevřeném trhu, {spot_note}. Engine stream obnovuje sám; když "
-                    "to nepomůže, pomáhá restart TWS. Díra se po návratu doplní backfillem.",
+                    "message": message,
                     "ts": now.timestamp(),
                 },
             )
@@ -1893,11 +1991,13 @@ class InstrumentPipeline:
         elif event == "recovered":
             logger.info(
                 "Real-time bary %s zase chodí — díra se doplní backfillem (tasty zatím "
-                "doplnila %d barů)",
+                "dodala %d barů minuty z tisků a doplnila %d svíček)",
                 self.symbol,
+                self._tasty_live,
                 self._gap_filled,
             )
             self._gap_filled = 0
+            self._tasty_live = 0
             await self.publisher.publish(
                 "alerts",
                 {

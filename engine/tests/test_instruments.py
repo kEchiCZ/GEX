@@ -4,7 +4,7 @@ import asyncio
 import datetime as dt
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, insert
 
 from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, SOURCE_MIDPOINT, CumDeltaTracker
 from gexlens_engine.compute.facalibration import FA_MIN_DAYS, AlphaCalibrationPoint
+from gexlens_engine.compute.futures_bars import FuturesMinuteBar
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.spot import SpotReading
 from gexlens_engine.config import Settings
@@ -61,7 +62,13 @@ from gexlens_engine.storage.oi_archive import (
     OIMiss,
     OIRecord,
 )
-from gexlens_engine.storage.parquet_store import LevelsRow, NetFlowRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import (
+    BAR_SOURCE_TASTY_TRADES,
+    LevelsRow,
+    NetFlowRow,
+    SnapshotWriter,
+    read_bars,
+)
 from gexlens_engine.storage.setups_store import SetupsRepository
 
 TS = dt.datetime(2026, 7, 17, 15, 0, tzinfo=dt.UTC)
@@ -3364,3 +3371,150 @@ async def test_sberace_po_settle_pad_neshodi_retez_a_stop_ho_zrusi(
     with pytest.raises(asyncio.CancelledError):
         await task
     assert task.cancelled()
+
+
+# ── Bar minuty z tisků tasty za výpadku barů IBKR (#1772) ──────────
+
+
+def _tasty_bar_source(
+    closes: dict[dt.datetime, float],
+) -> Callable[[dt.datetime], FuturesMinuteBar | None]:
+    def source(minute: dt.datetime) -> FuturesMinuteBar | None:
+        close = closes.get(minute)
+        if close is None:
+            return None  # neúplná minuta (subskripce až během ní, utichlý stream)
+        bar = Bar(
+            ts=minute,
+            open=close - 1.0,
+            high=close + 1.0,
+            low=close - 2.0,
+            close=close,
+            volume=100.0,
+            source=BAR_SOURCE_TASTY_TRADES,
+        )
+        return FuturesMinuteBar(bar=bar, streamer="/ESU26:XCME")
+
+    return source
+
+
+def _recording_consumers(pipeline: InstrumentPipeline) -> dict[str, list[list[Bar]]]:
+    """Detektor setupů, sondy T9 a paper jako záznamníky dávky cyklu."""
+    seen: dict[str, list[list[Bar]]] = {"setups": [], "t9": [], "paper": []}
+
+    def recorder(name: str) -> Callable[..., Any]:
+        async def on_minute(
+            now: dt.datetime, spot: float, bars: list[Bar], runtime: object
+        ) -> None:
+            seen[name].append(list(bars))
+
+        return on_minute
+
+    pipeline.setup_engine = cast(SetupEngine, SimpleNamespace(on_minute=recorder("setups")))
+    pipeline.t9_probes = cast(Any, SimpleNamespace(on_minute=recorder("t9")))
+    pipeline.paper_broker = cast(Any, SimpleNamespace(on_minute=recorder("paper")))
+    return seen
+
+
+async def test_vypadek_baru_ibkr_bar_z_tasty_pro_vsechny_konzumenty(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1772: bez baru IBKR dostanou bar minuty z tisků tasty zápis do partice, push
+    `price.ES`, detektor setupů, sondy T9 i paper — týž bar. Stall streamu IBKR se
+    hlídá dál a upozornění řekne, že bary teď dodává tastytrade."""
+    settings, writer, repository, publisher = env
+    settings.bars_stall_alert_minutes = 2
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    closes = {TS + dt.timedelta(minutes=m - 1): 7600.0 + m for m in range(4)}
+    pipeline.tasty_bar = _tasty_bar_source(closes)
+    seen = _recording_consumers(pipeline)
+    ticker = pipeline.ticker
+    assert isinstance(ticker, FakeTicker)
+
+    for minute in range(4):
+        ticker.last = 7600.0 + minute  # spot žije, bary IBKR nechodí
+        await pipeline.run_minute(TS + dt.timedelta(minutes=minute))
+
+    expected = [[_tasty_bar_source(closes)(TS + dt.timedelta(minutes=m - 1))] for m in range(4)]
+    bars = [[got.bar for got in batch if got is not None] for batch in expected]
+    assert seen["setups"] == bars
+    assert seen["t9"] == bars
+    assert seen["paper"] == bars
+    stored = read_bars(
+        settings.derived_dir, "ES", TS - dt.timedelta(minutes=2), TS + dt.timedelta(minutes=3)
+    )
+    assert [(bar.ts, bar.close, bar.source) for bar in stored] == [
+        (TS + dt.timedelta(minutes=m - 1), 7600.0 + m, BAR_SOURCE_TASTY_TRADES) for m in range(4)
+    ]
+    prices = [data for channel, data in publisher.messages if channel == "price.ES"]
+    assert [p["close"] for p in prices if p["final"]] == [7600.0, 7601.0, 7602.0, 7603.0]
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert [a["kind"] for a in alerts] == ["bars_stalled"]
+    assert "dodává tastytrade" in str(alerts[0]["message"])
+
+
+async def test_neuplna_minuta_tasty_je_mezera_a_pozdni_ibkr_se_nedoruci(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1772: minuta bez úplného baru tasty zůstane mezerou (prázdná dávka). Bar IBKR,
+    který dorazí pozdě k minutě, kterou už konzumenti dostali z tasty, se nedoručí —
+    bar minuty je jeden; měřený bar IBKR téže minuty má přednost jen v čase cyklu."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    # TS−1: tasty bar je; TS: neúplná minuta tasty; TS+1: IBKR i tasty
+    closes = {TS - dt.timedelta(minutes=1): 7600.0, TS + dt.timedelta(minutes=1): 7650.0}
+    pipeline.tasty_bar = _tasty_bar_source(closes)
+    seen = _recording_consumers(pipeline)
+
+    await pipeline.run_minute(TS)
+    await pipeline.run_minute(TS + dt.timedelta(minutes=1))
+    late = Bar(ts=TS - dt.timedelta(minutes=1), open=1.0, high=1.0, low=1.0, close=1.0, volume=1.0)
+    measured = Bar(
+        ts=TS + dt.timedelta(minutes=1),
+        open=7601.0,
+        high=7602.0,
+        low=7600.0,
+        close=7601.0,
+        volume=5.0,
+    )
+    pipeline.minute_bars.extend([late, measured])
+    await pipeline.run_minute(TS + dt.timedelta(minutes=2))
+
+    assert [[bar.close for bar in batch] for batch in seen["setups"]] == [[7600.0], [], [7601.0]]
+    assert seen["paper"] == seen["setups"]
+    stored = read_bars(
+        settings.derived_dir, "ES", TS - dt.timedelta(minutes=2), TS + dt.timedelta(minutes=2)
+    )
+    assert [(bar.close, bar.source) for bar in stored] == [
+        (7600.0, BAR_SOURCE_TASTY_TRADES),
+        (7601.0, "ibkr"),
+    ]
+
+
+async def test_straz_kontraktu_tasty_bar_nepouzije(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1772 + #1232: když páry IBKR × tasty hlásí jiný kontrakt (roll), bar z tasty
+    se za výpadku nepoužije a minuta zůstane mezerou."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    # tasty sleduje o ~1 % vyšší kontrakt než IBKR
+    closes = {TS + dt.timedelta(minutes=m - 1): 7676.0 for m in range(8)}
+    pipeline.tasty_bar = _tasty_bar_source(closes)
+    seen = _recording_consumers(pipeline)
+    for minute in range(6):
+        now = TS + dt.timedelta(minutes=minute)
+        pipeline.minute_bars.append(
+            Bar(
+                ts=now - dt.timedelta(minutes=1),
+                open=7600.0,
+                high=7601.0,
+                low=7599.0,
+                close=7600.0,
+                volume=10.0,
+            )
+        )
+        await pipeline.run_minute(now)
+    await pipeline.run_minute(TS + dt.timedelta(minutes=6))  # IBKR mlčí
+
+    assert [len(batch) for batch in seen["setups"]] == [1, 1, 1, 1, 1, 1, 0]

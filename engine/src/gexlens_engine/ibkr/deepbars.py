@@ -35,7 +35,7 @@ from gexlens_engine.compute.settle import (
 from gexlens_engine.ibkr.underlying import BACKFILL_CONTRACT_TOLERANCE, Bar
 from gexlens_engine.storage.parquet_store import (
     BAR_SOURCE_HISTORICAL,
-    BAR_SOURCE_RECONSTRUCTED,
+    BAR_SOURCES_TASTY,
     StoredBar,
 )
 
@@ -229,8 +229,8 @@ class DayRefill:
 
     bars: list[Bar]  # k zápisu, seřazené
     filled: int  # minuty, které v partici chyběly
-    replaced: int  # minuty `tasty_candle` nahrazené barem IBKR historical
-    tasty_left: int  # minuty `tasty_candle`, které v partici po zápisu zůstanou
+    replaced: int  # minuty z tasty (`BAR_SOURCES_TASTY`) nahrazené barem IBKR historical
+    tasty_left: int  # minuty z tasty, které v partici po zápisu zůstanou
     rejected: list[RejectedBlock]  # bloky, jejichž kontrakt nejde ověřit (`RejectReason`)
     rewritten: list[RewrittenBlock]  # bloky `ibkr_hist` jiného kontraktu, které se přepíší
 
@@ -330,7 +330,7 @@ def plan_day_refill(
     `measured` = close měřených minut téže partice
     (`SnapshotWriter.measured_bar_closes`), `incoming` = bary IBKR historical
     téhož dne z jednoho kontraktu. Kandidát k zápisu je minuta, která v partici
-    chybí, s `replace_tasty` i minuta rekonstruovaná z dxFeed (`tasty_candle`)
+    chybí, s `replace_tasty` i minuta z tastytrade (`tasty_candle`, `tasty_trades`)
     a s `replace_wrong_contract` i dřívější doplnění (`ibkr_hist`), jehož close
     se od staženého baru liší o víc než `tolerance` — bar jiného kontraktu
     zapsaný před stráží #1232. `ibkr_hist` v toleranci zůstává. Měřenou minutu
@@ -362,7 +362,7 @@ def plan_day_refill(
     candidates: list[Bar] = []
     for ts, bar in sorted(by_ts.items()):
         stored = existing.get(ts)
-        if stored is None or (replace_tasty and stored.source == BAR_SOURCE_RECONSTRUCTED):
+        if stored is None or (replace_tasty and stored.source in BAR_SOURCES_TASTY):
             candidates.append(bar)
         elif replace_wrong_contract:
             deviation = _wrong_contract_deviation(stored, bar, tolerance)
@@ -394,7 +394,7 @@ def plan_day_refill(
     tasty_left = sum(
         1
         for ts, stored in existing.items()
-        if stored.source == BAR_SOURCE_RECONSTRUCTED and ts not in covered
+        if stored.source in BAR_SOURCES_TASTY and ts not in covered
     )
     rewritten = [
         RewrittenBlock(

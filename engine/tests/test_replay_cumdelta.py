@@ -233,8 +233,9 @@ def test_v6_bump_v_sobotu_patek_ze_stinu_pondeli_z_1a(data_root: Path) -> None:
     assert attached["cum_delta"][2] == 11.0
     assert attached["cum_delta"][3] == 12.0
     assert attached["cum_delta"][4] == 12.0  # chybějící řádek = poslední hodnota seance
-    # 14:01 (NULL 1A) leží mezi řádky 14:00 a 14:02 historie
-    assert list(attached["cum_gap_before"]) == [False, True, False, True, False]
+    # 14:01 (NULL 1A) leží mezi řádky 14:00 a 14:02 historie; pod v6 je mezerou
+    # i každá přeskočená minuta mezi řádky (W1, #1772): 22:01 → 14:00, 14:02 → 14:05
+    assert list(attached["cum_gap_before"]) == [False, True, True, True, True]
 
 
 def test_v6_minuta_jineho_zdroje_v_seanci_1a_je_mezera(data_root: Path) -> None:
@@ -452,3 +453,19 @@ def test_v5_chybejici_radek_je_mezera_bez_dosazeni(data_root: Path) -> None:
     v5 = bt.attach_cum_delta(frame, bt.build_cum_series("ES", prints=False), prints=False)
     assert v5["cum_delta"][0] == -10.0
     assert math.isnan(v5["cum_delta"][1])  # v5 jako před #1590: jen řádek téže minuty
+
+
+@pytest.mark.parametrize("prints", [False, True])
+def test_w1_preskocena_minuta_mezi_radky_je_mezera_pod_v6(data_root: Path, prints: bool) -> None:
+    """W1 (#1772): minuta, která v přehrání chybí mezi řádky historie (bez baru nebo
+    levels), je pod v6 mezera jako v živém `SetupEngine`; pod v5 se nic nemění."""
+    day = "2026-10-20"
+    source = "aggressor" if prints else "midpoint"
+    _write(
+        data_root / "derived" / "ES" / "flow" / f"{day}.parquet",
+        _flow([(ts(day, f"14:0{m}"), 10.0 + m, source, 5.0) for m in range(4)]),
+    )
+    series = bt.build_cum_series("ES", prints=prints)
+    frame = pd.DataFrame({"ts_min": [ts(day, "14:00"), ts(day, "14:01"), ts(day, "14:03")]})
+    attached = bt.attach_cum_delta(frame, series, prints=prints)
+    assert list(attached["cum_gap_before"]) == [False, False, prints]

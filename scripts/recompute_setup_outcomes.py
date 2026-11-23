@@ -27,10 +27,11 @@ Verdikty:
   se i na kvartální expiraci (vstup na settle nezávisí);
 - **neověřitelný** (nezapisuje se, návrh je jen v reportu): v cestě ceny chybí
   bary (díra nebo chybějící bary do settle; návrh je pak spočítaný přes díru),
-  cesta obsahuje bary z jiného zdroje než IBKR (rekonstrukce z tasty
-  `tasty_candle`; živý `ibkr` i historický `ibkr_hist` jsou týž zdroj), cena
-  v cestě skočí na jinou hladinu (jiný kontrakt, #1232), bar vstupu je
-  nejednoznačný a výsledek na něm závisí nebo nečitelná expirace;
+  cesta obsahuje bary z jiného zdroje než IBKR (z tasty: rekonstrukce
+  `tasty_candle` nebo bar z tisků `tasty_trades`, #1772; živý `ibkr`
+  i historický `ibkr_hist` jsou týž zdroj), cena v cestě skočí na jinou
+  hladinu (jiný kontrakt, #1232), bar vstupu je nejednoznačný a výsledek
+  na něm závisí nebo nečitelná expirace;
 - **po settle** — setup vznikl po settle vlastní expirace (`born_after_settle`,
   #1324), přeskočí se.
 
@@ -102,7 +103,7 @@ from gexlens_engine.compute.setups import (
 )
 from gexlens_engine.ibkr.underlying import BACKFILL_CONTRACT_TOLERANCE
 from gexlens_engine.storage.parquet_store import (
-    BAR_SOURCE_RECONSTRUCTED,
+    BAR_SOURCES_TASTY,
     StoredBar,
     read_bars,
 )
@@ -396,10 +397,10 @@ def _recompute(
         return result("neověřitelný", f"chybí bary {holes} (návrh přes díru)")
     if new_r is None:
         return result("neověřitelný", "bez barů")
-    if any(bar.source == BAR_SOURCE_RECONSTRUCTED for bar in used):
+    if any(bar.source in BAR_SOURCES_TASTY for bar in used):
         return result(
             "neověřitelný",
-            f"bary z jiného zdroje než IBKR ({', '.join(sources)}) — rekonstrukce z tasty",
+            f"bary z jiného zdroje než IBKR ({', '.join(sources)}) — z tasty",
         )
     jump = contract_jump(used)
     if jump is not None:

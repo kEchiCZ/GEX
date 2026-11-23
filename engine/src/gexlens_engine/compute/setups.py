@@ -231,7 +231,8 @@ class MinuteInputs:
     # Rozdíl CumΔ mezi předchozím řádkem historie a tímto není úplný
     # (ADR-0057 bod 4): mezi nimi ležela minuta bez baru s mezerou měření
     # (do historie se nedostane, #1346), nebo reset CumΔ v 17:00 CT (#1581,
-    # jen pod CumΔ z tisků). Nastavuje SetupEngine; podmínka, jejíž okno má
+    # jen pod CumΔ z tisků), nebo pod CumΔ z tisků jakákoli přeskočená minuta
+    # (W1, #1772). Nastavuje SetupEngine; podmínka, jejíž okno má
     # příznak jinde než na prvním řádku, se nepotvrdí (`_cum_levels`).
     cum_gap_before: bool = field(default=False, kw_only=True)
 

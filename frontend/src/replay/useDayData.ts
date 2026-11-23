@@ -180,6 +180,8 @@ export interface DayData {
   Doplněná minuta nese cenu a objem, ale NEmá tok: CumΔ z ní rekonstruovat
   nejde. Musí být v UI vidět, jinak splyne s měřenou (ADR-0024 dodatek). */
   reconstructedIso: string[]
+  /** ISO minuty s barem z tisků tastytrade za výpadku barů IBKR (#1772) — vzestupně. */
+  tastyBarsIso: string[]
   /** ISO časy všech minut osy — zarovnávání externích řad (#204 plochy). */
   minutesIso: string[]
   /** Dyn GEX profil per minuta/koš (ADR-0009); null = bez profilů. */
@@ -219,6 +221,7 @@ function demoDay(): DayData {
     spotSeries,
     minuteLabels,
     reconstructedIso: [],
+    tastyBarsIso: [],
     lastMinuteIso: null, // demo den není ukotvený v čase → bez projekce
     minutesIso: [],
     gexProfile: null,
@@ -289,6 +292,7 @@ function replayToDay(day: ReplayDay): DayData {
     minuteLabels,
     lastMinuteIso: day.minutes.at(-1) ?? null,
     reconstructedIso: day.reconstructedIso,
+    tastyBarsIso: day.tastyBarsIso,
     minutesIso: day.minutes,
     gexProfile: day.gexProfile,
     gexField: day.gexField,

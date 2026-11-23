@@ -285,3 +285,57 @@ profilu; nic z toho se nedosazuje (pravidlo 2, #465).
 - Degradovaný start trvá ~2 min (3× timeout discovery podkladu) — vědomě,
   transientní výpadky sec-def farmy mají retry přednost.
 
+## Dodatek 23. 11. 2026 — bar minuty z tisků tasty za výpadku barů IBKR (#1772)
+
+Rozhodl vlastník 23. 11. 2026 (varianta D1 po měření v RTH; okno T1 přes mezeru W1 18. 11.).
+
+**Problém.** Dávku cyklu plnil jen real-time stream barů IBKR (`reqRealTimeBars`). Za jeho
+výpadku (Error 1100, mrtvé farmy) chyběl finální bar v partici, push `price.{sym}`, detektor
+setupů, sondy T9 i paper; svíčky tasty (`_fill_bar_gaps`) šly jen do partic, až po 3 min stall.
+5. 11. tak 5,5 h RTH nevznikl žádný setup, 19. 11. 144 minut.
+
+**Rozhodnutí — matice zdrojů baru minuty** (jeden bar minuty pro všechny konzumenty,
+rozhoduje se jednou v `InstrumentPipeline._minute_bars`):
+
+| Minuta M−1 v cyklu M | Bar pro zápis, push, detektor, T9, paper | `source` v partici |
+|---|---|---|
+| Bar IBKR v dávce | IBKR | `ibkr` |
+| Bez baru IBKR, úplný bar z tisků tasty, stráž kontraktu OK | tasty | `tasty_trades` |
+| Bez baru IBKR, tasty neúplná nebo jiný kontrakt | mezera (jako dosud) | — (později `ibkr_hist` / `tasty_candle`) |
+| Pozdní bar IBKR minuty, kterou už konzumenti dostali z tasty | nedoručí se | `tasty_trades` zůstává |
+
+- **Zdroj (D1):** agregace tisků dxFeed `TimeAndSale` front future podle času tisku
+  (`compute/futures_bars.FuturesBarAggregator`), tytéž tisky, ze kterých se počítá CVD
+  podkladu (#829). Žádná nová subskripce ani spojení — ADR-0027 (jedno trvalé spojení) beze změny.
+  Zamítnutá D2 (trvalá subskripce `Candle{=1m}`) dávala stejná čísla, ale potřebovala změnu
+  ADR-0027 nebo `fromTime` v hlavním streamu, deduplikaci historie při každém resubscribe
+  a druhou cestu k týmž datům.
+- **Úplnost:** minuta M platí, jen když spojení běží bez reconnectu od jejího začátku
+  (`DxLinkStream.subscribed_at` ≤ M), první tisk streameru dorazil nejpozději v M (symbol přidaný
+  do běžící subskripce, roll) a dorazil tisk s časem ≥ M + 1 min (stream neutichl). Jinak mezera.
+  Nohy spreadů (`spreadLeg`) se nepočítají.
+- **Kontrakt (#1232):** `contract_mismatch` nad posledními 30 páry IBKR × tasty téže minuty;
+  nad `BACKFILL_CONTRACT_TOLERANCE` se bar z tasty nepoužije. Málo párů = nelze rozhodnout →
+  použije se (shodně s `_fill_bar_gaps`).
+- **Shoda:** každou celou hodinu log `Shoda barů {sym} IBKR × tasty za hodinu` (páry, přesná
+  shoda OHLC, max odchylka po polích, poměr objemu). `/status` nese `futures_bars.late_prints`
+  (tisk do už uzavřené minuty) a `spread_legs`.
+- **Přednost původu** (`bar_source_rank`): `ibkr` > `ibkr_hist` > `tasty_trades` > `tasty_candle`.
+  Přepočet setupů bere `tasty_trades` jako jiný zdroj než IBKR (neověřitelný) a
+  `backfill_bars.py --replace-tasty` ho nahradí barem IBKR historical stejně jako `tasty_candle`.
+- **Viditelnost (pravidlo 5):** upozornění `bars_stalled` říká, že bar minuty dodává tastytrade;
+  graf hlásí úsek bannerem „Z tastytrade N min“.
+- **W1:** pod v6 je každá přeskočená minuta mezi řádky historie detektoru mezera
+  (`cum_gap_before`), okno T1, kontra-režimu, T4 a T5 přes ni se nepotvrdí; přehrání totéž
+  (`backtest_setups.attach_cum_delta`). Mezerou zůstává jen výpadek obou zdrojů.
+
+**Měření 23. 11. 2026 v RTH** (sonda `scripts/measure_tasty_bars_1772.py`, 32 úplných minut na
+ES i NQ, #1772 issuecomment-7107606069): pokrytí 32/32; high a low vždy shodné s IBKR; přesná
+shoda OHLC ES 24/32, NQ 23/32 — rozdíly jen v open/close hraničním tiskem zařazeným do sousední
+minuty (ES ≤ 1 tik, NQ ≤ 8 tiků, medián 0, součet objemu dvou minut sedí); objem tasty/IBKR
+0,998–1,002; po M:10 nedorazil žádný tisk minuty M−1 (0 ze 173 762), svíčka M−1 v M:10 = finál
+v 32/32. První minuta po připojení (neúplná subskripce) měla poloviční objem a open o 24 tiků
+jinde — proto pravidlo úplnosti.
+
+**Meze.** Bar z tasty nenese tok IBKR: CumΔ a opční vrstva za výpadku IBKR chybí dál (mezera,
+ne vymyšlená hodnota). Rozdělaná minuta (provizorní bar, ADR-0005) z tasty není.
