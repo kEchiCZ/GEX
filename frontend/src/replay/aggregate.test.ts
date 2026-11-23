@@ -24,6 +24,7 @@ function sampleDay(): DayData {
   return {
     source: 'replay',
     reconstructedIso: [],
+    tastyBarsIso: [],
     grid: { minutes: 4, strikes: [100, 105], layers: { call, put }, staleAge: null },
     raw: null,
     rawFa: null,
@@ -335,6 +336,7 @@ test('buildDailyDay: sloupec = den, denní OHLC svíčka a součty', () => {
   const dayA: ReplayDay = {
     symbol: 'ES',
     reconstructedIso: [],
+    tastyBarsIso: [],
     expiry: '20260715',
     date: '2026-07-15',
     minutes: ['a', 'b'],
@@ -413,6 +415,7 @@ function makeReplayDay(date: string): ReplayDay {
   return {
     symbol: 'ES',
     reconstructedIso: [],
+    tastyBarsIso: [],
     expiry: date.replaceAll('-', ''),
     date,
     minutes: ['a'],

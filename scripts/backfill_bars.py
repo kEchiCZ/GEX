@@ -10,7 +10,7 @@ Hluboký backfill je idempotentní a přerušitelný: dny s existující partic�
 přeskakují, takže opakované spuštění doplní jen díry.
 
 `--days` opraví vyjmenované dny, které partici už mají: doplní chybějící minuty
-a s `--replace-tasty` nahradí i minuty rekonstruované z dxFeed (`tasty_candle`).
+a s `--replace-tasty` nahradí i minuty z tastytrade (`tasty_candle`, `tasty_trades`).
 S `--replace-wrong-contract` přepíše i dřívější doplnění (`ibkr_hist`), jehož
 close se od ověřeného staženého baru liší o víc než `BACKFILL_CONTRACT_TOLERANCE`
 — bar jiného kontraktu zapsaný před stráží #1232; `ibkr_hist` v toleranci
@@ -448,7 +448,7 @@ def main() -> int:
     parser.add_argument(
         "--replace-tasty",
         action="store_true",
-        help="s --days nahradit i minuty tasty_candle barem IBKR historical",
+        help="s --days nahradit i minuty tasty_candle a tasty_trades barem IBKR historical",
     )
     parser.add_argument(
         "--replace-wrong-contract",

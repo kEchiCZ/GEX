@@ -198,20 +198,30 @@ BAR_SOURCE_LIVE = "ibkr"
 #: dobu neběžel nebo stream stál. Do #1055 se zapisovala jako `ibkr` a 2,5 dne
 #: vypnutého PC vypadalo jako „bary tekly, řetěz stál" (#1054).
 BAR_SOURCE_HISTORICAL = "ibkr_hist"
+#: Bar minuty z tisků dxFeed `TimeAndSale` front future za výpadku real-time
+#: barů IBKR (#1772, ADR-0025 dodatek 23. 11. 2026): změřený živě, ale jiným
+#: zdrojem než IBKR — stejný bar dostali v té minutě všichni konzumenti
+BAR_SOURCE_TASTY_TRADES = "tasty_trades"
+#: Původy z tastytrade (jiný zdroj než IBKR) — přepočty a opravy z IBKR je berou stejně
+BAR_SOURCES_TASTY = frozenset({BAR_SOURCE_RECONSTRUCTED, BAR_SOURCE_TASTY_TRADES})
 
 
 def bar_source_rank(source: object) -> int:
     """Přednost původu baru při střetu téže minuty — vyšší vyhrává.
 
     Změřená minuta (živá cesta, i NULL ze starých partic) přebije doplněnou;
-    IBKR historical přebije rekonstrukci z dxFeed (stejný zdroj jako živá
-    data, jen dotažený zpětně); rekonstrukce nepřebije nic.
+    IBKR historical přebije obě cesty z tasty (stejný zdroj jako živá data,
+    jen dotažený zpětně); živý bar z tisků tasty přebije rekonstrukci ze
+    svíček (#1772: změřený za běhu a dostali ho konzumenti); rekonstrukce
+    nepřebije nic.
     """
     if source == BAR_SOURCE_RECONSTRUCTED:
         return 0
-    if source == BAR_SOURCE_HISTORICAL:
+    if source == BAR_SOURCE_TASTY_TRADES:
         return 1
-    return 2
+    if source == BAR_SOURCE_HISTORICAL:
+        return 2
+    return 3
 
 
 def bar_partition_day(ts: dt.datetime) -> dt.date:
@@ -235,7 +245,8 @@ class StoredBar:
     low: float
     close: float
     volume: float
-    #: `ibkr` (i NULL ze starých partic = živá cesta), `ibkr_hist`, `tasty_candle`
+    #: `ibkr` (i NULL ze starých partic = živá cesta), `ibkr_hist`, `tasty_trades`,
+    #: `tasty_candle`
     source: str | None
 
 

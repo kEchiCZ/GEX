@@ -29,6 +29,7 @@ from gexlens_engine.background import BackgroundJob
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.cumdelta import LIVE_SOURCE, SOURCE_AGGRESSOR, CumDeltaTracker
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
+from gexlens_engine.compute.futures_bars import FuturesBarAggregator, FuturesMinuteBar
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
 from gexlens_engine.compute.option_plan import ACCOUNT_KEYS as OPTION_PLAN_ACCOUNT_KEYS
@@ -948,6 +949,7 @@ async def create_pipeline(
     ) = None,
     futures_cvd: FuturesCvdTracker | None = None,
     bar_gap_fill: Callable[[str, dt.datetime, dt.datetime], Awaitable[int]] | None = None,
+    tasty_bar: Callable[[str, dt.datetime], FuturesMinuteBar | None] | None = None,
     discovery_cache: DiscoveryCache | None = None,
     handover: EngineRuntime | None = None,
     on_scenario_created: Callable[[CreatedScenario], object] | None = None,
@@ -1520,6 +1522,8 @@ async def create_pipeline(
             if bar_gap_fill is not None
             else None
         ),
+        # Bar minuty z tisků tasty za výpadku barů IBKR (#1772)
+        tasty_bar=((lambda minute: tasty_bar(symbol, minute)) if tasty_bar is not None else None),
         archive_contracts=archive_contracts,
         next_runtime=next_runtime,
         next_info=next_info,
@@ -2163,6 +2167,9 @@ async def main() -> None:
     # CVD podkladu (#829): jedna instance pro celý engine, runtimes z ní čtou
     # minutu. Bez tasty větve zůstane bez registrací → řada je prostě NULL.
     futures_cvd = FuturesCvdTracker()
+    # Bary podkladu z týchž tisků (#1772): záložní bar minuty za výpadku barů IBKR
+    futures_bars = FuturesBarAggregator()
+    tasty_bar: Callable[[str, dt.datetime], FuturesMinuteBar | None] | None = None
     # Extended expirace z tasty (#616 4a): plán per symbol, plní ho denní
     # obnova chain map; snapshot smyčka z něj čte
     extended_plan: dict[str, list[str]] = {}
@@ -2314,6 +2321,7 @@ async def main() -> None:
             # CVD podkladu (#829): tracker si sám vybere jen printy
             # registrovaných front futures, opční projdou bez práce
             futures_cvd.on_event(event_type, values)
+            futures_bars.on_event(event_type, values)
 
         tasty_stream = DxLinkStream(
             tasty_session.quote_token,
@@ -2322,6 +2330,12 @@ async def main() -> None:
             heal_targets=lambda candidates: tasty_cache.silent_symbols(candidates),
             rate_entries_s=settings.tasty_subscribe_rate_entries_s,
         )
+
+        def _tasty_bar(symbol: str, minute: dt.datetime) -> FuturesMinuteBar | None:
+            # Úplnost minuty stojí i na spojení bez reconnectu od jejího začátku
+            return futures_bars.take(symbol, minute, tasty_stream.subscribed_at)
+
+        tasty_bar = _tasty_bar
 
         def _dx_print_active(active_symbol: str) -> bool:
             # Okamžitý stav pro rozklad objemu pod midpointem (#1007, v5 beze
@@ -2502,6 +2516,7 @@ async def main() -> None:
             # CVD podkladu (#829): bez téhle diagnostiky nejde poznat, proč je
             # řada nulová — jestli chybí registrace, printy, nebo agresor
             fields.update(futures_cvd.status_fields())
+            fields.update(futures_bars.status_fields())
             if extended_plan:
                 # Zdroj per expirace (#616, DoD 3): UI musí poznat tasty expirace
                 fields["tasty_extended_expiries"] = {
@@ -2889,6 +2904,7 @@ async def main() -> None:
                             # CVD podkladu (#829) — registrace zároveň ošetří
                             # roll kontraktu (starý streamer se odpojí)
                             futures_cvd.register(symbol, front)
+                            futures_bars.register(symbol, front)
                     if trades_recorder is not None:
                         # Jen chain symboly — podklad záměrně ne (viz recorder):
                         # jeho printy jsou miliony/den a CumΔ podkladu nese IBKR
@@ -3557,6 +3573,7 @@ async def main() -> None:
                     chain_fallback_source=chain_quotes_lookup,
                     spot_fallback_source=tasty_spot_lookup,
                     bar_gap_fill=bar_gap_fill,
+                    tasty_bar=tasty_bar,
                     futures_cvd=futures_cvd,
                     discovery_cache=discovery_cache,
                     handover=roll_handovers.get(symbol),

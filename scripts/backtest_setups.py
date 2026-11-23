@@ -541,7 +541,8 @@ def attach_cum_delta(
     drží `runtime.last_flow`); pod v5 jen řádek téže minuty jako před #1590,
     chybějící je mezera. `cum_gap_before` jako živý `SetupEngine` (ADR-0057 bod 4):
     mezi minulým a tímto řádkem historie leží minuta s mezerou (minuta bez baru
-    nebo levels do historie nejde), a pod v6 i hranice seance 17:00 CT (#1581).
+    nebo levels do historie nejde), a pod v6 i hranice seance 17:00 CT (#1581)
+    a jakákoli přeskočená minuta mezi řádky (W1, #1772).
     """
     frame = frame.assign(ts_min=_utc_ns(frame["ts_min"])).sort_values("ts_min")
     frame = frame.reset_index(drop=True)
@@ -565,7 +566,8 @@ def attach_cum_delta(
     for index in range(1, len(frame)):
         lo = bisect.bisect_right(gap_ts, times[index - 1])
         hi = bisect.bisect_left(gap_ts, times[index])
-        flags[index] = hi > lo or (prints and sessions[index] != sessions[index - 1])
+        skipped = times[index] - times[index - 1] > pd.Timedelta(minutes=1)
+        flags[index] = hi > lo or (prints and (sessions[index] != sessions[index - 1] or skipped))
     frame["cum_gap_before"] = flags
     return frame
 

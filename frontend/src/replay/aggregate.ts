@@ -267,6 +267,7 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
     minutesIso: day.minutesIso, // ISO minut zůstávají 1m — zarovnávání je před agregací
     // Rozsah rekonstrukce (#617) platí bez ohledu na velikost koše — nese se beze změny
     reconstructedIso: day.reconstructedIso,
+    tastyBarsIso: day.tastyBarsIso,
     overlays: aggregateOverlays(day.overlays, plan),
     panels: {
       vol: sumSeries(day.panels.vol, plan),

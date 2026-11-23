@@ -428,6 +428,25 @@ rekonstruovat nedá** (stejný princip jako šrafované chybějící OI). Opčn�
 znovu se ukáže jen při **jiné** množině rekonstruovaných minut (další
 backfill, jiný den nebo symbol, #977).
 
+### Svíčky z tastytrade za výpadku IBKR (#1772)
+
+Když přestanou chodit real-time bary z TWS (výpadek spojení, mrtvé farmy), engine
+nečeká: bar každé minuty sestaví z tisků front future, které tastytrade posílá
+(záložní zdroj). Stejný bar dostane graf, detektor setupů i paper, takže setupy
+vznikají dál bez zpoždění (bar minuty je hotový 10 s po jejím konci). Minuta,
+kterou tastytrade nedoloží celou (spojení začalo nebo spadlo uprostřed minuty),
+zůstane mezerou — neúplná svíčka by lhala. Měření 23. 11. 2026: high a low
+shodné s IBKR vždy, open a close nejvýš o tik u ES a o 2 body u NQ (tisk na
+hranici minut), objem ±0,2 %.
+
+Upozornění „Real-time bary … nechodí“ v tu chvíli řekne, že **bar minuty dodává
+tastytrade**, a nad grafem se ukáže banner *„Z tastytrade N min (od–do) …“*.
+Zavírá se křížkem stejně jako banner rekonstrukce. CumΔ a opční vrstva z IBKR
+za výpadek dál chybí (mezera, ne vymyšlená čísla).
+
+Setupy pod mechanikou v6 nepotvrdí okno, ve kterém chybí minuta (výpadek
+obou zdrojů): rozdíl CumΔ přes takovou díru by nebyl úplný (W1).
+
 ![Svíčkový režim](img/svicky.png)
 
 ---
