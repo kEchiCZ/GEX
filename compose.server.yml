@@ -26,8 +26,9 @@
 #     řeší nedělní TWS_COLD_RESTART 22:30 + potvrzení IB Key push na telefonu.
 #     ADR-0063 bod 11: nejvýš 3 pushe (první + 2 pokusy po ~10 min), pak
 #     Gateway stojí a server jede přes tasty. Limit pokusů implementuje #1850;
-#     do té doby RELOGIN_AFTER_TWOFA_TIMEOUT=yes opakuje login po 180 s, dokud
-#     push nepřijde (TWOFA_TIMEOUT_ACTION=restart sám nový push nepošle).
+#     do té doby RELOGIN_AFTER_TWOFA_TIMEOUT=yes opakuje login po 180 s bez
+#     limitu, dokud vlastník push nepotvrdí (v neděli 22:30 klidně celou noc;
+#     TWOFA_TIMEOUT_ACTION=restart sám nový push nepošle).
 #
 # PAST (#446/#992): ibkr_host/ibkr_port uložené v DB ze Settings UI přebíjejí
 # hodnoty odsud. Po obnově dumpu z PC tam zůstává domácí host/port — po prvním
@@ -68,9 +69,11 @@ services:
       # Bez toho IBC po vypršení 2FA (180 s) jen čeká a nový push nepošle
       # (#1803: login visel po nedoručeném pushi); s yes zopakuje login
       RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
-      # Druhý username patří jen serveru: při souběžné relaci (omylem web nebo
-      # mobil) Gateway relaci převezme, jinak IBC čeká na ruční klik (prázdná
-      # hodnota v config.ini = manual)
+      # Druhý username patří jen serveru: když IBC při loginu narazí na jinou
+      # relaci téhož username (omylem web nebo mobil), zvolí „primary“ a tu
+      # druhou ukončí; prázdná hodnota v config.ini = ruční klik. Naživo zatím
+      # neověřeno — 24. 11. naopak cizí login odhlásil běžící Gateway
+      # („Re-login is required“ → IBC znovu přihlásil s novým pushem)
       EXISTING_SESSION_DETECTED_ACTION: primary
       # Časy platí v TZ kontejneru (níže Europe/Prague): denní restart v pauze
       # Globexu (23:00–24:00 CET), plný login v neděli před otevřením seance
