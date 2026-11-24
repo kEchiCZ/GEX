@@ -68,6 +68,10 @@ services:
       # Bez toho IBC po vypršení 2FA (180 s) jen čeká a nový push nepošle
       # (#1803: login visel po nedoručeném pushi); s yes zopakuje login
       RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      # Druhý username patří jen serveru: při souběžné relaci (omylem web nebo
+      # mobil) Gateway relaci převezme, jinak IBC čeká na ruční klik (prázdná
+      # hodnota v config.ini = manual)
+      EXISTING_SESSION_DETECTED_ACTION: primary
       # Časy platí v TZ kontejneru (níže Europe/Prague): denní restart v pauze
       # Globexu (23:00–24:00 CET), plný login v neděli před otevřením seance
       AUTO_RESTART_TIME: "11:05 PM"
