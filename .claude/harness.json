@@ -1,0 +1,8 @@
+{
+  "merge_script": "scripts/merge-when-green.sh",
+  "core_paths": ["engine/src/gexlens_engine/compute/"],
+  "worktree_setup": [
+    "uv sync --frozen --all-packages",
+    "jen u listu s frontendem: junction frontend/node_modules na frontend/node_modules hlavního checkoutu (PowerShell New-Item -ItemType Junction)"
+  ]
+}

@@ -17,3 +17,6 @@ doplňuje specifika Claude Code; nic z AGENTS.md neopakuje.
 - Rozhodnutí předkládej jako varianty s výhodami/nevýhodami a doporučením (viz AGENTS.md
   „Rozhodování"); připomínky s datem zakládej jako issue `[AI Agent] Připomínka ~D. M.:` s `prio:*`.
 - Epiky a větší funkce: skill `/epika`.
+- Výstupy pluginu EGM (rybky, volitelně u `/spec`) patří do gitignorovaného `.egm/`:
+
+EGM artifact directory: .egm

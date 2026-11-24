@@ -43,3 +43,6 @@ scripts/lines_probe_run.log
 CLAUDE.local.md
 .claude/settings.local.json
 .mcp.json
+
+# Výstupy pluginu EGM (rybky u /spec, #1887)
+.egm/
