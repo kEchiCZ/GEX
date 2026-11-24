@@ -51,6 +51,7 @@ from gexlens_engine.ibkr.scheduler import (
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.oi_archive import ArchiveVersion, OIEodRepository
 from gexlens_engine.storage.parquet_store import (
+    BAR_SOURCE_TASTY_TRADES,
     CatchUpRow,
     FlowRowLike,
     GexFieldRow,
@@ -1224,10 +1225,18 @@ class EngineRuntime:
         self.last_flow = flow_row
         await asyncio.to_thread(self.writer.write_flow, self.symbol, day, [flow_row])
 
-        if bars:
-            # Podle dne baru, ne cyklu (#1002): bar 23:59 finalizuje cyklus 00:00
-            # a pod `day` by skončil v partici D+1 vedle provizorní kopie v D
-            await asyncio.to_thread(self.writer.write_bars_by_day, self.symbol, bars)
+        # Podle dne baru, ne cyklu (#1002): bar 23:59 finalizuje cyklus 00:00
+        # a pod `day` by skončil v partici D+1 vedle provizorní kopie v D
+        measured = [bar for bar in bars if bar.source != BAR_SOURCE_TASTY_TRADES]
+        from_tasty = [bar for bar in bars if bar.source == BAR_SOURCE_TASTY_TRADES]
+        if measured:
+            await asyncio.to_thread(self.writer.write_bars_by_day, self.symbol, measured)
+        if from_tasty:
+            # Bar z tasty dostali konzumenti (#1772); v partici leží jen provizorní
+            # bar IBKR téže minuty, který by podle původu vyhrál (#1877)
+            await asyncio.to_thread(
+                self.writer.write_bars_by_day, self.symbol, from_tasty, overwrite=True
+            )
         # Provizorní bar rozdělané minuty (ADR-0005) — zapisuje se až po finálních,
         # aby ho jejich upsert nepřepsal; patří-li jiné minutě, ignoruje se.
         provisional = forming_bar if forming_bar is not None and forming_bar.ts == ts_min else None

@@ -321,6 +321,10 @@ rozhoduje se jednou v `InstrumentPipeline._minute_bars`):
   shoda OHLC, max odchylka po polích, poměr objemu). `/status` nese `futures_bars.late_prints`
   (tisk do už uzavřené minuty) a `spread_legs`.
 - **Přednost původu** (`bar_source_rank`): `ibkr` > `ibkr_hist` > `tasty_trades` > `tasty_candle`.
+  Výjimka (#1877): bar z tasty, který cyklus doručil konzumentům, přepíše v partici řádek své
+  minuty. Leží tam jen provizorní bar IBKR (ADR-0005) zapsaný před výpadkem, který by podle
+  původu vyhrál. Naživo 24. 11. 05:26 UTC (Error 1100) zůstal v partici provizorní bar
+  s objemem ES 11 a NQ 9, zatímco konzumenti měli celý bar z tasty.
   Přepočet setupů bere `tasty_trades` jako jiný zdroj než IBKR (neověřitelný) a
   `backfill_bars.py --replace-tasty` ho nahradí barem IBKR historical stejně jako `tasty_candle`.
 - **Viditelnost (pravidlo 5):** upozornění `bars_stalled` říká, že bar minuty dodává tastytrade;

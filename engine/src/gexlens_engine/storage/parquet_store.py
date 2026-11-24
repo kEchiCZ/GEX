@@ -1356,13 +1356,17 @@ class SnapshotWriter:
         buffer = self._buffer(path, GEXFIELD_SCHEMA)
         return buffer.replace_and_write([asdict(row)])
 
-    def write_bars(self, symbol: str, day: dt.date, bars: Sequence[BarLike]) -> Path:
+    def write_bars(
+        self, symbol: str, day: dt.date, bars: Sequence[BarLike], *, overwrite: bool = False
+    ) -> Path:
         """Zapíše 1min bary podkladu do partice derived/{sym}/bars/{date}.parquet.
 
         Upsert podle `ts_min`: provizorní bar rozdělané minuty (ADR-0005) se
         příštím cyklem nahradí finálním, ne zdvojí. Původ rozhoduje střet
         (#1055): změřená minuta zůstává, i když backfill z IBKR historical
         přinese tutéž minutu — živý zápis historickou hodnotu nahradí, obráceně ne.
+        `overwrite` = bar přepíše řádek své minuty bez ohledu na původ: bar
+        z tasty, který cyklus doručil konzumentům, nad provizorním barem IBKR (#1877).
         """
         path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, BARS_SCHEMA)
@@ -1382,7 +1386,9 @@ class SnapshotWriter:
                 for bar in bars
             ],
             key="ts_min",
-            keep_existing=lambda existing, incoming: (
+            keep_existing=None
+            if overwrite
+            else lambda existing, incoming: (
                 bar_source_rank(existing.get("source")) > bar_source_rank(incoming.get("source"))
             ),
         )
@@ -1399,7 +1405,9 @@ class SnapshotWriter:
         column = pq.read_table(path, columns=["ts_min"]).column("ts_min").to_pylist()
         return {ts.replace(tzinfo=dt.UTC) if ts.tzinfo is None else ts for ts in column if ts}
 
-    def write_bars_by_day(self, symbol: str, bars: Sequence[BarLike]) -> list[Path]:
+    def write_bars_by_day(
+        self, symbol: str, bars: Sequence[BarLike], *, overwrite: bool = False
+    ) -> list[Path]:
         """Zapíše bary do partic podle UTC dne **jejich** `ts`, ne podle dne cyklu (#1002).
 
         Partice barů = UTC kalendářní den. Půlnoční cyklus 00:00 finalizuje bar
@@ -1411,7 +1419,10 @@ class SnapshotWriter:
         by_day: dict[dt.date, list[BarLike]] = {}
         for bar in bars:
             by_day.setdefault(bar_partition_day(bar.ts), []).append(bar)
-        return [self.write_bars(symbol, day, group) for day, group in sorted(by_day.items())]
+        return [
+            self.write_bars(symbol, day, group, overwrite=overwrite)
+            for day, group in sorted(by_day.items())
+        ]
 
     def measured_bar_closes(self, symbol: str, day: dt.date) -> dict[dt.datetime, float]:
         """Close měřených minut partice (živá cesta, i NULL ze starých partic) — #1232.
