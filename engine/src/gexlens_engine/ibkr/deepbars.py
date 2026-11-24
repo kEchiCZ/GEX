@@ -15,7 +15,8 @@ Modul drží čisté plánování a bucketování (golden testy, pravidlo 3);
 síťový runner je ve `scripts/backfill_bars.py`. Týž runner umí i opravu
 existujících dnů (#1320): doplnit chybějící minuty, nahradit rekonstrukci
 `tasty_candle` barem IBKR historical a přepsat dřívější doplnění `ibkr_hist`
-z jiného kontraktu — plán dne skládá `plan_day_refill`.
+z jiného kontraktu — plán dne skládá `plan_day_refill`. Vyjmenované minuty
+s neúplným barem (i měřené `ibkr`) přepíše `plan_minute_replacements` (#1885).
 """
 
 import datetime as dt
@@ -413,3 +414,65 @@ def plan_day_refill(
         rejected=rejected,
         rewritten=rewritten,
     )
+
+
+#: Výrok o vyjmenované minutě (#1885): `replace` = přepíše se, `same_volume` =
+#: stažený bar má týž objem a minuta zůstane; ostatní = minuta se nezapíše a běh
+#: skončí chybou (`not_stored` minuta v partici chybí, `not_fetched` IBKR ji
+#: nevrátil, `mismatch` close mimo toleranci = jiný kontrakt)
+MinuteVerdict = Literal["replace", "same_volume", "not_stored", "not_fetched", "mismatch"]
+
+
+@dataclass(frozen=True)
+class MinuteReplacement:
+    """Vyjmenovaná minuta partice a stažený bar IBKR historical k ní (#1885).
+
+    `deviation` = relativní odchylka close staženého baru od uložené minuty
+    (None, když jeden z barů chybí).
+    """
+
+    ts: dt.datetime
+    stored: StoredBar | None
+    incoming: Bar | None
+    deviation: float | None
+    verdict: MinuteVerdict
+
+
+def plan_minute_replacements(
+    existing: Mapping[dt.datetime, StoredBar],
+    incoming: Iterable[Bar],
+    minutes: Iterable[dt.datetime],
+    *,
+    tolerance: float = BACKFILL_CONTRACT_TOLERANCE,
+) -> list[MinuteReplacement]:
+    """Přepis vyjmenovaných minut barem IBKR historical bez ohledu na původ (#1885).
+
+    Neúplný bar IBKR (první minuta po reconnectu #1876, provizorní bar, který
+    přebil bar z tasty #1877) je měřený (`ibkr`), takže ho `plan_day_refill`
+    ani `bar_source_rank` nepřepíše nikdy. Tady rozhoduje vlastník výčtem
+    minut. Minuta se přepíše, jen když ji partice má, IBKR ji vrátil, objem se
+    liší a close staženého baru sedí na uloženou minutu v `tolerance`: uložený
+    bar je z kontraktu, který engine měřil, takže bar jiného kontraktu se
+    ukáže odchylkou o basis (stráž #1232). Minutu, která v partici chybí,
+    doplní `plan_day_refill` jako díru. Jiné minuty partice plán nevidí.
+    Idempotentní: po zápisu má minuta objem staženého baru a podruhé vyjde
+    `same_volume`. Časy jsou v UTC na obou stranách.
+    """
+    by_ts = {bar.ts: bar for bar in incoming}
+    plan: list[MinuteReplacement] = []
+    for ts in sorted(set(minutes)):
+        stored = existing.get(ts)
+        bar = by_ts.get(ts)
+        if stored is None or bar is None:
+            verdict: MinuteVerdict = "not_stored" if stored is None else "not_fetched"
+            plan.append(MinuteReplacement(ts, stored, bar, None, verdict))
+            continue
+        deviation = abs(bar.close - stored.close) / stored.close
+        if bar.volume == stored.volume:
+            verdict = "same_volume"
+        elif deviation > tolerance:
+            verdict = "mismatch"
+        else:
+            verdict = "replace"
+        plan.append(MinuteReplacement(ts, stored, bar, deviation, verdict))
+    return plan
