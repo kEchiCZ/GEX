@@ -60,12 +60,20 @@ R4/ADR-0001 (OI archiv).
 **Stav dodatku:** návrh, rozhoduje vlastník v #1855 (`needs-decision`). Do
 rozhodnutí platí původní znění: engine zapisuje výchozím pyarrow (snappy).
 
-**Růst je desetkrát vyšší, než počítal Kontext.** Přeměřeno 24. 11. na
-produkci PC: říjen 5,1 GB, posledních 31 dní 4,5 GB, z toho snapshots 92 %.
-To dává ~5 GB/měsíc, tedy ~55–60 GB/rok místo ~6 GB/rok z 20. 8. Příčinou
-je víc expirací ES+NQ, greeks ve snapshotech a nové řady `derived/`.
-`data/` má dnes 16,3 GB (parquety 13,2 GB, logy 2,3 GB). Alert `disk_limit_gb`
-(20 GB) tak přijde kolem konce prosince 2026.
+Souvisí: #1338 (rozbor růstu, varianty C1 a C5 a archiv E), ADR-0058
+(rozlišení extended expirací).
+
+**Růst je zhruba osmkrát vyšší, než počítal Kontext.** Příčinou jsou extended
+expirace z tasty (#616), změřené v #1338 a ADR-0058. Přeměřeno 24. 11. na
+produkci PC:
+- **říjen, před ADR-0058:** 5,1 GB;
+- **1.–23. 11., po ADR-0058:** parquety 3,21 GB za 16 seancí. To je ~200 MB
+  na seanci (snapshots 194 MB proti odhadu 186 MB v ADR-0058), tedy
+  ~4,2 GB/měsíc a ~50 GB/rok místo ~6 GB/rok z 20. 8.
+
+`data/` má dnes 16,3 GB (parquety 13,2 GB, logy 2,3 GB). Alert
+`disk_limit_gb` hlídá celé `data/` včetně logů proti 20 GiB (21,5 GB). Při
+4,2 GB/měsíc a bez růstu logů tak přijde kolem konce prosince 2026.
 
 **Měření** (skript `scripts/measure_parquet_compression.py`, čísla a postup
 v komentáři „Měření komprese“ v #1855). Vzorek je kopie 15 UTC dní
@@ -88,10 +96,13 @@ na konci dne.
   je poměr repozitáře k dnešním souborům, odhadnutý zstd úrovně 3 nad celými
   soubory; restic komprimuje sám, takže úspora v repozitáři je menší než na
   disku.
-- **Zápis arm64** je den 24. 11. na serveru Oracle (139 partic, 86 MB, 1 CPU,
-  image enginu).
+- **Zápis arm64** je den 24. 11. na serveru Oracle (139 partic dne, 1 CPU,
+  image enginu). Na pokyn vlastníka v zadání session se měřil přes
+  `docker run --rm` nad kopií v domovském adresáři. Server sbírá menší objem
+  než PC a kopie vznikla ve 22:08 SEČ, takže součet není horní mez plného
+  dne na PC. Přenosné jsou jen poměry variant.
 - **Zápis PC** je tentýž den v image enginu přes bind mount jako na produkci;
-  v závorce je největší den vzorku (16. 11., 235 MB).
+  v závorce je největší den vzorku (16. 11., 159 partic, 235 MB).
 - **BSS** je kódování BYTE_STREAM_SPLIT u float sloupců bez slovníku. Ostatní
   sloupce si slovník nechávají.
 
@@ -100,7 +111,7 @@ včetně metadat, v typech, pořadí řádků i bitově, a NaN na stejném míst
 počítá jako shoda. Čtení dopadlo stejně v rámci šumu měření:
 `read_table`, pandas, `pyarrow.dataset`, endpointy snapshots, replay
 a profile v kontejneru. `scripts/backtest_setups.py` dává nad originálem,
-zstd 1 + BSS a smíšeným adresářem bajtově shodný výsledek (254 setupů) za
+zstd 1 + BSS všech float sloupců a smíšeným adresářem bajtově shodný výsledek (254 setupů) za
 stejný čas. Ve smíšeném adresáři jsou snappy a zstd v téže složce
 (496 z 613 složek) a čte se beze změny kódu.
 
@@ -110,26 +121,47 @@ je o 58 % pomalejší než dnes. Pravidlo „všechny float sloupce“ je zadarm
 deterministické a zároveň menší. Horší je jen u `trades` (`price` má málo různých hodnot),
 které tvoří 0,4 % objemu.
 
-**Navrhované rozhodnutí** (doporučená varianta A v #1855):
+**Navrhované rozhodnutí** (doporučená varianta A v #1855). Nahrazuje
+doporučení C1 z #1338 (zstd 3 + BSS a slovník pro `strike`):
+- úroveň 1 místo 3, protože se zstd 3 trvá zápis na arm64 o 13 % déle a úspora
+  je jen o 1,4 procentního bodu větší;
+- BSS i pro `strike`, protože pravidlo „všechny float sloupce“ vyšlo menší
+  než výběr heuristikou, který `strike` většinou nechává ve slovníku.
+
 1. Engine zapisuje partice se zstd úrovně 1 a BYTE_STREAM_SPLIT pro všechny
-   float sloupce bez slovníku. Mění se jediné místo zápisu,
-   `parquet_store._write`. Čtení se nemění, protože smíšený adresář funguje.
+   float sloupce bez slovníku. Mění se místo zápisu enginu
+   `parquet_store._PartitionBuffer._write`.
+   - Ostatní zapisovače zůstávají u snappy, pokud je implementace nepřevede
+     také: news-engine `sentindex_job.py` a opravné skripty `scripts/fix_*`
+     a `scripts/repair_*`.
+   - Čtení se nemění, protože smíšený adresář funguje.
 2. Staré partice se jednorázově překomprimují **před F7a #1804**, aby první
-   snapshot restic nenesl data dvakrát. Před rekompresí je záloha. Originál se
-   smaže až po ověření obsahu (bitová shoda jako v měření). Dnešní partice
-   se vynechá a běží se mimo US RTH.
+   snapshot restic nenesl data dvakrát. To je C5 z #1338.
+   - Před rekompresí je záloha.
+   - Originál se smaže až po ověření obsahu (bitová shoda jako v měření).
+   - Rekomprese běží jen při zavřeném trhu (`marketclock.is_market_closed`)
+     a jen nad particemi, které starší UTC den nebude znovu zapisovat.
+     Vynechávají se obě UTC partice běžící seance, protože engine přepisuje
+     celou partici ze svého bufferu.
+   - Před `os.replace` se ověří, že se originál mezitím nezměnil (mtime
+     a velikost).
 3. `disk_limit_gb` 20 → 40 GB. Alert zůstává spouštěčem revize, nikdy
    nemaže.
 
-**Dopad na úložiště** (odhad z ~5 GB/měsíc surového růstu):
-- **D: (PC, 260 GB, ~50 GB volných):**
-  - bez komprese zbývá ~10 měsíců;
-  - s variantou A je to ~14 měsíců, protože rekomprese uvolní ~3,2 GB a růst
-    klesne na ~3,8 GB/měsíc.
-- **T7 (E:, 1,2 TB volných):** repozitář PC roste ~4,3 GB/měsíc (s A
-  ~3,7 GB/měsíc). Úložiště tak vydrží desítky let a omezením není.
+Implementace patří do #1338 (C1 a C5 podle této varianty), ne do nového
+issue. Archiv mimo D: (E v #1338) tento dodatek neřeší.
+
+**Dopad na úložiště** (odhad z ~4,2 GB/měsíc surového růstu od 1. 11.):
+- **D: (PC, 260 GB, ~52 GB volných):**
+  - bez komprese zbývá ~12 měsíců;
+  - s variantou A ~17 měsíců, protože rekomprese uvolní ~3,2 GB a růst
+    klesne na ~3,2 GB/měsíc.
+  - Na stejném disku je VHDX Dockeru, jehož velikost kolísá až o 18 GB (#1338),
+    takže reálná rezerva je menší.
+- **T7 (E:, 1,2 TB volných):** repozitář PC roste ~3,6 GB/měsíc (s A
+  ~3,1 GB/měsíc). Úložiště tak vydrží desítky let a omezením není.
 - **Oracle (200 GB, 181 GB volných):**
   - Až bude server aktivním strojem s celým archivem, ponese data i vlastní
     repozitář restic. Dohromady to je ~1,85× dat bez komprese a ~1,49× dat s A.
-  - Volné místo vydrží ~16 měsíců bez komprese a ~21 měsíců s A, pak
-    rozhoduje revize (větší disk, cloud #1811).
+  - Volné místo vydrží ~20 měsíců bez komprese a ~25 měsíců s A, pak
+    rozhoduje revize (větší disk, cloud #1811, archiv E v #1338).
