@@ -33,9 +33,25 @@
 # startu nastavit v Settings host `ib-gateway`, port `4003`. Trvale to řeší
 # nastavení stroje mimo synchronizaci (ADR-0063 bod 3, #1847, #1848).
 services:
+  # Svazek nastavení Gateway vzniká prázdný a patří rootovi (cesta
+  # /home/ibgateway/tws_settings v image není, Docker ji založí jako root).
+  # Gateway běží jako uid 1000 a bez práva zápisu padá na jts.ini: Permission
+  # denied ještě před loginem (#1803). Jednorázová služba svazek předá uživateli
+  # image; chown je idempotentní, při každém `up` doběhne za zlomek sekundy.
+  ib-gateway-init:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    user: root
+    entrypoint: ["chown", "ibgateway:ibgateway", "/home/ibgateway/tws_settings"]
+    restart: "no"
+    volumes:
+      - ibgw_settings:/home/ibgateway/tws_settings
+
   ib-gateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
     restart: unless-stopped
+    depends_on:
+      ib-gateway-init:
+        condition: service_completed_successfully
     logging:
       driver: json-file
       options:
