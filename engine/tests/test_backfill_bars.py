@@ -1,13 +1,15 @@
-"""Oprava dnů skriptem `scripts/backfill_bars.py --days` nad fixture particí v tmp (#1320).
+"""Oprava dnů (`--days`, #1320) a minut (`--replace-minutes`, #1885) skriptem
+`scripts/backfill_bars.py` nad fixture particí v tmp.
 
 IBKR se nevolá: spojení, rozlišení kontraktu a historický klient jsou podvržené
 v namespace skriptu (načítá se přes importlib, vzor test_recompute_setup_outcomes).
-Ověřuje se celý průchod `run_days`: stráž kontraktu, plán, upsert a pojistka,
-že měřené minuty zůstanou.
+Ověřuje se celý průchod `run_days` a `run_minutes`: stráž kontraktu, plán,
+upsert a pojistka, že ostatní měřené minuty zůstanou.
 """
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import importlib.util
 import logging
@@ -25,6 +27,7 @@ from gexlens_engine.storage.parquet_store import (
     BAR_SOURCE_HISTORICAL,
     BAR_SOURCE_LIVE,
     BAR_SOURCE_RECONSTRUCTED,
+    BAR_SOURCE_TASTY_TRADES,
     SnapshotWriter,
 )
 
@@ -48,14 +51,14 @@ def price(i: int) -> float:
     return 7700.0 + 0.25 * i
 
 
-def bar(i: int, close: float, source: str | None) -> Bar:
+def bar(i: int, close: float, source: str | None, volume: float = 10.0) -> Bar:
     return Bar(
         ts=START + i * MINUTE,
         open=close,
         high=close,
         low=close,
         close=close,
-        volume=10.0,
+        volume=volume,
         source=source,
     )
 
@@ -399,3 +402,152 @@ async def test_session_start_is_verified_from_prior_partition(
     assert (
         f"večer předchozí partice — 10 měřených minut seance, 20 barů z {verified}" in caplog.text
     )
+
+
+#: `--replace-minutes` (#1885): neúplné měřené bary 5 a 6 (první minuta po
+#: reconnectu, provizorní bar přes bar z tasty), minuta 7 má v historii týž
+#: objem, minuta 8 je bar z tisků tasty mezi nimi a vyjmenovaná není
+PARTIAL = {5: 2.0, 6: 3.0}
+SAME_VOLUME = 7
+TASTY_NEIGHBOUR = 8
+
+
+def seed_partial(data: Path) -> Path:
+    rows = [
+        bar(i, price(i), None, PARTIAL.get(i, 10.0))
+        for i in range(30)
+        if i not in (TASTY_NEIGHBOUR, 15)  # 15 = díra
+    ] + [bar(TASTY_NEIGHBOUR, price(TASTY_NEIGHBOUR) + 0.5, BAR_SOURCE_TASTY_TRADES)]
+    return SnapshotWriter(Settings(data_dir=data)).write_bars("ES", DAY, rows)
+
+
+def full_history(offset: dict[int, float] | None = None) -> list[Bar]:
+    """Celé okno z IBKR historical: o tick jinde a s plným objemem 40 (minuta 7: 10)."""
+    offset = offset or {}
+    return [
+        bar(i, price(i) + 0.25 + offset.get(i, 0.0), None, 10.0 if i == SAME_VOLUME else 40.0)
+        for i in range(30)
+    ]
+
+
+def read_full(path: Path) -> dict[int, tuple[float, float, str | None]]:
+    out: dict[int, tuple[float, float, str | None]] = {}
+    for row in pq.read_table(path).to_pylist():
+        ts = row["ts_min"].astimezone(dt.UTC)
+        out[int((ts - START) / MINUTE)] = (row["close"], row["volume"], row["source"])
+    return out
+
+
+async def run_minutes(
+    mod: Any, data: Path, minutes: Sequence[int], *, dry_run: bool = False
+) -> int:
+    result: int = await mod.run_minutes(
+        {("ES", DAY): [START + i * MINUTE for i in minutes]},
+        Settings(data_dir=data),
+        4001,
+        dry_run=dry_run,
+    )
+    return result
+
+
+async def test_replace_minutes_overrides_rank_only_for_listed_minutes(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Měřený `ibkr` (rank 3) ustoupí `ibkr_hist` (rank 2) jen ve vyjmenovaných minutách.
+
+    Sousední měřené minuty, bar z tasty mezi nimi i díra zůstanou, i když je
+    historie má jinak. Minuta se shodným objemem zůstane. Druhý běh nic nezmění.
+    """
+    path = seed_partial(tmp_path)
+    before = read_full(path)
+    install_fakes(mod, monkeypatch, {"202609": full_history()})
+
+    assert await run_minutes(mod, tmp_path, [5, 6, SAME_VOLUME]) == 0
+
+    after = read_full(path)
+    for i in PARTIAL:
+        assert before[i] == (price(i), PARTIAL[i], BAR_SOURCE_LIVE)
+        assert after[i] == (price(i) + 0.25, 40.0, BAR_SOURCE_HISTORICAL)
+    for i in sorted(set(before) - set(PARTIAL)):  # vč. 4, 7, 8 a 9 vedle přepsaných
+        assert after[i] == before[i]
+    assert after[TASTY_NEIGHBOUR][2] == BAR_SOURCE_TASTY_TRADES
+    assert 15 not in after
+
+    content = path.read_bytes()
+    assert await run_minutes(mod, tmp_path, [5, 6, SAME_VOLUME]) == 0
+    assert path.read_bytes() == content
+
+
+async def test_replace_minutes_rejects_hole_missing_history_and_other_contract(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Díra, minuta bez historie a close o basis jinde se nezapíšou, návratový kód 1.
+
+    Platná vyjmenovaná minuta téže partice se přepíše.
+    """
+    path = seed_partial(tmp_path)
+    before = read_full(path)
+    history = [b for b in full_history(offset={6: 77.0}) if b.ts != START + 12 * MINUTE]
+    install_fakes(mod, monkeypatch, {"202609": history})
+
+    assert await run_minutes(mod, tmp_path, [5, 6, 12, 15]) == 1
+
+    after = read_full(path)
+    assert after[5] == (price(5) + 0.25, 40.0, BAR_SOURCE_HISTORICAL)
+    for i in (6, 12):
+        assert after[i] == before[i]
+    assert 15 not in after
+    assert "2026-09-10T14:06" in caplog.text and "jiný kontrakt než 202609" in caplog.text
+    assert "IBKR minutu z 202609 nevrátil" in caplog.text
+    assert "minuta v partici chybí" in caplog.text
+
+
+async def test_replace_minutes_dry_run_lists_before_and_after(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="backfill_bars")
+    path = seed_partial(tmp_path)
+    content = path.read_bytes()
+    install_fakes(mod, monkeypatch, {"202609": full_history()})
+
+    assert await run_minutes(mod, tmp_path, [5], dry_run=True) == 0
+
+    assert path.read_bytes() == content
+    assert (
+        "ES 2026-09-10T14:05: ibkr O 7701.25 H 7701.25 L 7701.25 C 7701.25 V 2 → "
+        "ibkr_hist O 7701.5 H 7701.5 L 7701.5 C 7701.5 V 40 — nezapisuje se (dry-run)"
+    ) in caplog.text
+
+
+def test_parse_minutes_groups_by_symbol_and_utc_partition(mod: Any) -> None:
+    parsed = mod.parse_minutes(
+        "ES:2026-11-24T05:26, nq:2026-11-24T05:26,ES:2026-11-24T05:26,ES:2026-11-25T00:00,"
+    )
+    utc = dt.UTC
+    assert parsed == {
+        ("ES", dt.date(2026, 11, 24)): [dt.datetime(2026, 11, 24, 5, 26, tzinfo=utc)],
+        ("ES", dt.date(2026, 11, 25)): [dt.datetime(2026, 11, 25, 0, 0, tzinfo=utc)],
+        ("NQ", dt.date(2026, 11, 24)): [dt.datetime(2026, 11, 24, 5, 26, tzinfo=utc)],
+    }
+    for raw in ("ES 2026-11-24T05:26", "ES:2026-11-24 05:26", ":2026-11-24T05:26"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            mod.parse_minutes(raw)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        # Partici včerejška drží engine v paměti (BUFFER_KEEP_DAYS)
+        [],
+        ["--days", "2026-09-10"],
+    ],
+)
+def test_main_refuses_recent_partition_and_mixed_modes(
+    mod: Any, monkeypatch: pytest.MonkeyPatch, extra: list[str]
+) -> None:
+    yesterday = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    minute = f"ES:{yesterday.isoformat()}T05:26" if not extra else "ES:2026-09-10T14:05"
+    monkeypatch.setattr(sys, "argv", ["backfill_bars.py", "--replace-minutes", minute, *extra])
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 2

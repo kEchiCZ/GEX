@@ -1,10 +1,12 @@
-"""Backfill 1min barů ES/NQ z IBKR historical: hluboký (#369) a oprava dnů (#1320).
+"""Backfill 1min barů ES/NQ z IBKR historical: hluboký (#369), oprava dnů (#1320) a minut (#1885).
 
 Spouští se z hostu proti běžící TWS / IB Gateway (vlastní clientId — neruší engine):
 
     uv run python scripts/backfill_bars.py [--symbols ES,NQ] [--depth-days 730]
     uv run python scripts/backfill_bars.py --days 2026-09-10,2026-09-14
         [--replace-tasty] [--replace-wrong-contract] [--dry-run] [--port 4001]
+    uv run python scripts/backfill_bars.py
+        --replace-minutes ES:2026-11-24T05:26,NQ:2026-11-24T05:26 [--dry-run] [--port 4001]
 
 Hluboký backfill je idempotentní a přerušitelný: dny s existující particí se
 přeskakují, takže opakované spuštění doplní jen díry.
@@ -24,6 +26,13 @@ ně stáhne i předchozí den (#1390). Doplnění díry stačí jedna strana, p�
 `ibkr_hist` potřebuje obě. Dnešek a včerejšek skript odmítne: jejich partice
 drží engine v paměti a pozdním zápisem by opravu přepsal.
 
+`--replace-minutes` přepíše vyjmenované minuty (čas UTC) barem IBKR historical
+bez ohledu na původ, i měřené `ibkr`: neúplný bar první minuty po reconnectu
+(#1876) nebo provizorní bar, který přebil bar z tasty (#1877). Minuta se
+přepíše, jen když se stažený bar liší objemem a jeho close sedí na uloženou
+minutu (`plan_minute_replacements`); ostatní minuty partice zůstanou.
+`--dry-run` vypíše každou minutu před a po.
+
 Port je z konfigurace (`GEXLENS_IBKR_PORT`, IB Gateway 4001), jde přebít
 `--port`. Bary nesou `source = ibkr_hist` jako backfill enginu (#1055).
 Throttle drží IBKR limit 60 historical requestů / 10 min s rezervou.
@@ -34,6 +43,7 @@ import asyncio
 import datetime as dt
 import logging
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engine" / "src"))
@@ -44,12 +54,14 @@ from gexlens_engine.adapters import IbHistoricalClient  # noqa: E402
 from gexlens_engine.compute.settle import trading_session_date  # noqa: E402
 from gexlens_engine.config import Settings, load_settings  # noqa: E402
 from gexlens_engine.ibkr.deepbars import (  # noqa: E402
+    MinuteReplacement,
     RejectedBlock,
     bucket_by_day,
     build_plan,
     contract_candidates,
     existing_days,
     plan_day_refill,
+    plan_minute_replacements,
     task_is_covered,
 )
 from gexlens_engine.ibkr.pacing import PacingGuard  # noqa: E402
@@ -64,6 +76,7 @@ from gexlens_engine.storage.parquet_store import (  # noqa: E402
     BUFFER_KEEP_DAYS,
     SnapshotWriter,
     StoredBar,
+    bar_partition_day,
     read_bars,
 )
 
@@ -427,6 +440,100 @@ async def run_days(
     return 1 if failed or rejected else 0
 
 
+def describe_bar(bar: StoredBar | Bar | None) -> str:
+    """OHLCV a původ jedné minuty pro výpis před a po (#1885)."""
+    if bar is None:
+        return "—"
+    return (
+        f"{bar.source or 'NULL'} O {bar.open:g} H {bar.high:g} L {bar.low:g} "
+        f"C {bar.close:g} V {bar.volume:g}"
+    )
+
+
+def minute_message(item: MinuteReplacement, contract_month: str, *, dry_run: bool) -> str:
+    """Výrok o vyjmenované minutě pro výpis (`MinuteVerdict`)."""
+    if item.verdict == "replace":
+        return "nezapisuje se (dry-run)" if dry_run else f"přepsáno barem {contract_month}"
+    if item.verdict == "same_volume":
+        return "objem se shoduje, minuta zůstává"
+    if item.verdict == "not_stored":
+        return "minuta v partici chybí — díru doplní --days"
+    if item.verdict == "not_fetched":
+        return f"IBKR minutu z {contract_month} nevrátil — nezapíše se"
+    deviation = item.deviation if item.deviation is not None else 0.0
+    return (
+        f"close se liší o {deviation * 100:.2f} % (jiný kontrakt než {contract_month}?) "
+        "— nezapíše se"
+    )
+
+
+async def run_minutes(
+    targets: Mapping[tuple[str, dt.date], Sequence[dt.datetime]],
+    settings: Settings,
+    port: int,
+    *,
+    dry_run: bool,
+) -> int:
+    """Přepis vyjmenovaných minut barem IBKR historical bez ohledu na původ (#1885).
+
+    `targets` = (symbol, UTC den partice) → minuty. Kontrakt dne se ověří na
+    měřených minutách partice jako u `--days` (`fetch_verified_day`).
+    """
+    writer = SnapshotWriter(settings)
+    ib = await connect(port, settings)
+    backfillers: dict[str, UnderlyingBackfiller] = {}
+    failed = 0
+    rejected = 0
+    replaced = 0
+    try:
+        for (symbol, day), minutes in targets.items():
+            measured = writer.measured_bar_closes(symbol, day)
+            fetched = await fetch_verified_day(ib, backfillers, settings, symbol, day, measured)
+            if fetched is None:
+                failed += 1
+                continue
+            contract_month, bars, _ = fetched
+            plan = plan_minute_replacements(day_bars(settings, symbol, day), bars, minutes)
+            to_write: list[Bar] = []
+            for item in plan:
+                ok = item.verdict in ("replace", "same_volume")
+                if not ok:
+                    rejected += 1
+                logger.log(
+                    logging.INFO if ok else logging.ERROR,
+                    "%s %s: %s → %s — %s",
+                    symbol,
+                    item.ts.strftime("%Y-%m-%dT%H:%M"),
+                    describe_bar(item.stored),
+                    describe_bar(item.incoming),
+                    minute_message(item, contract_month, dry_run=dry_run),
+                )
+                if item.verdict == "replace" and item.incoming is not None:
+                    to_write.append(item.incoming)
+            replaced += len(to_write)
+            if dry_run or not to_write:
+                continue
+            # overwrite: měřený bar `ibkr` má přednost před `ibkr_hist` (bar_source_rank)
+            writer.write_bars(symbol, day, to_write, overwrite=True)
+            # Pojistka: ostatní měřené minuty partice se zápisem nesmí změnit
+            written = {bar.ts for bar in to_write}
+            expected = {ts: close for ts, close in measured.items() if ts not in written}
+            if writer.measured_bar_closes(symbol, day) != expected:
+                raise RuntimeError(f"{symbol} {day}: zápis změnil jiné měřené minuty — zastavuji")
+    finally:
+        ib.disconnect()
+
+    logger.info(
+        "Hotovo%s: %s %d minut, %d minut odmítnuto, %d dnů bez zápisu (chyba)",
+        " (dry-run)" if dry_run else "",
+        "k přepisu" if dry_run else "přepsáno",
+        replaced,
+        rejected,
+        failed,
+    )
+    return 1 if failed or rejected else 0
+
+
 def parse_days(raw: str) -> list[dt.date]:
     try:
         return sorted({dt.date.fromisoformat(part.strip()) for part in raw.split(",") if part})
@@ -434,9 +541,28 @@ def parse_days(raw: str) -> list[dt.date]:
         raise argparse.ArgumentTypeError(f"den ve tvaru YYYY-MM-DD: {exc}") from exc
 
 
+def parse_minutes(raw: str) -> dict[tuple[str, dt.date], list[dt.datetime]]:
+    """`ES:2026-11-24T05:26,…` (UTC) → (symbol, UTC den partice) → minuty (#1885)."""
+    targets: dict[tuple[str, dt.date], set[dt.datetime]] = {}
+    for part in (item.strip() for item in raw.split(",")):
+        if not part:
+            continue
+        symbol, _, stamp = part.partition(":")
+        try:
+            ts = dt.datetime.strptime(stamp, "%Y-%m-%dT%H:%M").replace(tzinfo=dt.UTC)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                f"minuta ve tvaru SYM:YYYY-MM-DDTHH:MM (UTC), ne {part!r}"
+            ) from exc
+        if not symbol.strip():
+            raise argparse.ArgumentTypeError(f"chybí symbol v {part!r}")
+        targets.setdefault((symbol.strip().upper(), bar_partition_day(ts)), set()).add(ts)
+    return {key: sorted(minutes) for key, minutes in sorted(targets.items())}
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Backfill 1min barů z IBKR (#369, #1320)")
-    parser.add_argument("--symbols", default="ES,NQ")
+    parser = argparse.ArgumentParser(description="Backfill 1min barů z IBKR (#369, #1320, #1885)")
+    parser.add_argument("--symbols", default="ES,NQ", help="s --replace-minutes se nebere")
     parser.add_argument("--depth-days", type=int, default=730)
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument(
@@ -456,17 +582,36 @@ def main() -> int:
         help="s --days přepsat i minuty ibkr_hist, které nesedí na ověřený kontrakt dne",
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="s --days jen vypsat, co by se zapsalo"
+        "--replace-minutes",
+        type=parse_minutes,
+        default=None,
+        help="přepsat minuty SYM:YYYY-MM-DDTHH:MM[,…] (UTC) barem IBKR historical (#1885)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="s --days nebo --replace-minutes jen vypsat, co by se zapsalo",
     )
     args = parser.parse_args()
-    if args.days is None and (args.replace_tasty or args.replace_wrong_contract or args.dry_run):
-        parser.error("--replace-tasty, --replace-wrong-contract a --dry-run patří k --days")
+    if args.days is not None and args.replace_minutes is not None:
+        parser.error("--days a --replace-minutes nejdou spolu")
+    if args.days is None and (args.replace_tasty or args.replace_wrong_contract):
+        parser.error("--replace-tasty a --replace-wrong-contract patří k --days")
+    if args.days is None and args.replace_minutes is None and args.dry_run:
+        parser.error("--dry-run patří k --days nebo --replace-minutes")
     # Partice dneška a včerejška drží engine v paměti (BUFFER_KEEP_DAYS) a jeho
     # pozdní zápis (finalizace 23:59, gap-fill, díra setupu) by opravu přepsal
     newest = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=BUFFER_KEEP_DAYS + 1)
     if args.days is not None and (not args.days or args.days[-1] > newest):
         parser.error(
             f"--days: aspoň jeden den a nejpozději {newest} (UTC) — "
+            "dnešek a včerejšek drží v paměti engine"
+        )
+    if args.replace_minutes is not None and (
+        not args.replace_minutes or max(day for _, day in args.replace_minutes) > newest
+    ):
+        parser.error(
+            f"--replace-minutes: aspoň jedna minuta a nejpozději ze dne {newest} (UTC) — "
             "dnešek a včerejšek drží v paměti engine"
         )
 
@@ -476,6 +621,8 @@ def main() -> int:
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     settings = settings_for(args.data_dir)
     port = args.port if args.port is not None else settings.ibkr_port
+    if args.replace_minutes is not None:
+        return asyncio.run(run_minutes(args.replace_minutes, settings, port, dry_run=args.dry_run))
     if args.days is None:
         return asyncio.run(run_deep(symbols, args.depth_days, settings, port))
     return asyncio.run(
