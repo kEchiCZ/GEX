@@ -12,6 +12,8 @@ Skript srovná varianty kodeku nad stejnými tabulkami:
   medián z `--repeat`; Σ dne = horní mez zápisu jedné minuty na konci dne;
 - `read`: čas čtení stromu varianty přes `pq.read_table` po souborech,
   `pd.read_parquet` (cesta API `DataReader._read`) a `pyarrow.dataset` po adresářích;
+- `repo`: odhad místa v repozitáři restic — celé soubory stromu zkomprimované
+  zstd úrovně 3 (restic komprimuje sám, takže úspora parquetů je v zálohách menší);
 - `mixed`: strom, kde se soubory střídají mezi originálem (snappy) a variantou,
   přečtený beze změny kódu (`pyarrow.dataset`, `read_table` adresáře, pandas)
   a porovnaný s originálem.
@@ -49,9 +51,12 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
-PHASES = ("sizes", "write", "read", "mixed")
+PHASES = ("sizes", "repo", "write", "read", "mixed")
 DEFAULT_VARIANTS = ("snappy", "zstd1", "zstd3", "zstd9", "zstd1-bss", "zstd3-bss")
 DEFAULT_MIXED_VARIANT = "zstd3"
+#: Odhad repozitáře restic: formát v2 komprimuje bloky zstd (`--compression auto`,
+#: rychlost zhruba úrovně 3); deduplikace se neodhaduje
+REPO_ZSTD_LEVEL = 3
 #: Float sloupec s podílem různých hodnot nad prahem jde do BYTE_STREAM_SPLIT;
 #: pod ním (ceny, striky, OI) vyhrává slovník
 BSS_DISTINCT_RATIO = 0.5
@@ -307,6 +312,25 @@ def measure_read(
     return result
 
 
+def measure_repo(
+    data: Path, out: Path, variants: Iterable[str], files: list[Path]
+) -> dict[str, Any]:
+    """Velikost stromu po zstd celých souborů — horní odhad bloků v repozitáři restic."""
+    codec = pa.Codec("zstd", compression_level=REPO_ZSTD_LEVEL)
+    result: dict[str, Any] = {"zstd_level": REPO_ZSTD_LEVEL}
+    for name in ("original", *variants):
+        tree = data if name == "original" else out / name / "data"
+        if not (tree / files[0]).exists():
+            raise MeasureError(f"strom varianty {name} chybí — nejdřív fáze sizes")
+        raw = packed = 0
+        for rel in files:
+            content = (tree / rel).read_bytes()
+            raw += len(content)
+            packed += codec.compress(content).size
+        result[name] = {"bytes": raw, "repo_bytes": packed, "repo_ratio": round(packed / raw, 4)}
+    return result
+
+
 def build_mixed(data: Path, out: Path, variant: str, files: list[Path]) -> Path:
     """Strom, kde se soubory po řadě střídají: sudé originál, liché varianta."""
     source = out / variant / "data"
@@ -372,6 +396,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     if "sizes" in phases:
         report["sizes"] = measure_sizes(data, out, variants, files)
+    if "repo" in phases:
+        report["repo"] = measure_repo(data, out, variants, files)
     if "write" in phases:
         day = args.write_day or pick_write_day(files, data)
         report["write"] = measure_write(data, out, variants, files, day, args.repeat)

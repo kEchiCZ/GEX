@@ -135,6 +135,9 @@ def test_full_run_sizes_write_read_mixed(mod: Any, sample: Path, tmp_path: Path)
     assert report["write"]["day"] == "2026-11-20"  # větší den = nejhorší případ
     assert report["write"]["files"] == 3
     assert set(report["read"]) == {"original", "snappy", "zstd3", "zstd3-bss"}
+    repo = report["repo"]
+    assert repo["original"]["bytes"] == report["sizes"]["baseline"]["bytes"]
+    assert 0 < repo["zstd3"]["repo_bytes"] <= repo["zstd3"]["bytes"] + 1024
     assert report["mixed"]["ok"] is True
     assert report["mixed"]["dirs_with_two_codecs"] == report["mixed"]["dirs_checked"] == 3
     zstd_file = out / "zstd3" / "data" / "snapshots" / "ES" / "20261120" / "2026-11-20.parquet"
