@@ -3491,6 +3491,40 @@ async def test_neuplna_minuta_tasty_je_mezera_a_pozdni_ibkr_se_nedoruci(
     ]
 
 
+async def test_bar_z_tasty_prepise_v_partici_provizorni_bar_ibkr(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1877 (24. 11. 05:26 UTC, Error 1100): cyklus M zapsal provizorní bar IBKR
+    rozdělané minuty, pak IBKR spadl a bar M dostali konzumenti z tasty. Partice nese
+    tentýž bar z tasty, ne neúplný provizorní (zdroj `ibkr` by podle původu vyhrál);
+    pozdní bar IBKR v cyklu M+2 se nedoručí ani nezapíše."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    closes = {TS: 7650.0}
+    pipeline.tasty_bar = _tasty_bar_source(closes)
+    seen = _recording_consumers(pipeline)
+    partial = Bar(ts=TS, open=7600.0, high=7600.5, low=7599.5, close=7600.0, volume=11.0)
+    pipeline.forming_bar = lambda: partial
+
+    await pipeline.run_minute(TS)  # provizorní bar minuty TS (ADR-0005)
+    pipeline.forming_bar = lambda: None  # IBKR mlčí
+    await pipeline.run_minute(TS + dt.timedelta(minutes=1))  # bar TS z tasty
+    late = Bar(ts=TS, open=7600.0, high=7600.5, low=7599.5, close=7600.25, volume=12.0)
+    pipeline.minute_bars.append(late)
+    await pipeline.run_minute(TS + dt.timedelta(minutes=2))
+
+    tasty = _tasty_bar_source(closes)(TS)
+    assert tasty is not None
+    assert seen["setups"] == [[], [tasty.bar], []]
+    assert seen["paper"] == seen["setups"]
+    stored = read_bars(
+        settings.derived_dir, "ES", TS - dt.timedelta(minutes=2), TS + dt.timedelta(minutes=2)
+    )
+    assert [(bar.ts, bar.close, bar.volume, bar.source) for bar in stored] == [
+        (TS, 7650.0, 100.0, BAR_SOURCE_TASTY_TRADES)
+    ]
+
+
 async def test_straz_kontraktu_tasty_bar_nepouzije(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:

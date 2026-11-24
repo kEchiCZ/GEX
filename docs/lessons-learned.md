@@ -403,6 +403,13 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-11-24 — partice nesla jinou minutu než konzumenti: provizorní bar přebil bar z tasty (#1877).**
+  Cyklus M zapsal provizorní bar rozdělané minuty (ADR-0005) se zdrojem `ibkr`. V M+1 IBKR mlčel
+  (Error 1100) a bar M dostali konzumenti z tasty, jenže upsert podle `bar_source_rank` nechal
+  vyšší původ. Partice tak držela ES objem 11 místo celé minuty. Testy #1772 pokryly výpadek bez
+  provizorního baru, ne výpadek uprostřed minuty.
+  → Pravidlo přednosti původu platí pro backfill. Bar, který cyklus rozhodl pro konzumenty, se zapíše
+  bez ohledu na to, co v partici leží. Test výpadku má začít uprostřed minuty, s provizorním zápisem.
 - **2026-11-18 — neměřený objem IBKR jako 0,0 dal po restartu duchový přírůstek (#1835).** Adaptér
   převáděl `ticker.volume` NaN na 0,0. Čerstvý ticker ib_async nese NaN, dokud nedorazí tick objemu,
   a to se stává jen při první subskripci kontraktu po startu procesu. `SessionVolumes` pak vzal 0 jako
