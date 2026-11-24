@@ -156,3 +156,21 @@ def test_output_inside_input_is_refused(mod: Any, sample: Path) -> None:
 def test_read_without_trees_fails_explicitly(mod: Any, sample: Path, tmp_path: Path) -> None:
     code = mod.main(["--data", str(sample), "--out", str(tmp_path / "o"), "--phases", "read"])
     assert code == 2
+
+
+def test_mixed_check_reports_changed_file(mod: Any, sample: Path, tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    assert (
+        mod.main(
+            ["--data", str(sample), "--out", str(out), "--variants", "zstd1", "--phases", "sizes"]
+        )
+        == 0
+    )
+    files = mod.list_files(sample)
+    mixed = mod.build_mixed(sample, out, "zstd1", files)
+    assert mod.check_mixed(sample, mixed, files)["ok"] is True
+    broken = mixed / "snapshots" / "ES" / "20261120" / "2026-11-20.parquet"
+    pq.write_table(snapshot_table(300, 0.5), broken, compression="zstd")
+    result = mod.check_mixed(sample, mixed, files)
+    assert result["ok"] is False
+    assert any("2026-11-20.parquet (read_table)" in f for f in result["failures"])

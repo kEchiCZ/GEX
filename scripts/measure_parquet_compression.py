@@ -240,53 +240,60 @@ def _timed(repeat: int, fn: Callable[..., object], *args: Any) -> float:
 def measure_write(
     data: Path, out: Path, variants: Iterable[str], files: list[Path], day: str, repeat: int
 ) -> dict[str, Any]:
-    """Σ a maximum času zápisu partic jednoho dne (engine je přepisuje každou minutu)."""
+    """Σ a maximum času zápisu partic jednoho dne (engine je přepisuje každou minutu).
+
+    V paměti je vždy jen jedna tabulka: soubor po souboru, uvnitř všechny varianty.
+    """
     day_files = [rel for rel in files if rel.stem == day]
     if not day_files:
         raise MeasureError(f"vzorek nemá partice dne {day}")
-    tables = [(rel, pq.read_table(data / rel)) for rel in day_files]
+    names = list(variants)
     bench = out / "_writebench"
+    per_kind: dict[str, dict[str, float]] = {name: defaultdict(float) for name in names}
+    per_file: dict[str, list[tuple[float, str, int]]] = {name: [] for name in names}
+    for rel in day_files:
+        table = pq.read_table(data / rel)
+        for name in names:
+            kwargs, _ = write_kwargs(name, table)
+            target = bench / name / rel
+            seconds = _timed(repeat, write_partition, table, target, kwargs)
+            per_kind[name][partition_kind(rel)] += seconds
+            per_file[name].append((seconds, rel.as_posix(), target.stat().st_size))
+        del table
     result: dict[str, Any] = {
         "day": day,
         "files": len(day_files),
         "baseline_bytes": sum((data / rel).stat().st_size for rel in day_files),
         "variants": {},
     }
-    for name in variants:
-        per_kind: dict[str, float] = defaultdict(float)
-        per_file: list[tuple[float, str, int]] = []
-        written = 0
-        for rel, table in tables:
-            kwargs, _ = write_kwargs(name, table)
-            target = bench / name / rel
-            seconds = _timed(repeat, write_partition, table, target, kwargs)
-            per_kind[partition_kind(rel)] += seconds
-            size = target.stat().st_size
-            written += size
-            per_file.append((seconds, rel.as_posix(), size))
-        per_file.sort(reverse=True)
+    for name in names:
+        rows = sorted(per_file[name], reverse=True)
         result["variants"][name] = {
-            "sum_ms": round(1000 * sum(s for s, _, _ in per_file), 1),
-            "max_ms": round(1000 * per_file[0][0], 1),
-            "max_file": per_file[0][1],
-            "bytes": written,
-            "sum_ms_by_kind": {k: round(1000 * v, 1) for k, v in sorted(per_kind.items())},
-            "top5_ms": [[round(1000 * s, 1), path, size] for s, path, size in per_file[:5]],
+            "sum_ms": round(1000 * sum(s for s, _, _ in rows), 1),
+            "max_ms": round(1000 * rows[0][0], 1),
+            "max_file": rows[0][1],
+            "bytes": sum(size for _, _, size in rows),
+            "sum_ms_by_kind": {k: round(1000 * v, 1) for k, v in sorted(per_kind[name].items())},
+            "top5_ms": [[round(1000 * s, 1), path, size] for s, path, size in rows[:5]],
         }
     shutil.rmtree(bench, ignore_errors=True)
     return result
 
 
-def _read_tables(paths: list[Path]) -> list[pa.Table]:
-    return [pq.read_table(p) for p in paths]
+# Čtečky drží v paměti vždy jen jeden soubor / dávku; počet řádků brání tomu,
+# aby čtení bylo zbytečné, a hlídá, že všechny cesty přečetly totéž.
+def _read_tables(paths: list[Path]) -> int:
+    return sum(pq.read_table(p).num_rows for p in paths)
 
 
-def _read_frames(paths: list[Path]) -> list[pd.DataFrame]:
-    return [pd.read_parquet(p) for p in paths]
+def _read_frames(paths: list[Path]) -> int:
+    return sum(len(pd.read_parquet(p)) for p in paths)
 
 
-def _read_datasets(dirs: list[Path]) -> list[pa.Table]:
-    return [ds.dataset(d, format="parquet").to_table() for d in dirs]
+def _read_datasets(dirs: list[Path]) -> int:
+    return sum(
+        batch.num_rows for d in dirs for batch in ds.dataset(d, format="parquet").to_batches()
+    )
 
 
 def leaf_dirs(tree: Path, files: list[Path]) -> list[Path]:
@@ -304,7 +311,11 @@ def measure_read(
             raise MeasureError(f"strom varianty {name} chybí — nejdřív fáze sizes")
         paths = [tree / rel for rel in files]
         dirs = leaf_dirs(tree, files)
+        rows = {_read_tables(paths), _read_frames(paths), _read_datasets(dirs)}
+        if len(rows) != 1:
+            raise MeasureError(f"čtečky stromu {name} přečetly různý počet řádků: {rows}")
         result[name] = {
+            "rows": rows.pop(),
             "read_table_s": round(_timed(repeat, _read_tables, paths), 2),
             "pandas_s": round(_timed(repeat, _read_frames, paths), 2),
             "dataset_s": round(_timed(repeat, _read_datasets, dirs), 2),
@@ -343,28 +354,38 @@ def build_mixed(data: Path, out: Path, variant: str, files: list[Path]) -> Path:
 
 
 def check_mixed(data: Path, mixed: Path, files: list[Path]) -> dict[str, Any]:
-    """Smíšené kodeky v jednom adresáři čtou dnešní čtečky beze změny kódu."""
+    """Smíšené kodeky v jednom adresáři čtou dnešní čtečky beze změny kódu.
+
+    Po souborech `pq.read_table` a `pd.read_parquet` (cesta backtestu a API), fragmenty
+    jednoho `pyarrow.dataset` nad celým adresářem a jeho průchod po dávkách; v paměti
+    je vždy jen jeden soubor.
+    """
     checked = 0
     mixed_dirs = 0
     failures: list[str] = []
-    readers: dict[str, Callable[[Path], pa.Table]] = {
-        "dataset": lambda d: ds.dataset(d, format="parquet").to_table(),
-        "read_table": lambda d: pq.read_table(d),
-    }
     for rel_dir in sorted({rel.parent for rel in files}):
         names = sorted(rel.name for rel in files if rel.parent == rel_dir)
-        codecs = {file_codec(mixed / rel_dir / n) for n in names}
-        if len(codecs) > 1:
+        if len({file_codec(mixed / rel_dir / n) for n in names}) > 1:
             mixed_dirs += 1
-        expected = pa.concat_tables([pq.read_table(data / rel_dir / n) for n in names])
-        for label, reader in readers.items():
-            got = reader(mixed / rel_dir)
-            if not tables_identical(expected.combine_chunks(), got.combine_chunks()):
-                failures.append(f"{rel_dir.as_posix()} ({label})")
-        frames = [pd.read_parquet(mixed / rel_dir / n) for n in names]
-        originals = [pd.read_parquet(data / rel_dir / n) for n in names]
-        if not all(a.equals(b) for a, b in zip(frames, originals, strict=True)):
-            failures.append(f"{rel_dir.as_posix()} (pandas)")
+        dataset = ds.dataset(mixed / rel_dir, format="parquet")
+        fragments = {Path(f.path).name: f for f in dataset.get_fragments()}
+        if sorted(fragments) != names:
+            failures.append(f"{rel_dir.as_posix()} (dataset: soubory)")
+            continue
+        expected_rows = 0
+        for name in names:
+            expected = pq.read_table(data / rel_dir / name)
+            expected_rows += expected.num_rows
+            if not tables_identical(expected, pq.read_table(mixed / rel_dir / name)):
+                failures.append(f"{rel_dir.as_posix()}/{name} (read_table)")
+            if not tables_identical(expected, fragments[name].to_table()):
+                failures.append(f"{rel_dir.as_posix()}/{name} (dataset)")
+            original = pd.read_parquet(data / rel_dir / name)
+            if not original.equals(pd.read_parquet(mixed / rel_dir / name)):
+                failures.append(f"{rel_dir.as_posix()}/{name} (pandas)")
+        scanned = sum(batch.num_rows for batch in dataset.to_batches())
+        if scanned != expected_rows:
+            failures.append(f"{rel_dir.as_posix()} (dataset: {scanned} ≠ {expected_rows} řádků)")
         checked += 1
     return {
         "dirs_checked": checked,
