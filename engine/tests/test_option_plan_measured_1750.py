@@ -199,8 +199,10 @@ measured = pytest.mark.parametrize("path", DATASETS, ids=[p.stem for p in DATASE
 
 
 def test_datasets_present() -> None:
-    """Naměřený den 16. 11. (F6 #1750) je v sadě; další přidá F6b #1859 skriptem."""
-    assert "option_plan_measured_20261116" in [p.stem for p in DATASETS]
+    """Naměřené dny 16. 11. (F6 #1750) a 24. 11. s `live_alerts` (F6b #1859) jsou v sadě."""
+    stems = [p.stem for p in DATASETS]
+    assert "option_plan_measured_20261116" in stems
+    assert "option_plan_measured_20261124" in stems
 
 
 @measured

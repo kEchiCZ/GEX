@@ -403,6 +403,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-11-24 — čerstvá kotace bez ceny: stáří neříká, že cena platí (#1869, #1871).** Odběr plánu
+  QQQ i snímek řetězu cenu zahodí, když neplatí `0 ≤ bid ≤ ask` a `ask > 0`. K řádku ale uloží jen
+  čerstvé stáří, důvod ne. 20. 11. tak měly puty plánu v RTH 21 a 8 minut s NULL bid/ask při stáří
+  ≤ 1,5 s. Šlo o překříženou kotaci, nebo o prázdnou stranu, a zpětně to nejde poznat. Na takovou
+  minutu padl vstup A a zpráva o vstupu šla bez R:R. Snímek 9:31 ET odmítl tři řádky 1DTE a přesto
+  se označil jako „úplný“. Mezi odmítnutými byla záložní varianta, a tak přecenění nezapsalo nic.
+  24. 11. měla stejná sestava 0 takových minut a vstup s kotací prošel. Chyba je řídká a závisí na trhu.
+  → Čerstvé stáří ještě neznamená platnou hodnotu. Kde kód hodnotu zahodí, chybí bez uloženého
+  důvodu i diagnóza (varianty opravy jsou v #1871). „Úplný“ musí znamenat totéž pro snímek i pro
+  jeho konzumenta. Jedna úspěšná seance řídkou chybu nevyvrací, proto se ověření naživo opakuje
+  přes víc seancí.
 - **2026-11-24 — partice nesla jinou minutu než konzumenti: provizorní bar přebil bar z tasty (#1877).**
   Cyklus M zapsal provizorní bar rozdělané minuty (ADR-0005) se zdrojem `ibkr`. V M+1 IBKR mlčel
   (Error 1100) a bar M dostali konzumenti z tasty, jenže upsert podle `bar_source_rank` nechal

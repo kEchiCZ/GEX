@@ -734,6 +734,11 @@ výslovnou chybou. Den, kdy běžel F3b, test porovná přehraný živý stav s 
 `live_alerts`. Den 16. 11. (plán #2, short, put 659 / 658): vstup A 15:50 SEČ za 670,56 pod PDL 671,69,
 TP1 16:00, TP2 16:01. Obě varianty vyřadilo P3 (ask 2,55 a 2,34, R:R 0,61 a 0,58), hypoteticky
 +44 $ na TP1 a +92 $ na TP2 na kontrakt hlavní varianty. Okno má 31 barů a 62 kotací (85 KB).
+Den 24. 11. (plán #5, short, put 623 / 622, F6b #1859) je první naměřený den s odeslanými
+`live_alerts` (F3b) a s kotací při vstupu. Vstup A 16:10 SEČ za 639,50 od call wall 640,94, TP1 16:20, TP2 16:29. Test
+porovná přehraný živý stav s odeslanými přechody vstup, TP1 a TP2. Obě varianty vyřadilo P3
+(ask 2,38 a 2,14, R:R 0,32 a 0,48), hypoteticky +41 $ na TP1 a +108 $ na TP2 na kontrakt
+hlavní varianty. Okno má 59 barů a 118 kotací (92 KB).
 
 **Vznik plánu v 9:15 ET** (`option_plan_job.OptionPlanMaker`, F2b #1742, ADR-0062 K2 A a K4 C
 body 5 a 8) spojí dva vstupy, které přicházejí nezávisle:
