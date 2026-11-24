@@ -20,13 +20,16 @@ Skript srovná varianty kodeku nad stejnými tabulkami:
 
 Vstupní `--data` se jen čte; výstup musí ležet mimo něj. Produkční `data/` se
 nikdy nepředává — jen kopie (vzorek v `D:\\Downloads`, na serveru domovský adresář).
-Varianta `zstd3-bss` / `zstd1-bss`: BYTE_STREAM_SPLIT pro float sloupce s vysokou
-kardinalitou (greeks), ostatní sloupce slovník; výběr sloupců jde do reportu
-(implementace by ho měla jako statický seznam podle schématu, ne výpočtem v cyklu).
+Přípony variant zstd (BYTE_STREAM_SPLIT, BSS; vybrané sloupce bez slovníku):
+- `-bss`: BSS jen pro float sloupce s vysokou kardinalitou (greeks), výběr se
+  počítá z dat souboru (`count_distinct`) a jde do reportu;
+- `-bssall`: BSS pro všechny float sloupce — deterministické pravidlo podle
+  schématu, bez výpočtu nad daty.
+Čas zápisu zahrnuje i výběr sloupců, tedy i cenu heuristiky `-bss`.
 
 Příklad:
     python -I scripts/measure_parquet_compression.py \\
-        --data D:/Downloads/gex-komprese-1855/data --out D:/Downloads/gex-komprese-1855 \\
+        --data D:/Downloads/gex-komprese-1855/data --out D:/Downloads/gex-komprese-1855/out \\
         --report D:/Downloads/gex-komprese-1855/report.json
 """
 
@@ -52,7 +55,18 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 PHASES = ("sizes", "repo", "write", "read", "mixed")
-DEFAULT_VARIANTS = ("snappy", "zstd1", "zstd3", "zstd9", "zstd1-bss", "zstd3-bss")
+DEFAULT_VARIANTS = (
+    "snappy",
+    "zstd1",
+    "zstd3",
+    "zstd9",
+    "zstd1-bss",
+    "zstd3-bss",
+    "zstd1-bssall",
+    "zstd3-bssall",
+)
+#: Přípona varianty → režim výběru sloupců pro BYTE_STREAM_SPLIT
+BSS_MODES = ("", "bss", "bssall")
 DEFAULT_MIXED_VARIANT = "zstd3"
 #: Odhad repozitáře restic: formát v2 komprimuje bloky zstd (`--compression auto`,
 #: rychlost zhruba úrovně 3); deduplikace se neodhaduje
@@ -69,18 +83,23 @@ class MeasureError(RuntimeError):
     """Chybný vstup měření (cesta, varianta, prázdný vzorek)."""
 
 
-def variant_options(name: str) -> tuple[dict[str, Any], bool]:
-    """Parametry `pq.write_table` varianty a příznak BYTE_STREAM_SPLIT."""
+def variant_options(name: str) -> tuple[dict[str, Any], str]:
+    """Parametry `pq.write_table` varianty a režim BYTE_STREAM_SPLIT (`BSS_MODES`)."""
     base, _, suffix = name.partition("-")
-    if suffix not in ("", "bss"):
+    if suffix not in BSS_MODES:
         raise MeasureError(f"neznámá varianta {name!r}")
     if base == "snappy":
         if suffix:
             raise MeasureError("BYTE_STREAM_SPLIT se měří jen se zstd")
-        return {}, False  # výchozí pyarrow = dnešní stav enginu
+        return {}, ""  # výchozí pyarrow = dnešní stav enginu
     if base.startswith("zstd") and base[4:].isdigit():
-        return {"compression": "zstd", "compression_level": int(base[4:])}, suffix == "bss"
+        return {"compression": "zstd", "compression_level": int(base[4:])}, suffix
     raise MeasureError(f"neznámá varianta {name!r}")
+
+
+def float_columns(table: pa.Table) -> list[str]:
+    """Všechny float sloupce — deterministický výběr pro `-bssall` podle schématu."""
+    return [field.name for field in table.schema if pa.types.is_floating(field.type)]
 
 
 def bss_columns(table: pa.Table) -> list[str]:
@@ -98,11 +117,11 @@ def bss_columns(table: pa.Table) -> list[str]:
 
 
 def write_kwargs(name: str, table: pa.Table) -> tuple[dict[str, Any], list[str]]:
-    """Úplné parametry zápisu varianty pro konkrétní tabulku (výběr BSS mimo stopky)."""
-    options, use_bss = variant_options(name)
-    if not use_bss:
+    """Úplné parametry zápisu varianty pro konkrétní tabulku (včetně výběru sloupců BSS)."""
+    options, mode = variant_options(name)
+    if not mode:
         return options, []
-    split = bss_columns(table)
+    split = bss_columns(table) if mode == "bss" else float_columns(table)
     if not split:
         return options, []
     # Slovník má v pyarrow přednost před BYTE_STREAM_SPLIT → u vybraných sloupců vypnout
@@ -228,6 +247,12 @@ def pick_write_day(files: list[Path], data: Path) -> str:
     return max(per_day.items(), key=lambda item: item[1])[0]
 
 
+def _write_variant(name: str, table: pa.Table, target: Path) -> None:
+    """Jeden zápis partice jako v cyklu enginu: výběr parametrů varianty + zápis."""
+    kwargs, _ = write_kwargs(name, table)
+    write_partition(table, target, kwargs)
+
+
 def _timed(repeat: int, fn: Callable[..., object], *args: Any) -> float:
     samples = []
     for _ in range(repeat):
@@ -254,9 +279,8 @@ def measure_write(
     for rel in day_files:
         table = pq.read_table(data / rel)
         for name in names:
-            kwargs, _ = write_kwargs(name, table)
             target = bench / name / rel
-            seconds = _timed(repeat, write_partition, table, target, kwargs)
+            seconds = _timed(repeat, _write_variant, name, table, target)
             per_kind[name][partition_kind(rel)] += seconds
             per_file[name].append((seconds, rel.as_posix(), target.stat().st_size))
         del table

@@ -92,7 +92,17 @@ def test_bss_columns_pick_high_cardinality_floats(mod: Any) -> None:
     )
 
 
-@pytest.mark.parametrize("name", ["lz4", "snappy-bss", "zstd", "zstd3-x"])
+def test_bssall_takes_every_float_column_by_schema(mod: Any) -> None:
+    # strike má nízkou kardinalitu (heuristika ho nevybere), pravidlo podle schématu ano;
+    # malá tabulka nevadí — výběr nezávisí na datech
+    for rows in (200, 10):
+        kwargs, split = mod.write_kwargs("zstd1-bssall", snapshot_table(rows, 0.0))
+        assert split == ["strike", "delta"]
+        assert kwargs["use_byte_stream_split"] == ["strike", "delta"]
+        assert kwargs["use_dictionary"] == ["ts_min", "right"]
+
+
+@pytest.mark.parametrize("name", ["lz4", "snappy-bss", "snappy-bssall", "zstd", "zstd3-x"])
 def test_unknown_variant_fails_fast(mod: Any, name: str) -> None:
     with pytest.raises(mod.MeasureError):
         mod.variant_options(name)
@@ -119,7 +129,7 @@ def test_full_run_sizes_write_read_mixed(mod: Any, sample: Path, tmp_path: Path)
             "--out",
             str(out),
             "--variants",
-            "snappy,zstd3,zstd3-bss",
+            "snappy,zstd3,zstd3-bss,zstd1-bssall",
             "--repeat",
             "1",
             "--report",
@@ -134,7 +144,11 @@ def test_full_run_sizes_write_read_mixed(mod: Any, sample: Path, tmp_path: Path)
     assert set(sizes["snappy"]["by_kind"]) == {"derived/bars", "derived/levels", "snapshots"}
     assert report["write"]["day"] == "2026-11-20"  # větší den = nejhorší případ
     assert report["write"]["files"] == 3
-    assert set(report["read"]) == {"original", "snappy", "zstd3", "zstd3-bss"}
+    assert sizes["zstd1-bssall"]["bss_columns"] == {
+        "derived/bars": ["close"],
+        "snapshots": ["delta", "strike"],
+    }
+    assert set(report["read"]) == {"original", "snappy", "zstd3", "zstd3-bss", "zstd1-bssall"}
     repo = report["repo"]
     assert repo["original"]["bytes"] == report["sizes"]["baseline"]["bytes"]
     assert 0 < repo["zstd3"]["repo_bytes"] <= repo["zstd3"]["bytes"] + 1024
