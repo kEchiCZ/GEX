@@ -204,6 +204,13 @@ Noční restic snapshot dělá **jen aktivní stroj**, služba `ops` je stejná 
 - Se zapnutým IBKR bez subskripce bude detektor shluku 354 (#417) hlásit každou seanci a řetěz
   poběží přes `chain_fallback`. Kdyby to F6 krok A potvrdilo, nechá se do zaplacení IBKR na
   serveru vypnuté přepínačem níže.
+  **Dodatek 24. 11. 2026 (F6 krok A, #1803):** krok A to potvrdil (354 u každého požadavku,
+  OI z IBKR 0 %; ADMIN-MANUAL kap. 14), vlastník přesto zvolil **IBKR na serveru do zaplacení
+  zapnuté** (Rozhodnuto 24. 11. v #1094, varianta A): discovery řetězu z IBKR funguje i bez
+  subskripce a je potřeba pro roll (#1809), zprávy brokera chodí a po zaplacení data poběží
+  hned. Cena: ~320–640 chyb 354 za minutu (Gateway ~25 % jádra, ve špičce sweepu až ~92 %)
+  a upozornění #417 ve zvonku serveru nejvýš 1× za 15 min. Varianta „jen discovery a zprávy
+  bez kotací“ je nový kód (přepínač níže, #1847) — issue, pokud subskripce nebude do rollu.
 - **Dočasná odchylka od R5** (IBKR primární zdroj, ADR-0025) **a od úplnosti dat R1** (bez
   kumulativního denního objemu a zpráv IBKR) **jen na serveru** v roli aktivní. Konec:
   vlastník zaplatí subskripci druhého username a #1856 přeměří bránu s IBKR. Do té doby

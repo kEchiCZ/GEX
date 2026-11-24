@@ -14,7 +14,11 @@
 #     nezapíná vůbec (kap. 14 ADMIN-MANUAL: VNC nikdy veřejně; při potřebě
 #     dočasně přidat VNC_SERVER_PASSWORD a SSH tunel).
 #   - Heslo jde Docker secretem ze souboru secrets/ibkr_password (mimo git,
-#     chmod 600, jeden řádek bez koncového newline). Username je v .env jako
+#     jeden řádek; koncový newline image odřízne). Práva 644 v adresáři
+#     secrets/ s právy 700 (#1803): compose mimo Swarm secret jen připojí
+#     (uid/gid/mode ignoruje) a Gateway v kontejneru běží jako uid 1000, ne
+#     jako gex — s 600 skončí čtení na Permission denied. Na hostiteli soubor
+#     chrání adresář 700 (projde jen gex a root). Username je v .env jako
 #     IBKR_DATA_USERID — DRUHÝ username účtu (#737), nikdy hlavní.
 #     Do zaplacení jeho subskripce IBKR market data nedodá (354; zpožděná
 #     engine odmítá) a data bere tasty fallbackem (ADR-0063 bod 8, #1856).
@@ -22,16 +26,34 @@
 #     řeší nedělní TWS_COLD_RESTART 22:30 + potvrzení IB Key push na telefonu.
 #     ADR-0063 bod 11: nejvýš 3 pushe (první + 2 pokusy po ~10 min), pak
 #     Gateway stojí a server jede přes tasty. Limit pokusů implementuje #1850;
-#     do té doby TWOFA_TIMEOUT_ACTION=restart opakuje login, dokud push nepřijde.
+#     do té doby RELOGIN_AFTER_TWOFA_TIMEOUT=yes opakuje login po 180 s bez
+#     limitu, dokud vlastník push nepotvrdí (v neděli 22:30 klidně celou noc;
+#     TWOFA_TIMEOUT_ACTION=restart sám nový push nepošle).
 #
 # PAST (#446/#992): ibkr_host/ibkr_port uložené v DB ze Settings UI přebíjejí
 # hodnoty odsud. Po obnově dumpu z PC tam zůstává domácí host/port — po prvním
 # startu nastavit v Settings host `ib-gateway`, port `4003`. Trvale to řeší
 # nastavení stroje mimo synchronizaci (ADR-0063 bod 3, #1847, #1848).
 services:
+  # Svazek nastavení Gateway vzniká prázdný a patří rootovi (cesta
+  # /home/ibgateway/tws_settings v image není, Docker ji založí jako root).
+  # Gateway běží jako uid 1000 a bez práva zápisu padá na jts.ini: Permission
+  # denied ještě před loginem (#1803). Jednorázová služba svazek předá uživateli
+  # image; chown je idempotentní, při každém `up` doběhne za zlomek sekundy.
+  ib-gateway-init:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    user: root
+    entrypoint: ["chown", "ibgateway:ibgateway", "/home/ibgateway/tws_settings"]
+    restart: "no"
+    volumes:
+      - ibgw_settings:/home/ibgateway/tws_settings
+
   ib-gateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
     restart: unless-stopped
+    depends_on:
+      ib-gateway-init:
+        condition: service_completed_successfully
     logging:
       driver: json-file
       options:
@@ -44,6 +66,15 @@ services:
       # GEXLens jen čte — obchodní API vypnuté i kdyby username práva měl
       READ_ONLY_API: "yes"
       TWOFA_TIMEOUT_ACTION: restart
+      # Bez toho IBC po vypršení 2FA (180 s) jen čeká a nový push nepošle
+      # (#1803: login visel po nedoručeném pushi); s yes zopakuje login
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      # Druhý username patří jen serveru: když IBC při loginu narazí na jinou
+      # relaci téhož username (omylem web nebo mobil), zvolí „primary“ a tu
+      # druhou ukončí; prázdná hodnota v config.ini = ruční klik. Naživo zatím
+      # neověřeno — 24. 11. naopak cizí login odhlásil běžící Gateway
+      # („Re-login is required“ → IBC znovu přihlásil s novým pushem)
+      EXISTING_SESSION_DETECTED_ACTION: primary
       # Časy platí v TZ kontejneru (níže Europe/Prague): denní restart v pauze
       # Globexu (23:00–24:00 CET), plný login v neděli před otevřením seance
       AUTO_RESTART_TIME: "11:05 PM"
