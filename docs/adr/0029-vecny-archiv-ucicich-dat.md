@@ -57,8 +57,9 @@ R4/ADR-0001 (OI archiv).
 
 ## Dodatek 2026-11-24 (#1855): přeměřený růst a komprese partic
 
-**Stav dodatku:** návrh, rozhoduje vlastník v #1855 (`needs-decision`). Do
-rozhodnutí platí původní znění: engine zapisuje výchozím pyarrow (snappy).
+**Stav dodatku:** přijato 2026-11-25, vlastník zvolil v chatu variantu A
+(„Volím variantu A: zstd 1 + BSS (kódování BYTE_STREAM_SPLIT)“). Do nasazení
+#1338 C1 engine zapisuje výchozím pyarrow (snappy).
 
 Souvisí: #1338 (rozbor růstu, varianty C1 a C5 a archiv E), ADR-0058
 (rozlišení extended expirací).
@@ -121,7 +122,7 @@ je o 58 % pomalejší než dnes. Pravidlo „všechny float sloupce“ je zadarm
 deterministické a zároveň menší. Horší je jen u `trades` (`price` má málo různých hodnot),
 které tvoří 0,4 % objemu.
 
-**Navrhované rozhodnutí** (doporučená varianta A v #1855). Nahrazuje
+**Rozhodnutí** (varianta A v #1855, přijato 2026-11-25). Nahrazuje
 doporučení C1 z #1338 (zstd 3 + BSS a slovník pro `strike`):
 - úroveň 1 místo 3, protože se zstd 3 trvá zápis na arm64 o 13 % déle a úspora
   je jen o 1,4 procentního bodu větší;

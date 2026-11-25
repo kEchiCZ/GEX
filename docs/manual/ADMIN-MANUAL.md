@@ -1174,7 +1174,7 @@ plán při vzniku a sestavený v 9:31, popisek bez parametrů účtu).
 
 ### Parquet (`GEXLENS_DATA_DIR`; retence — ADR-0029)
 
-Od ADR-0029 (v1.2) se **`snapshots/` a `derived/` nemažou nikdy** (`GEXLENS_KEEP_LEARNING_DATA_FOREVER=true`, default) — jsou to nenahraditelná učicí data samoučící smyčky (#794); IBKR historii řetězce zpětně nedá. Noční purge (`RETENTION_DAYS`, ADR-0022: 90 dní) tak reálně maže jen `ticks/`. Objem keep-forever režimu: snapshots ES+NQ měřené 25.–30. 10. 2026 231 MB za seanci (≈ 58 GB/rok, z 92 % extended expirace), po ADR-0058 odhad 186 MB (≈ 47 GB/rok), přeměřeno 1.–23. 11. 2026 snapshots 194 MB a všechny parquety ~200 MB za seanci (≈ 4,2 GB/měs., ≈ 50 GB/rok, #1855); komprese zstd + BYTE_STREAM_SPLIT čeká na rozhodnutí (dodatek ADR-0029, #1855), archiv mimo D: v #1338; `GEXLENS_DISK_LIMIT_GB` (default 20) je alert na revizi, volné místo hlídá #773.
+Od ADR-0029 (v1.2) se **`snapshots/` a `derived/` nemažou nikdy** (`GEXLENS_KEEP_LEARNING_DATA_FOREVER=true`, default) — jsou to nenahraditelná učicí data samoučící smyčky (#794); IBKR historii řetězce zpětně nedá. Noční purge (`RETENTION_DAYS`, ADR-0022: 90 dní) tak reálně maže jen `ticks/`. Objem keep-forever režimu: snapshots ES+NQ měřené 25.–30. 10. 2026 231 MB za seanci (≈ 58 GB/rok, z 92 % extended expirace), po ADR-0058 odhad 186 MB (≈ 47 GB/rok), přeměřeno 1.–23. 11. 2026 snapshots 194 MB a všechny parquety ~200 MB za seanci (≈ 4,2 GB/měs., ≈ 50 GB/rok, #1855); komprese zstd 1 + BYTE_STREAM_SPLIT přijata 25. 11. 2026 (dodatek ADR-0029, #1855), zápis a rekomprese starých partic v #1338 (C1, C5), do nasazení engine zapisuje snappy, archiv mimo D: v #1338; `GEXLENS_DISK_LIMIT_GB` (default 20) je alert na revizi, volné místo hlídá #773.
 
 | Partice | Schéma |
 |---|---|
