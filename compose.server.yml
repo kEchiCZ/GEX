@@ -88,6 +88,10 @@ services:
     secrets:
       - ibkr_password
 
+  api:
+    # Jméno stroje do manifestu úplné zálohy (#1799); COMPUTERNAME z PC tu není
+    hostname: gex-server
+
   engine:
     environment:
       GEXLENS_IBKR_HOST: ib-gateway

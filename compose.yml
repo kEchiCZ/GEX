@@ -56,6 +56,9 @@ services:
       context: .
       dockerfile: docker/python.Dockerfile
     command: uvicorn gexlens_api.main:app --host 0.0.0.0 --port 8000
+    # Jméno stroje do manifestu úplné zálohy (#1799): na PC z Windows, server
+    # ho přepisuje v compose.server.yml. Služby se dál hledají jménem `api`.
+    hostname: ${COMPUTERNAME:-gexlens}
     logging: *default-logging
     env_file:
       - .env

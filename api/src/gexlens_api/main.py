@@ -46,6 +46,7 @@ from gexlens_api.candles import (
 from gexlens_api.coach_routes import build_coach_router
 from gexlens_api.crud import build_router
 from gexlens_api.data import DataRepository, PartitionNotFoundError, session_bounds
+from gexlens_api.full_backup import build_full_backup_router
 from gexlens_api.heatmap import (
     ARROW_MEDIA_TYPE,
     MissingSpotSeriesError,
@@ -465,6 +466,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Záloha PostgreSQL (#438): parquety má uživatel na disku, DB je ve volume.
     # Dump nese celý archiv, takže jen s tokenem (#542 C3).
     app.include_router(build_backup_router(settings.database_url, require_token))
+    # Úplná záloha jedním balíčkem (#1799): celá PG + data/ + konfigurace bez tajemství
+    app.include_router(
+        build_full_backup_router(settings.database_url, settings.data_dir, require_token)
+    )
 
     @app.exception_handler(PartitionNotFoundError)
     async def partition_not_found(_request: object, exc: PartitionNotFoundError) -> JSONResponse:
