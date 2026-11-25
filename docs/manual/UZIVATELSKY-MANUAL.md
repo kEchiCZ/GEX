@@ -1514,12 +1514,41 @@ Light téma:
 
 ### Záloha a API token
 
-- **API token** — pole pro hodnotu `GEXLENS_API_TOKEN` z `.env`. Potřebuje ho
-  tlačítko zálohy (bez něj server vrátí 401). Ukládá se **jen v prohlížeči**,
-  na server neodchází.
-- **Zálohovat PostgreSQL** — stáhne dump databáze (OI archiv navždy, setupy,
-  sentiment historie, anotace…). Ukládej mimo repo, ideálně mimo disk
-  s aplikací. Alternativa bez tokenu: `scripts/backup-postgres.ps1`.
+![Settings → Záloha během úplné zálohy](img/settings-zaloha.png)
+
+- **Úplná záloha (data + databáze + nastavení)** (#1801) — jeden balíček `.tar`
+  (přes 10 GB) se vším, co není v gitu: celá PostgreSQL, složka `data/`
+  (parquety, reporty, stav jobů; bez ticků a logů) a nastavení, tedy klíče `.env`
+  s hodnotami, ale **bez tajemství**. Jména tajemství jsou v `RESTORE.md` uvnitř
+  balíčku, hodnoty doplníš ze správce hesel. Ukládej mimo disk s aplikací
+  (externí disk), ne do repozitáře.
+  - **Chrome a Edge:** hned po kliknutí se otevře dialog „Uložit jako“ se jménem
+    `gexlens-zaloha-<datum>_<čas>-<revize>.tar`. Pak server balíček připraví
+    (dump databáze a kopie dnešních partic, pod tlačítkem „Připravuji balíček…“)
+    a záloha teče rovnou do souboru. Pod tlačítkem běží **stažené MB / celkem**
+    s pruhem a **odhad zbývajícího času**, na konci „Dokončuji zápis souboru na
+    disk…“: Chrome soubor do té doby píše vedle jako `.crswap` a teprve teď ho
+    přesune na místo. Nic se nedrží v paměti tabu, i 14 GB balíček ji nezvětší.
+  - **Jiný prohlížeč** (Safari na iPhonu, Firefox): stažení převezme prohlížeč
+    a průběh ukazuje jeho seznam stažených souborů. API token se do adresy
+    nedává: aplikace si vyžádá jednorázový lístek, který platí 5 minut
+    a jen jednou.
+  - **Zrušení dialogu** není chyba, nic se nestane. **Selhání** (chybí token,
+    záloha už běží, chyba serveru, přerušené spojení) se ukáže pod tlačítky
+    a rozpracovaný soubor se smaže. Kde to prohlížeč neumí, hláška řekne, ať
+    ho smažeš sám. Useknutý přenos se jako hotová záloha neuloží.
+  - Naráz běží jen jedna záloha, druhé tlačítko je zatím zamčené.
+  - **Obnova** je vědomě příkaz na hostiteli, ne tlačítko: na PC
+    `.\scripts\restore.ps1 -Source <balíček>`, na serveru
+    `scripts/restore.sh <balíček>` (admin manuál kap. 14 „Obnova ze zálohy“).
+- **Zálohovat PostgreSQL** — rychlá záloha jen databáze (OI archiv navždy, setupy,
+  sentiment historie, anotace…). V Chrome a Edge se dialog otevře hned a dump
+  teče rovnou do souboru, jinde ho prohlížeč stáhne do Stažených souborů.
+  Ukládej mimo repo, ideálně mimo disk s aplikací. Alternativa bez tokenu:
+  `scripts/backup-postgres.ps1`.
+- **API token** — pole pro hodnotu `GEXLENS_API_TOKEN` z `.env`. Potřebují ho
+  obě tlačítka zálohy (bez něj se ukáže hláška o tokenu). Ukládá se **jen
+  v prohlížeči**, na server neodchází.
 - **Potvrzení uložení** — po Uložit se ukáže zelené „✓ Uloženo" (zmizí po
   3 s); když server změny odmítne, chyba se ukáže červeně a rozepsané hodnoty
   zůstanou ve formuláři. Téma (Dark/Light) se ukládá hned, zbytek přes Uložit.
