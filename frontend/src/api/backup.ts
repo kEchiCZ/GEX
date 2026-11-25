@@ -163,15 +163,31 @@ async function streamToFile(
   await body.pipeTo(writable)
 }
 
-/** Dialog už založil prázdný soubor — po selhání nesmí zůstat jako „záloha". */
-async function withoutLeftover(handle: FileSystemFileHandleLike, error: unknown): Promise<unknown> {
+/** Zrušení „Uložit jako" (#506) chodí jako DOMException, ne vždy `instanceof Error`. */
+export function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { name?: unknown }).name === 'AbortError'
+  )
+}
+
+/** Selhání po dialogu: prázdný soubor z dialogu nesmí zůstat jako „záloha".
+
+Vrací vždy obyčejnou `Error`. AbortError po dialogu (přerušený zápis, Chrome
+odmítne `close()`) není zrušení uživatelem a nesmí se jako ono spolknout.
+*/
+async function withoutLeftover(handle: FileSystemFileHandleLike, error: unknown): Promise<Error> {
   const removed = await handle.remove?.().then(
     () => true,
     () => false,
   )
-  if (removed) return error
-  const message = error instanceof Error ? error.message : String(error)
-  return new Error(`${message} Prázdný nebo neúplný soubor na zvoleném místě smaž.`)
+  // DOMException nemusí být instanceof Error (jsdom), zpráva se bere z pole
+  const field = (error as { message?: unknown } | null)?.message
+  const message = typeof field === 'string' ? field : String(error)
+  const reason = isAbortError(error) ? `Zápis zálohy se přerušil: ${message}` : message
+  if (removed) return error instanceof Error && !isAbortError(error) ? error : new Error(reason)
+  return new Error(`${reason} Prázdný nebo neúplný soubor na zvoleném místě smaž.`)
 }
 
 export async function downloadBackup(): Promise<BackupResult> {

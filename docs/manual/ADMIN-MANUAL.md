@@ -2084,7 +2084,7 @@ Dvě hodnoty musí být v lokálním `.env` (do repa nepatří, `.gitignore` je 
 | Proměnná | K čemu |
 |---|---|
 | `GEXLENS_PG_PASSWORD` | Heslo k PostgreSQL. Compose bez něj **nenastartuje** — žádný slabý default už neexistuje. |
-| `GEXLENS_API_TOKEN` | Sdílené tajemství pro `/internal/*` (engine i news-engine → API), `/backup/postgres` a `/backup/full`. |
+| `GEXLENS_API_TOKEN` | Sdílené tajemství pro `/internal/*` (engine i news-engine → API) a `/backup/*` (dump PG, úplná záloha a její lístek, #1801). |
 
 Vygeneruje je `pwsh scripts/init-secrets.ps1` — skript je idempotentní, existující
 hodnoty nepřepisuje a heslo rovnou přepíše i v běžícím PostgreSQL (`ALTER USER`).
@@ -2092,8 +2092,8 @@ To je nutné: `POSTGRES_PASSWORD` se uplatní jen při prvním `initdb`, takže 
 existujícím volume by samotná změna v `.env` znamenala, že se služby k DB
 nepřipojí.
 
-Token do UI patří jen kvůli stažení zálohy — vkládá se do pole **Settings →
-Záloha databáze → API token** a zůstává v localStorage prohlížeče. V image
+Token do UI patří jen kvůli stažení záloh — vkládá se do pole **Settings →
+Záloha → API token** a zůstává v localStorage prohlížeče. V image
 frontendu být nesmí, ten si stáhne kdokoli.
 
 ### Síť

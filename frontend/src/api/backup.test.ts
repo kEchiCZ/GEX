@@ -276,6 +276,30 @@ test('úplná záloha: useknutý stream se neuloží jako hotová záloha', asyn
   expect(state.removed).toBe(true)
 })
 
+test('AbortError až po dialogu je selhání zálohy, ne zrušení uživatelem (#506)', async () => {
+  const { state } = fakeFile()
+  installPicker({
+    createWritable: async () =>
+      new WritableStream<Uint8Array>({
+        close: () => Promise.reject(new DOMException('Blocked by Safe Browsing', 'AbortError')),
+      }),
+    remove: async () => void (state.removed = true),
+  })
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, TICKET))
+      .mockResolvedValueOnce(streamed(['tar'], { 'Content-Length': '3' })),
+  )
+
+  const failure = await downloadFullBackup(() => {}).catch((error: unknown) => error)
+  expect(failure).toBeInstanceOf(Error)
+  expect((failure as Error).name).not.toBe('AbortError')
+  expect((failure as Error).message).toMatch(/Zápis zálohy se přerušil: Blocked by Safe Browsing/)
+  expect(state.removed).toBe(true)
+})
+
 test('úplná záloha: bez možnosti smazat soubor hláška řekne, ať ho uživatel smaže', async () => {
   const { handle } = fakeFile()
   installPicker({ createWritable: handle.createWritable }) // bez remove (starší Chrome)

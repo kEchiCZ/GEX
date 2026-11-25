@@ -1528,7 +1528,7 @@ Light téma:
     a záloha teče rovnou do souboru. Pod tlačítkem běží **stažené MB / celkem**
     s pruhem a **odhad zbývajícího času**, na konci „Dokončuji zápis souboru na
     disk…“: Chrome soubor do té doby píše vedle jako `.crswap` a teprve teď ho
-    přesune na místo. Nic se nedrží v paměti tabu, i 14 GB balíček ji nezvětší.
+    přesune na místo. Data tečou rovnou do souboru a v paměti tabu se nehromadí.
   - **Jiný prohlížeč** (Safari na iPhonu, Firefox): stažení převezme prohlížeč
     a průběh ukazuje jeho seznam stažených souborů. API token se do adresy
     nedává: aplikace si vyžádá jednorázový lístek, který platí 5 minut
@@ -1537,7 +1537,10 @@ Light téma:
     záloha už běží, chyba serveru, přerušené spojení) se ukáže pod tlačítky
     a rozpracovaný soubor se smaže. Kde to prohlížeč neumí, hláška řekne, ať
     ho smažeš sám. Useknutý přenos se jako hotová záloha neuloží.
-  - Naráz běží jen jedna záloha, druhé tlačítko je zatím zamčené.
+  - Naráz běží jen jedna záloha, druhé tlačítko je zatím zamčené. Záloha běží
+    dál i po přepnutí na jiný pohled; průběh a výsledek uvidíš po návratu do
+    Settings. Zavření nebo obnovení stránky se během zálohy zeptá, jestli
+    odejít — stahování by tím skončilo.
   - **Obnova** je vědomě příkaz na hostiteli, ne tlačítko: na PC
     `.\scripts\restore.ps1 -Source <balíček>`, na serveru
     `scripts/restore.sh <balíček>` (admin manuál kap. 14 „Obnova ze zálohy“).

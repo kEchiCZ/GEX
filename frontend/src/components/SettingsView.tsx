@@ -10,10 +10,10 @@ volbu s okamžitou zpětnou vazbou (AC #167) — čekat u něj na Uložit by má
 Totéž platí pro přepínače Telegramu (#1284): jeden klik = jeden bool, žádná
 rozepsaná hodnota; uloží se hned a při odmítnutí serverem ukážou chybu.
 */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { loadApiToken, saveApiToken } from '../api/apiToken'
-import type { BackupProgress, BackupResult } from '../api/backup'
-import { downloadBackup, downloadFullBackup, progressText } from '../api/backup'
+import { progressText } from '../api/backup'
+import { backupRunSnapshot, runBackup, subscribeBackupRun } from '../state/backupRun'
 import { requestReconnect, useServerSettings } from '../api/settings'
 import { PushSettings } from './PushSettings'
 import { ScenarioSettings } from './ScenarioSettings'
@@ -99,20 +99,6 @@ const DEFAULT_SESSIONS = [
   { label: 'New York', minuteIdx: 210 },
 ]
 
-/** Hláška po záloze podle druhu a cesty, kterou se soubor uložil (#439, #1801). */
-const BACKUP_DONE: Record<'postgres' | 'full', Record<BackupResult, string>> = {
-  postgres: {
-    saved: 'Hotovo — záloha uložena na zvolené místo.',
-    downloaded: 'Hotovo — záloha stažena do složky Stažené soubory (prohlížeč neumí výběr složky).',
-  },
-  full: {
-    saved: 'Hotovo — úplná záloha uložena na zvolené místo.',
-    // Nativní stažení běží v prohlížeči; průběh ani výsledek stránka nevidí
-    downloaded:
-      'Stahování úplné zálohy převzal prohlížeč — průběh a výsledek ukazují jeho stažené soubory.',
-  },
-}
-
 /** Parametr vlevo, nápověda vpravo (#445). */
 /** Tlačítko přepojení zdroje (#950). Samostatná komponenta, ne továrna
  * volaná při renderu — handler s Date.now by jinak platil za nečistý render. */
@@ -173,10 +159,12 @@ export function SettingsView() {
   const { values, put, saveAll } = useServerSettings()
   // Rozepsané změny; prázdný objekt = nic k uložení
   const [draft, setDraft] = useState<Record<string, unknown>>({})
-  // Běží nejvýš jedna záloha naráz — obě čtou celou PG
-  const [backup, setBackup] = useState<'postgres' | 'full' | null>(null)
-  const [backupProgress, setBackupProgress] = useState<BackupProgress | null>(null)
-  const [backupNote, setBackupNote] = useState<string | null>(null)
+  // Záloha běží i po přepnutí pohledu; průběh a hlášku drží modul (#1801)
+  const {
+    running: backup,
+    progress: backupProgress,
+    note: backupNote,
+  } = useSyncExternalStore(subscribeBackupRun, backupRunSnapshot)
   // Token se neukládá na server (je to sdílené tajemství z .env), jen do prohlížeče
   const [apiToken, setApiToken] = useState(() => loadApiToken())
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -299,32 +287,6 @@ Sběr dat se na ~1–2 minuty přeruší.`)
     const timer = setTimeout(() => setSaveState('idle'), 3000)
     return () => clearTimeout(timer)
   }, [saveState])
-
-  const runBackup = async (kind: 'postgres' | 'full') => {
-    setBackup(kind)
-    setBackupNote(null)
-    setBackupProgress(null)
-    try {
-      const where =
-        kind === 'full' ? await downloadFullBackup(setBackupProgress) : await downloadBackup()
-      setBackupNote(BACKUP_DONE[kind][where])
-    } catch (error) {
-      // DOMException nemusí být instanceof Error — AbortError se pozná podle name
-      const isAbort =
-        typeof error === 'object' &&
-        error !== null &&
-        (error as { name?: unknown }).name === 'AbortError'
-      if (isAbort) {
-        // Zrušení dialogu „Uložit jako" není chyba zálohy — žádná hláška (#506)
-      } else {
-        // Chyba musí být vidět: tichá neúspěšná záloha je horší než žádná
-        setBackupNote(error instanceof Error ? error.message : 'Záloha selhala.')
-      }
-    } finally {
-      setBackup(null)
-      setBackupProgress(null)
-    }
-  }
 
   return (
     <main className="settings" aria-label="Settings">

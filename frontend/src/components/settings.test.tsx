@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { SettingsView } from './SettingsView'
 import type { BackupProgress } from '../api/backup'
 import { AppStateProvider } from '../state/AppState'
+import { resetBackupRun } from '../state/backupRun'
 
 const puts: { key: string; value: unknown }[] = []
 // Serverové hodnoty per test — výchozí stav simuluje načtené settings
@@ -42,6 +43,7 @@ afterEach(() => {
   vi.useRealTimers()
   backupMock.mockReset()
   fullBackupMock.mockReset()
+  resetBackupRun()
 })
 
 function renderSettings() {
@@ -246,6 +248,46 @@ test('zrušení dialogu u úplné zálohy není chyba — žádná hláška (#50
 
   expect(screen.queryByText(/aborted/i)).toBeNull()
   expect(screen.queryByText(/selhala/i)).toBeNull()
+})
+
+test('selhání zálohy je vidět i po přepnutí pohledu během stahování (#1801)', async () => {
+  let fail: (error: Error) => void = () => {}
+  fullBackupMock.mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject)))
+  const first = renderSettings()
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Úplná záloha (data + databáze + nastavení)' }),
+  )
+  await waitFor(() => expect(fullBackupMock).toHaveBeenCalledOnce())
+  first.unmount() // uživatel odešel na graf
+
+  fail(new Error('Stahování skončilo předčasně: 100 z 9 000 MB'))
+  await Promise.resolve()
+  renderSettings()
+
+  expect(await screen.findByText(/skončilo předčasně/)).toBeDefined()
+})
+
+test('běžící záloha zůstane po návratu do Settings zamčená a s průběhem (#1801)', async () => {
+  fullBackupMock.mockImplementationOnce((onProgress) => {
+    onProgress({ phase: 'preparing', receivedBytes: 0, totalBytes: null, remainingS: null })
+    return new Promise(() => {})
+  })
+  const first = renderSettings()
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Úplná záloha (data + databáze + nastavení)' }),
+  )
+  await screen.findByText(/Připravuji balíček/)
+  first.unmount()
+
+  renderSettings()
+
+  expect(await screen.findByText(/Připravuji balíček/)).toBeDefined()
+  expect((screen.getByRole('button', { name: 'Zálohuji…' }) as HTMLButtonElement).disabled).toBe(
+    true,
+  )
+  expect(
+    (screen.getByRole('button', { name: 'Zálohovat PostgreSQL' }) as HTMLButtonElement).disabled,
+  ).toBe(true)
 })
 
 test('selhání úplné zálohy zůstává vidět', async () => {
