@@ -33,13 +33,20 @@ jobs:
       - run: uv sync --all-packages
       # Klient PostgreSQL 16 pro test obnovy (#1800): pg_dump a pg_restore stejné verze
       # jako služba a image (klient 17 posílá serveru 16 neznámé `transaction_timeout`).
-      # Runner ho může mít předinstalovaný; PATH jde přednostně na verzi 16.
+      # ubuntu-latest (26.04) klienta 16 v distribuci nemá, proto oficiální repozitář
+      # PGDG jako v docker/python.Dockerfile; PATH jde přednostně na verzi 16.
       - name: klient PostgreSQL 16
         run: |
-          test -x /usr/lib/postgresql/16/bin/pg_restore || {
+          if ! test -x /usr/lib/postgresql/16/bin/pg_restore; then
+            key=https://www.postgresql.org/media/keys/ACCC4CF8.asc
+            curl -fsSL "$key" | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+            codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+            repo=https://apt.postgresql.org/pub/repos/apt
+            line="deb [signed-by=/usr/share/keyrings/pgdg.gpg] $repo ${codename}-pgdg main"
+            echo "$line" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
             sudo apt-get update -qq
             sudo apt-get install -y -qq --no-install-recommends postgresql-client-16
-          }
+          fi
           echo /usr/lib/postgresql/16/bin >> "$GITHUB_PATH"
           /usr/lib/postgresql/16/bin/pg_restore --version
       - run: uv run ruff check .
@@ -79,13 +86,20 @@ jobs:
       - run: uv sync --all-packages
       # Klient PostgreSQL 16 pro test obnovy (#1800): pg_dump a pg_restore stejné verze
       # jako služba a image (klient 17 posílá serveru 16 neznámé `transaction_timeout`).
-      # Runner ho může mít předinstalovaný; PATH jde přednostně na verzi 16.
+      # ubuntu-latest (26.04) klienta 16 v distribuci nemá, proto oficiální repozitář
+      # PGDG jako v docker/python.Dockerfile; PATH jde přednostně na verzi 16.
       - name: klient PostgreSQL 16
         run: |
-          test -x /usr/lib/postgresql/16/bin/pg_restore || {
+          if ! test -x /usr/lib/postgresql/16/bin/pg_restore; then
+            key=https://www.postgresql.org/media/keys/ACCC4CF8.asc
+            curl -fsSL "$key" | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+            codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+            repo=https://apt.postgresql.org/pub/repos/apt
+            line="deb [signed-by=/usr/share/keyrings/pgdg.gpg] $repo ${codename}-pgdg main"
+            echo "$line" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
             sudo apt-get update -qq
             sudo apt-get install -y -qq --no-install-recommends postgresql-client-16
-          }
+          fi
           echo /usr/lib/postgresql/16/bin >> "$GITHUB_PATH"
           /usr/lib/postgresql/16/bin/pg_restore --version
       # Pojistka, že runner je opravdu aarch64 (štítek runneru se může změnit)
