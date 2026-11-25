@@ -224,7 +224,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_API_BASE` | http://127.0.0.1:8000 | Kam engine pushuje (v compose `http://api:8000`) |
 
 | `GEXLENS_PG_PASSWORD` | — | **Povinné** — compose bez něj nenastartuje (generuje `scripts/init-secrets.ps1`) |
-| `GEXLENS_API_TOKEN` | — | **Povinné** — sdílené tajemství `/internal/*` a `/backup/postgres` |
+| `GEXLENS_API_TOKEN` | — | **Povinné** — sdílené tajemství `/internal/*` a `/backup/*` |
 | `GEXLENS_BIND_ADDR` | 127.0.0.1 | Na jaké adrese publikují porty (server: ponechat loopback + reverse proxy) |
 | `GEXLENS_ALLOWED_ORIGINS` | — | CORS whitelist API |
 | `GEXLENS_NEWS_API_TOKEN` | — | Token news-engine → API push |
@@ -1237,8 +1237,13 @@ jsou v kap. 14 „Formát balíčku úplné zálohy“.
   `backup/tmp/`, rozpracovaných `*.tmp` a `local/` (stav a nastavení stroje, #1847/#1848),
   konfigurace bez tajemství, `manifest.json` a `RESTORE.md`. Heslo IB Gateway
   (`secrets/ibkr_password`) leží mimo `data/` a do balíčku se nedostane.
-- **Spuštění:** `GET /backup/full` s hlavičkou `X-GEXLens-Token` (tlačítko v Settings přijde
-  s F4 #1801), nebo CLI v kontejneru API:
+- **Spuštění:** tlačítko Settings → Záloha → „Úplná záloha“ (F4 #1801, uživatelský manuál
+  kap. 13), `GET /backup/full` s hlavičkou `X-GEXLens-Token`, nebo CLI v kontejneru API.
+  Nativní stažení prohlížečem (prohlížeč bez File System Access API, např. Firefox) hlavičku poslat
+  neumí a token do URL nesmí: UI si vyžádá jednorázový lístek `POST /backup/full/ticket`
+  (za tokenem) a stáhne `GET /backup/full?ticket=…`. Lístek platí 5 min, spotřebuje se prvním
+  použitím (i neúspěšným) a drží se v paměti procesu API (jeden proces uvicornu); restart API
+  ho zneplatní. CLI:
   `docker compose exec -u gexlens api python -m gexlens_api.full_backup --out /app/data/local/zaloha.tar`
   (`-u gexlens`, ať výstup nepatří rootu; API běží jako uid 10001, #542). Kontejner zapisuje
   jen do `/app/data`, takže balíček vzniká v `data/local/` (CLI adresář založí). Tam se počítá
@@ -1318,7 +1323,8 @@ Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:80
 | `POST /internal/status`, `POST /internal/publish` | **Ingest z enginu** — vyžaduje hlavičku `X-GEXLens-Token` (#542). Od #949 tu API vyhodnocuje **provozní alerty** `AlertEngine.observe_connection` / `observe_disk` (výpadek spojení s IBKR, obsazení disku přes limit) — ze **snímku** statusu, ne z těla requestu (engine posílá jen změněné klíče); obě hlášky jsou hranové. Výpadek spojení se při zavřeném trhu podle rozvrhu CME nehlásí a hrana se nenatahuje — trvá-li i po otevření, ohlásí ho první status po otevření (#1307, kap. 5). Do té doby byl `AlertEngine` mrtvý kód; pravidla `price_cross` / `cum_delta_jump` / `dominant_strike_change` odstraněna jako překonaná (`LevelProximityWatcher`), `POST /alerts` je přestává přijímat, CRUD `/alerts` zůstává |
 | `PUT /settings/{key}` | Zápis nastavení + `pg_notify` na kanál watchlistu (#992) — engine se probudí do sekund. Jen klíče z `WRITABLE_SETTINGS`, jinak 422. Validace podle klíče: přepínače Telegramu bool, seznamy zdrojů zpráv seznam řetězců, parametry účtu plánu QQQ kladné číslo nebo `null` (kap. 4, #1743) |
 | `GET /backup/postgres` | Stream `pg_dump -Fc` — vyžaduje `X-GEXLens-Token` (#542) |
-| `GET /backup/full` | Úplná záloha jedním balíčkem jako tar s přesným `Content-Length` (#1799, kap. 6 a 14): celá PG, `data/` bez `ticks/`, `logs/`, `local/`, `backup/tmp/`, `*.tmp`, konfigurace bez tajemství, manifest, `RESTORE.md`. Vyžaduje `X-GEXLens-Token`; 409 při běžící záloze |
+| `GET /backup/full` | Úplná záloha jedním balíčkem jako tar s přesným `Content-Length` (#1799, kap. 6 a 14): celá PG, `data/` bez `ticks/`, `logs/`, `local/`, `backup/tmp/`, `*.tmp`, konfigurace bez tajemství, manifest, `RESTORE.md`. Vyžaduje `X-GEXLens-Token`, nebo `?ticket=` z lístku níže; 409 při běžící záloze |
+| `POST /backup/full/ticket` | Jednorázový lístek pro `GET /backup/full?ticket=…` (#1801): `{ticket, filename}`, platí 5 min a jednou, jen s `X-GEXLens-Token`; neplatný, použitý nebo prošlý lístek = 401 |
 
 ### WebSocket `/ws/live`
 
@@ -2080,7 +2086,7 @@ Dvě hodnoty musí být v lokálním `.env` (do repa nepatří, `.gitignore` je 
 | Proměnná | K čemu |
 |---|---|
 | `GEXLENS_PG_PASSWORD` | Heslo k PostgreSQL. Compose bez něj **nenastartuje** — žádný slabý default už neexistuje. |
-| `GEXLENS_API_TOKEN` | Sdílené tajemství pro `/internal/*` (engine i news-engine → API), `/backup/postgres` a `/backup/full`. |
+| `GEXLENS_API_TOKEN` | Sdílené tajemství pro `/internal/*` (engine i news-engine → API) a `/backup/*` (dump PG, úplná záloha a její lístek, #1801). |
 
 Vygeneruje je `pwsh scripts/init-secrets.ps1` — skript je idempotentní, existující
 hodnoty nepřepisuje a heslo rovnou přepíše i v běžícím PostgreSQL (`ALTER USER`).
@@ -2088,8 +2094,8 @@ To je nutné: `POSTGRES_PASSWORD` se uplatní jen při prvním `initdb`, takže 
 existujícím volume by samotná změna v `.env` znamenala, že se služby k DB
 nepřipojí.
 
-Token do UI patří jen kvůli stažení zálohy — vkládá se do pole **Settings →
-Záloha databáze → API token** a zůstává v localStorage prohlížeče. V image
+Token do UI patří jen kvůli stažení záloh — vkládá se do pole **Settings →
+Záloha → API token** a zůstává v localStorage prohlížeče. V image
 frontendu být nesmí, ten si stáhne kdokoli.
 
 ### Síť

@@ -2,7 +2,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { SettingsView } from './SettingsView'
+import type { BackupProgress } from '../api/backup'
 import { AppStateProvider } from '../state/AppState'
+import { resetBackupRun } from '../state/backupRun'
 
 const puts: { key: string; value: unknown }[] = []
 // Serverové hodnoty per test — výchozí stav simuluje načtené settings
@@ -10,6 +12,8 @@ let serverValues: Record<string, unknown> = {}
 // Chyba, kterou má saveAll vrátit (null = uložení projde)
 let saveFailure: Error | null = null
 const backupMock = vi.fn<() => Promise<'saved' | 'downloaded'>>()
+const fullBackupMock =
+  vi.fn<(onProgress: (p: BackupProgress) => void) => Promise<'saved' | 'downloaded'>>()
 
 vi.mock('../api/settings', () => ({
   useServerSettings: () => ({
@@ -22,8 +26,10 @@ vi.mock('../api/settings', () => ({
   }),
 }))
 
-vi.mock('../api/backup', () => ({
+vi.mock('../api/backup', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/backup')>()),
   downloadBackup: () => backupMock(),
+  downloadFullBackup: (onProgress: (p: BackupProgress) => void) => fullBackupMock(onProgress),
 }))
 
 beforeEach(() => {
@@ -36,6 +42,8 @@ afterEach(() => {
   saveFailure = null
   vi.useRealTimers()
   backupMock.mockReset()
+  fullBackupMock.mockReset()
+  resetBackupRun()
 })
 
 function renderSettings() {
@@ -184,6 +192,115 @@ test('skutečná chyba zálohy zůstává vidět (#506)', async () => {
   fireEvent.click(button)
 
   expect(await screen.findByText(/HTTP 503/)).toBeDefined()
+})
+
+test('úplná záloha ukazuje průběh, druhá mezitím nejde spustit, pak hotovo (#1801)', async () => {
+  let finish: (result: 'saved') => void = () => {}
+  fullBackupMock.mockImplementationOnce((onProgress) => {
+    onProgress({
+      phase: 'streaming',
+      receivedBytes: 5_000_000_000,
+      totalBytes: 10_000_000_000,
+      remainingS: 120,
+    })
+    return new Promise((resolve) => (finish = resolve))
+  })
+  renderSettings()
+  const full = await screen.findByRole('button', {
+    name: 'Úplná záloha (data + databáze + nastavení)',
+  })
+
+  fireEvent.click(full)
+
+  const progress = await screen.findByText(/Stahuji 5.000 \/ 10.000 MB · zbývá ~2 min/)
+  expect(progress.getAttribute('role')).toBe('status')
+  const bar = screen.getByRole('progressbar', {
+    name: 'Průběh úplné zálohy',
+  }) as HTMLProgressElement
+  expect(bar.value).toBe(5_000_000_000)
+  expect(bar.max).toBe(10_000_000_000)
+  const postgres = screen.getByRole('button', {
+    name: 'Zálohovat PostgreSQL',
+  }) as HTMLButtonElement
+  expect(postgres.disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Zálohuji…' }) as HTMLButtonElement).disabled).toBe(
+    true,
+  )
+
+  finish('saved')
+
+  expect(await screen.findByText('Hotovo — úplná záloha uložena na zvolené místo.')).toBeDefined()
+  expect(screen.queryByText(/Stahuji/)).toBeNull()
+  expect(postgres.disabled).toBe(false)
+})
+
+test('zrušení dialogu u úplné zálohy není chyba — žádná hláška (#506)', async () => {
+  fullBackupMock.mockRejectedValueOnce(
+    new DOMException('The user aborted a request.', 'AbortError'),
+  )
+  renderSettings()
+  const full = (await screen.findByRole('button', {
+    name: 'Úplná záloha (data + databáze + nastavení)',
+  })) as HTMLButtonElement
+
+  fireEvent.click(full)
+  await waitFor(() => expect(full.disabled).toBe(false))
+
+  expect(screen.queryByText(/aborted/i)).toBeNull()
+  expect(screen.queryByText(/selhala/i)).toBeNull()
+})
+
+test('selhání zálohy je vidět i po přepnutí pohledu během stahování (#1801)', async () => {
+  let fail: (error: Error) => void = () => {}
+  fullBackupMock.mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject)))
+  const first = renderSettings()
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Úplná záloha (data + databáze + nastavení)' }),
+  )
+  await waitFor(() => expect(fullBackupMock).toHaveBeenCalledOnce())
+  first.unmount() // uživatel odešel na graf
+
+  fail(new Error('Stahování skončilo předčasně: 100 z 9 000 MB'))
+  await Promise.resolve()
+  renderSettings()
+
+  expect(await screen.findByText(/skončilo předčasně/)).toBeDefined()
+})
+
+test('běžící záloha zůstane po návratu do Settings zamčená a s průběhem (#1801)', async () => {
+  fullBackupMock.mockImplementationOnce((onProgress) => {
+    onProgress({ phase: 'preparing', receivedBytes: 0, totalBytes: null, remainingS: null })
+    return new Promise(() => {})
+  })
+  const first = renderSettings()
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Úplná záloha (data + databáze + nastavení)' }),
+  )
+  await screen.findByText(/Připravuji balíček/)
+  first.unmount()
+
+  renderSettings()
+
+  expect(await screen.findByText(/Připravuji balíček/)).toBeDefined()
+  expect((screen.getByRole('button', { name: 'Zálohuji…' }) as HTMLButtonElement).disabled).toBe(
+    true,
+  )
+  expect(
+    (screen.getByRole('button', { name: 'Zálohovat PostgreSQL' }) as HTMLButtonElement).disabled,
+  ).toBe(true)
+})
+
+test('selhání úplné zálohy zůstává vidět', async () => {
+  fullBackupMock.mockRejectedValueOnce(
+    new Error('Úplná záloha selhala: HTTP 409 Úplná záloha už běží'),
+  )
+  renderSettings()
+
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Úplná záloha (data + databáze + nastavení)' }),
+  )
+
+  expect(await screen.findByText(/HTTP 409 Úplná záloha už běží/)).toBeDefined()
 })
 
 test('Uložit je nedostupné, dokud není co uložit', async () => {

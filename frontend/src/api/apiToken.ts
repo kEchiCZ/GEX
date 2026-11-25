@@ -1,7 +1,8 @@
 /** Sdílené tajemství API (#542) pro endpointy, které mění stav nebo exportují data.
 
-Dnes ho potřebuje jen stažení zálohy (`GET /backup/postgres`) — dump nese celý
-nenahraditelný archiv, takže endpoint stojí za tokenem i uvnitř sítě. Token se
+Dnes ho potřebují jen zálohy (`/backup/postgres`, `/backup/full`, #1801) — nesou
+celý nenahraditelný archiv, takže endpointy stojí za tokenem i uvnitř sítě. Do URL
+nejde nikdy; nativní stažení dostane jednorázový lístek (`backup.ts`). Token se
 drží v localStorage prohlížeče, ne v buildu: v image frontendu by se dostal ke
 komukoli, kdo si stáhne bundle.
 */

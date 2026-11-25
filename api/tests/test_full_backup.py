@@ -28,7 +28,7 @@ from starlette.requests import ClientDisconnect
 
 import gexlens_api.backup as backup
 import gexlens_api.full_backup as fb
-from gexlens_api.security import build_token_guard
+from gexlens_api.security import TICKET_TTL_S, OneTimeTickets, build_token_guard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NOW = dt.datetime(2026, 11, 25, 9, 0, tzinfo=dt.UTC)  # středa, Globex otevřený
@@ -482,12 +482,16 @@ def fake_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/pg_dump")
 
 
-def _app(data_dir: Path, token: str | None = None) -> FastAPI:
+def _app(
+    data_dir: Path, token: str | None = None, tickets: OneTimeTickets | None = None
+) -> FastAPI:
     app = FastAPI()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     guard = build_token_guard(token) if token is not None else None
     app.include_router(
-        fb.build_full_backup_router("postgresql+psycopg://u:p@h/db", data_dir, guard, _environ())
+        fb.build_full_backup_router(
+            "postgresql+psycopg://u:p@h/db", data_dir, guard, _environ(), tickets
+        )
     )
     return app
 
@@ -525,6 +529,70 @@ def test_endpoint_za_tokenem(data_dir: Path) -> None:
         assert client.get("/backup/full").status_code == 401
         ok = client.get("/backup/full", headers={"X-GEXLens-Token": "tajne"})
         assert ok.status_code == 200
+
+
+# ── Jednorázový lístek pro nativní stažení (#1801) ────────────────────
+
+
+@pytest.mark.usefixtures("fake_sources")
+def test_listek_vyda_jen_token_a_plati_jednou(data_dir: Path) -> None:
+    with TestClient(_app(data_dir, token="tajne")) as client:
+        assert client.post("/backup/full/ticket").status_code == 401
+        issued = client.post("/backup/full/ticket", headers={"X-GEXLens-Token": "tajne"})
+        assert issued.status_code == 200
+        body = issued.json()
+        name_re = r"gexlens-zaloha-\d{4}-\d{2}-\d{2}_\d{4}-0123456\.tar"
+        assert re.fullmatch(name_re, body["filename"])
+        ticket = body["ticket"]
+        assert "tajne" not in ticket and len(ticket) >= 32
+
+        # Stažení bez hlavičky, jen s lístkem v URL
+        first = client.get("/backup/full", params={"ticket": ticket})
+        assert first.status_code == 200
+        assert int(first.headers["content-length"]) == len(first.content)
+        # Podruhé stejný odkaz nic neotevře (historie prohlížeče, access log)
+        again = client.get("/backup/full", params={"ticket": ticket})
+        assert again.status_code == 401
+        assert "Lístek" in again.json()["detail"]
+
+
+@pytest.mark.usefixtures("fake_sources")
+def test_listek_po_5_minutach_neplati(data_dir: Path) -> None:
+    assert TICKET_TTL_S == 300  # zadání #1801: 5 min
+    now = [1000.0]
+    tickets = OneTimeTickets(clock=lambda: now[0])
+    headers = {"X-GEXLens-Token": "tajne"}
+    with TestClient(_app(data_dir, token="tajne", tickets=tickets)) as client:
+        fresh = client.post("/backup/full/ticket", headers=headers).json()["ticket"]
+        stale = client.post("/backup/full/ticket", headers=headers).json()["ticket"]
+        now[0] += TICKET_TTL_S - 1
+        assert client.get("/backup/full", params={"ticket": fresh}).status_code == 200
+        now[0] += 1
+        assert client.get("/backup/full", params={"ticket": stale}).status_code == 401
+
+
+@pytest.mark.usefixtures("fake_sources")
+def test_neznamy_listek_neprojde_ani_bez_guardu(data_dir: Path) -> None:
+    with TestClient(_app(data_dir)) as client:
+        assert client.get("/backup/full", params={"ticket": "vymysleny"}).status_code == 401
+
+
+def test_neplatny_listek_se_nespotrebuje_cizi() -> None:
+    tickets = OneTimeTickets()
+    mine = tickets.issue()
+    assert not tickets.redeem("cizi")
+    assert tickets.redeem(mine)
+    assert not tickets.redeem(mine)
+
+
+def test_prosle_listky_se_pri_vydani_uklidi() -> None:
+    now = [0.0]
+    tickets = OneTimeTickets(clock=lambda: now[0])
+    old = tickets.issue()
+    now[0] += TICKET_TTL_S
+    tickets.issue()
+    assert old not in tickets._expires
+    assert len(tickets._expires) == 1
 
 
 @pytest.mark.usefixtures("fake_sources")

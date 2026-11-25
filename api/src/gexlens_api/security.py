@@ -2,10 +2,13 @@
 
 Model hrozby: API nemá uživatele ani role — chrání se dvě různé věci.
 
-1. **Zápis a export** (`/internal/*`, `/backup/postgres`). Volá je jen engine,
+1. **Zápis a export** (`/internal/*`, `/backup/*`). Volá je jen engine,
    respektive přihlášený uživatel z UI. Sdílené tajemství z `GEXLENS_API_TOKEN`
    stačí a nevyžaduje session vrstvu. Bez nastaveného tokenu se endpointy
    odmítají (503) — otevřený režim by se na serveru tiše přenesl do provozu.
+   Nativní stažení prohlížečem bez File System Access API (úplná záloha, #1801) hlavičku poslat
+   neumí; dostane proto jednorázový lístek do URL. Token sám do URL nejde
+   nikdy — zůstal by v historii prohlížeče a v access logu.
 2. **Odposlech WS** (`/ws/live`). Tady token nepomůže: útok vede přes prohlížeč
    uživatele (cross-site WebSocket hijacking), který by tajemství poslal sám.
    Brání se kontrolou hlavičky `Origin` — CORS se na WS handshake nevztahuje.
@@ -14,6 +17,8 @@ Model hrozby: API nemá uživatele ani role — chrání se dvě různé věci.
 import os
 import re
 import secrets
+import threading
+import time
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
@@ -70,3 +75,39 @@ def build_token_guard(token: str) -> Callable[[str | None], None]:
             raise HTTPException(401, f"Chybí nebo nesedí hlavička {TOKEN_HEADER}")
 
     return guard
+
+
+TICKET_TTL_S = 300.0
+
+
+class OneTimeTickets:
+    """Jednorázové lístky pro stažení bez hlavičky (#1801).
+
+    Lístek vydá jen požadavek s tokenem, platí `ttl_s` a spotřebuje se prvním
+    ověřením — i neúspěšným stažením, odkaz z historie prohlížeče ani z logu
+    tak už nic neotevře. Drží se v paměti procesu: API běží v jednom procesu
+    uvicornu (`compose.yml`) a lístek po restartu nemá co přežít.
+    """
+
+    def __init__(
+        self, ttl_s: float = TICKET_TTL_S, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._ttl_s = ttl_s
+        self._clock = clock
+        self._expires: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def issue(self) -> str:
+        ticket = secrets.token_urlsafe(32)
+        with self._lock:
+            now = self._clock()
+            # Prošlé lístky pryč, ať slovník neroste s každým nevyužitým kliknutím
+            self._expires = {key: exp for key, exp in self._expires.items() if exp > now}
+            self._expires[ticket] = now + self._ttl_s
+        return ticket
+
+    def redeem(self, ticket: str) -> bool:
+        """Platný lístek spotřebuje a vrátí True; neznámý, použitý nebo prošlý False."""
+        with self._lock:
+            expires = self._expires.pop(ticket, None)
+            return expires is not None and self._clock() < expires
