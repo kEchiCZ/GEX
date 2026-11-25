@@ -75,6 +75,7 @@ def test_internal_status_s_tokenem_projde(client: TestClient) -> None:
 def test_zaloha_bez_tokenu_odmitnuta(client: TestClient) -> None:
     """Dump nese celý nenahraditelný archiv — nesmí jít stáhnout anonymně."""
     assert client.get("/backup/postgres").status_code == 401
+    assert client.get("/backup/full").status_code == 401
 
 
 def test_bez_nastaveneho_tokenu_je_endpoint_vypnuty(tokenless_client: TestClient) -> None:

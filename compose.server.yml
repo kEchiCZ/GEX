@@ -88,6 +88,11 @@ services:
     secrets:
       - ibkr_password
 
+  api:
+    # Jméno stroje do manifestu úplné zálohy (#1799); COMPUTERNAME z PC tu není.
+    # GEX_HOSTNAME = táž proměnná jako v bootstrap.sh (plán B u jiného poskytovatele)
+    hostname: ${GEX_HOSTNAME:-gex-server}
+
   engine:
     environment:
       GEXLENS_IBKR_HOST: ib-gateway

@@ -133,7 +133,7 @@ docker compose down              # odstranění kontejnerů (volume pgdata zůst
   `docker inspect --format '{{.Name}} {{.Config.Image}} {{index .Config.Labels "org.opencontainers.image.revision"}} {{.State.StartedAt}}' gex-engine-1 gex-api-1 gex-news-engine-1 gex-frontend-1`
   — revize musí odpovídat zamýšlenému commitu a čas startu nasazení.
 
-Data: Parquet v `./data` (bind mount, sdílené engine↔API), PostgreSQL ve volume `pgdata`. Zálohovat stačí `./data` + `pg_dump` (hlavně tabulku `oi_eod`, která se nikdy nemaže).
+Data: Parquet v `./data` (bind mount, sdílené engine↔API), PostgreSQL ve volume `pgdata`. Zálohovat stačí `./data` + `pg_dump` (hlavně tabulku `oi_eod`, která se nikdy nemaže); obojí naráz bere úplná záloha jedním balíčkem (kap. 6, #1799).
 
 ### Provozní detaily kontejnerů
 
@@ -1226,6 +1226,45 @@ Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane č
 | `option_plans` | Plán opce QQQ ke scénáři dne NQ (ADR-0062 K2 A, #1742, kap. 5 „Plán opce QQQ ze scénáře dne“). Řádek vznikne jednou v 9:15 ET a JSON z 9:15 se zpětně nepřepisuje: `scenario_id` (unikátní, bez cizího klíče, protože scénář smí uživatel smazat), `day`, `created_at` (štítek minuty scénáře, u restartu čas startu), `rules_version`. `status` je `sestaven` (z ranního snímku, nebo celý z 9:31 — pak nese `plan.repricing.plan`), nebo `bez opce`. `verdict` je hlavní slovo verdiktu hlavního plánu (`čeká` / `neobchodovat`, K12 A), u plánu bez opce NULL. Sloupce popisují aktuální stav plánu (vlastník 11. 11., #1738), stav z 9:15 zůstává v JSON. Platný plán řádku je `plan.repricing.plan`, když existuje (pak je `plan.main` null), jinak `plan.main` a `plan.shadows` (ADR-0062 K4 bod 10). Vybírá ho jediná čistá funkce `storage/option_plans_store.effective_plan` (API #1743, vyhodnocení F3, obrázek F4b). JSON `plan` nese `slot`, `reasons`, `levels_nq` (úrovně scénáře), `chain` (zdroj, čas, spot, poměr a pokrytí obou expirací; `zero_dte.quoted_share` patří k P1 stínu B, Rozhodnuto 10. 11.), `main` (celý plán, `compute/option_plan.plan_to_json`) a `shadows` (`entry_b`, `wick_test`). Přecenění v 9:31 ET (#1769) přidá jednou klíč `repricing`: `slot`, `reasons` (proč se ceny nezapsaly, nebo proč plán zůstal bez opce), `chain` (snímek 9:31), `prices` (sady cen úplného plánu podle klíčů `main`, `entry_b`, `wick_test`: bid, ask, IV, delta, `quote_ts`, `at_targets`) a `plan` (celý plán z 9:31 u plánu bez opce z 9:15: `levels_nq`, `main`, `shadows`). `evaluated_at` a `result` zapíše jednou vyhodnocení po close (F3 #1748, kap. 5): `result` = `rules_version`, `main` a `shadows` (`entry_b`, `wick_test`), každá část se `status`, `reasons`, `entry`, `trigger_b`, `outcome`, `events` (druh, čas, cena QQQ), `bars` / `bars_expected` a `variants` (`kind`, `entry_quote`, `pricing` = P3 a P4 při spoušti se zaplacenou cenou z ask a modelem s IV kotace: `paid`, `at_stop`, `at_tp1`, `at_tp2`, `rr`, `rr_strict`, `loss_at_stop_usd`, `drawdown_usd`, `model_label`; `budget`, `exit_tp1` a `exit_hold` s naměřeným bid a `pnl_usd`, `gaps`); schéma se tím nemění. `image_path` a `image_bytes` zapisuje API s PNG plánu (F4b #1744, kap. 5): cesta `scenarios/QQQ/{den}/plan-{id}-{stav}.png` a velikost pro hlídání místa. Sloupec `image_bytes` přidá dopředná migrace v `ensure_schema` (`ALTER TABLE … ADD COLUMN`, výchozí 0), proto před nasazením F4b záloha PG. `live_alerts` (JSON, NULL = žádný) nese odeslané přechody živého stavu `[{event, ts, sent_at, final}]` (F3b #1757, `claim_live_alert`, kap. 5). Přidá ho táž dopředná migrace, proto před nasazením F3b záloha PG. API ho přepošle beze změny v `GET /option-plans` (F4d #1841). Tabulku zakládá engine při startu (`ensure_schema`), před prvním nasazením záloha PG. API ji čte (`GET /option-plans`, kap. 7) a zapisuje jen sloupce PNG; `ensure_schema` volá i API při prvním dotazu, kdyby startovalo před enginem |
 | `watchlist`, `alerts`, `annotations`, `settings` | CRUD přes API |
 
+### Úplná záloha jedním balíčkem (#1799, epika #1094)
+
+Jeden tar se vším, co po pádu stroje nejde pořídit znovu: aplikace přijde z GitHubu,
+zbytek z balíčku (zadání vlastníka 12. 11. 2026). Formát a klasifikace tajemství
+jsou v kap. 14 „Formát balíčku úplné zálohy“.
+
+- **Obsah:** `pg_dump -Fc` **celé** databáze (žádný seznam tabulek, nová data se zálohují
+  sama), celé `data/` kromě dopočitatelných `ticks/` (ADR-0029), `logs/`, pracovního
+  `backup/tmp/`, rozpracovaných `*.tmp` a `local/` (stav a nastavení stroje, #1847/#1848),
+  konfigurace bez tajemství, `manifest.json` a `RESTORE.md`. Heslo IB Gateway
+  (`secrets/ibkr_password`) leží mimo `data/` a do balíčku se nedostane.
+- **Spuštění:** `GET /backup/full` s hlavičkou `X-GEXLens-Token` (tlačítko v Settings přijde
+  s F4 #1801), nebo CLI v kontejneru API:
+  `docker compose exec -u gexlens api python -m gexlens_api.full_backup --out /app/data/local/zaloha.tar`
+  (`-u gexlens`, ať výstup nepatří rootu; API běží jako uid 10001, #542). Kontejner zapisuje
+  jen do `/app/data`, takže balíček vzniká v `data/local/` (CLI adresář založí). Tam se počítá
+  do `disk_limit_gb` a ubírá místo na disku dat: hned po vzniku ho přesuň mimo `data/`.
+  `--meta-dir <adresář>` zapíše jen dump, konfiguraci, manifest a `RESTORE.md` (noční záloha
+  F7a #1804 a snímek synchronizace #1851; `data/` zálohuje restic přímo, bez kopie ~13 GB).
+  Cíl uvnitř zálohovaných částí `data/` CLI odmítne, protože by se další záloha zabalila
+  sama do sebe. Povolené jsou `data/local/…` a cesty mimo `data/`.
+- **Průběh:** `pg_dump` jde do `data/backup/tmp/full-<čas>-<pid>/`, soubory změněné za
+  posledních 24 h (dnešní partice, průběžně doplňované JSONL) se zkopírují tamtéž a teprve
+  potom začne stream. Velikosti jsou tak známé předem a `Content-Length` přesně sedí.
+  Engine dnešní partice dál přepisuje (`os.replace`), ale do taru jdou z kopie. Do prvního
+  bajtu proběhne dump, výpis `data/` a kopie živých souborů (nginx má `proxy_read_timeout`
+  3600 s; doba na PC se změří při ostré záloze, #1799). Stream běží po 1 MiB, paměť API nezávisí na velikosti dat.
+- **Za otevřeného trhu** záloha nic neblokuje (čte jen soubory a PG, minutový cyklus enginu
+  na ni nečeká). Manifest nese `market_open` a u souborů z kopie `live: true`: dnešní partice
+  mohou být neúplné. Změní-li se během streamu starší soubor mimo kopii, stream skončí chybou
+  v logu API („se změnil během zálohy“) a klient dostane neúplný soubor (méně bajtů než
+  `Content-Length`). Zálohu pak stačí spustit znovu.
+- **Souběh a úklid:** naráz běží jen jedna úplná záloha (jinak 409). Přerušené stahování
+  i odpojení během přípravy ukončí `pg_dump` a smaže pracovní adresář. Adresáře
+  `full-*` starší 24 h (pád API uprostřed streamu) uklidí další běh.
+- **Gzip:** odpověď nese `Content-Encoding: identity`, `GZipMiddleware` ji tak nebalí. Parquety
+  i dump jsou komprimované a komprese by zahodila `Content-Length`. Totéž platí od #1799 pro
+  `GET /backup/postgres`.
+
 ## 7. API reference
 
 Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:8011`).
@@ -1277,6 +1316,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:80
 | `POST /internal/status`, `POST /internal/publish` | **Ingest z enginu** — vyžaduje hlavičku `X-GEXLens-Token` (#542). Od #949 tu API vyhodnocuje **provozní alerty** `AlertEngine.observe_connection` / `observe_disk` (výpadek spojení s IBKR, obsazení disku přes limit) — ze **snímku** statusu, ne z těla requestu (engine posílá jen změněné klíče); obě hlášky jsou hranové. Výpadek spojení se při zavřeném trhu podle rozvrhu CME nehlásí a hrana se nenatahuje — trvá-li i po otevření, ohlásí ho první status po otevření (#1307, kap. 5). Do té doby byl `AlertEngine` mrtvý kód; pravidla `price_cross` / `cum_delta_jump` / `dominant_strike_change` odstraněna jako překonaná (`LevelProximityWatcher`), `POST /alerts` je přestává přijímat, CRUD `/alerts` zůstává |
 | `PUT /settings/{key}` | Zápis nastavení + `pg_notify` na kanál watchlistu (#992) — engine se probudí do sekund. Jen klíče z `WRITABLE_SETTINGS`, jinak 422. Validace podle klíče: přepínače Telegramu bool, seznamy zdrojů zpráv seznam řetězců, parametry účtu plánu QQQ kladné číslo nebo `null` (kap. 4, #1743) |
 | `GET /backup/postgres` | Stream `pg_dump -Fc` — vyžaduje `X-GEXLens-Token` (#542) |
+| `GET /backup/full` | Úplná záloha jedním balíčkem jako tar s přesným `Content-Length` (#1799, kap. 6 a 14): celá PG, `data/` bez `ticks/`, `logs/`, `local/`, `backup/tmp/`, `*.tmp`, konfigurace bez tajemství, manifest, `RESTORE.md`. Vyžaduje `X-GEXLens-Token`; 409 při běžící záloze |
 
 ### WebSocket `/ws/live`
 
@@ -2038,7 +2078,7 @@ Dvě hodnoty musí být v lokálním `.env` (do repa nepatří, `.gitignore` je 
 | Proměnná | K čemu |
 |---|---|
 | `GEXLENS_PG_PASSWORD` | Heslo k PostgreSQL. Compose bez něj **nenastartuje** — žádný slabý default už neexistuje. |
-| `GEXLENS_API_TOKEN` | Sdílené tajemství pro `/internal/*` (engine i news-engine → API) a `/backup/postgres`. |
+| `GEXLENS_API_TOKEN` | Sdílené tajemství pro `/internal/*` (engine i news-engine → API), `/backup/postgres` a `/backup/full`. |
 
 Vygeneruje je `pwsh scripts/init-secrets.ps1` — skript je idempotentní, existující
 hodnoty nepřepisuje a heslo rovnou přepíše i v běžícím PostgreSQL (`ALTER USER`).
@@ -2241,6 +2281,42 @@ skript použije UFW (nic dovnitř kromě `tailscale0`, `DOCKER-USER` v `/etc/ufw
 první běh přes veřejné SSH potřebuje `GEX_SSH_CIDR=<IP PC>/32`, jinak by zapnutí UFW SSH
 zavřelo. Poskytovatel bez cloudového firewallu (netcup) má jen UFW, proto `nmap` zvenku vždy.
 Větev UFW zatím na serveru neběžela (ověřená jen `shellcheck` v CI).
+
+### Formát balíčku úplné zálohy (#1799)
+
+`gexlens-zaloha-<RRRR-MM-DD_HHMM>-<sha7>.tar` (čas UTC, `sha7` revize image, u lokálního
+buildu `dev`): nekomprimovaný tar ve formátu PAX, který přečte `tar.exe` ve Windows i GNU tar.
+Členy v pořadí:
+
+| Člen | Obsah |
+|---|---|
+| `RESTORE.md` | Návod k obnově česky (šablona `api/src/gexlens_api/restore_template.md`) s hodnotami z manifestu a seznamem tajemství k doplnění |
+| `config/env.template` | Klíče `.env` z prostředí API (`env_file: .env`) s hodnotami. Tajemství mají prázdnou hodnotu, klíče nastavované compose (`*_DATABASE_URL`, `*_DATA_DIR`, `*_API_BASE`, `GEXLENS_IBKR_HOST`) jsou jen komentář |
+| `config/secret-keys.txt` | Jen jména tajemství, která jsou na zdroji nastavená; hodnoty patří do správce hesel (Rozhodnuto 12. 11. v #1094) |
+| `postgres/gexlens.dump` | `pg_dump -Fc --no-owner --no-privileges` celé databáze |
+| `data/…` | Datový adresář (kap. 6) |
+| `manifest.json` | **Poslední člen**. sha256 se počítá během streamu, takže se data čtou jen jednou. Hash má pevnou délku, a tak je velikost manifestu známá předem |
+
+`manifest.json`: `format` (`gexlens-zaloha`), `format_version` (1), `mode` (`full` | `meta`),
+`created_utc`, `source_host`, `image_sha`, `image_tag`, `pg_server_version`, `market_open`,
+`live_window_hours` (24), `live_note`, `day_ranges` (rozsah dní podle data v názvu souboru
+po adresářích první úrovně `data/`), `files` (`path`, `size`, `sha256`, `live`). V režimu
+`meta` manifest vyjmenovává i soubory `data/` s hashem v okamžiku zálohy. Restic je ale
+zálohuje až potom, takže soubor s `live: true` se mezitím může změnit; obnova (#1800) má
+u nich nesoulad brát jako upozornění, ne jako chybu.
+
+- **Klasifikace klíčů:** jediná konstanta `full_backup.ENV_KEY_KINDS` zařazuje každý klíč
+  `.env.example`, i zakomentovaný, jako tajemství, konfiguraci, nebo klíč nastavovaný compose.
+  Test shodí nový klíč bez zařazení i zařazení klíče, který z `.env.example` zmizel. Klíč
+  v prostředí, který v konstantě není, se bere jako tajemství a jeho hodnota se vynechá.
+  Jako tajemství se kromě hesel a tokenů vedou i osobní údaje (`IBKR_DATA_USERID`,
+  `GEXLENS_NEWS_UA_CONTACT`, `GEXLENS_PUSH_TELEGRAM_CHAT_ID`).
+- **Jméno stroje** (`source_host`) je hostname kontejneru API: na PC `${COMPUTERNAME}`
+  (`compose.yml`), na serveru `${GEX_HOSTNAME:-gex-server}` (`compose.server.yml`, táž proměnná jako v `bootstrap.sh`). Jiná služba, která bude
+  CLI spouštět (`ops`, F7a), potřebuje vlastní `hostname`.
+- **Revize image** (`image_sha`) jde z build-argu `GEXLENS_BUILD_SHA` workflow Images
+  (`docker/python.Dockerfile`, smoke test ji vyžaduje), lokální build nese `dev`.
+  `image_tag` je pin z `GEXLENS_API_TAG` / `GEXLENS_IMAGE_TAG`, jinak `latest`.
 
 ### Návrat zpět (rollback)
 

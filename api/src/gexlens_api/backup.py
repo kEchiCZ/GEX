@@ -134,7 +134,11 @@ def build_backup_router(
         return StreamingResponse(
             stream_dump(database_url),
             media_type=DUMP_MEDIA_TYPE,
-            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{name}"',
+                # Dump -Fc je komprimovaný; GZipMiddleware by ho jen znovu balil (#1799)
+                "Content-Encoding": "identity",
+            },
         )
 
     return router

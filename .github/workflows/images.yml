@@ -70,7 +70,8 @@ jobs:
             file: docker/python.Dockerfile
             title: gexlens-python
             description: GEXLens engine / api / news-engine (jeden image, tři služby)
-            build-args: ""
+            # Revize do manifestu úplné zálohy (#1799, GEXLENS_BUILD_SHA)
+            build-args: GEXLENS_BUILD_SHA=${{ github.sha }}
           - image: gex-frontend
             file: docker/frontend.Dockerfile
             title: gexlens-frontend
@@ -122,6 +123,10 @@ jobs:
           import curl_cffi, matplotlib, numpy, pandas, psycopg, uvloop
           import pyarrow as pa, pyarrow.parquet as pq
           import gexlens_api, gexlens_engine, gexlens_news
+          import os
+          from importlib import resources
+          assert len(os.environ["GEXLENS_BUILD_SHA"]) == 40, "chybí revize image (#1799)"
+          assert resources.files("gexlens_api").joinpath("restore_template.md").read_text()
           assert psycopg.pq.__impl__ == "binary", psycopg.pq.__impl__
           pq.write_table(pa.table({"x": numpy.arange(3.0)}), "/tmp/smoke.parquet")
           assert pq.read_table("/tmp/smoke.parquet").column("x").to_pylist() == [0.0, 1.0, 2.0]

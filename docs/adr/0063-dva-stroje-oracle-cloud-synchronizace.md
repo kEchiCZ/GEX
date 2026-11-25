@@ -95,7 +95,8 @@ takže PC se po nasazení chová jako dnes; server dostane roli prohlížení u�
 ### 4. Synchronizace = záloha + obnova
 Synchronizace stojí na téže záloze, kterou stroj dělá každou noc (restic):
 1. snímek **teď** na zdroji: celá DB (`pg_dump`) a `data/` bez `logs/` a bez `local/` (bod 3),
-   manifest se sha256 (obsah zálohy #1799);
+   manifest se sha256 (obsah zálohy #1799; úplný výčet vyloučených částí včetně `ticks/`,
+   `backup/tmp/` a `*.tmp` je v ADMIN-MANUAL kap. 6);
 2. přenos jen rozdílu (deduplikace restic);
 3. obnova na cíli s **výměnou DB**: nová DB vedle běžící, ověření, přejmenování; předchozí DB
    zůstává jako pojistná a nemaže se bez dumpu v repu s tagem `pred-obnovou` (#1800).

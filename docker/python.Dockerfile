@@ -58,4 +58,9 @@ RUN useradd --system --uid 10001 --user-group --create-home --home-dir /home/gex
 COPY docker/entrypoint.sh /usr/local/bin/gexlens-entrypoint
 RUN chmod +x /usr/local/bin/gexlens-entrypoint
 ENV HOME=/home/gexlens
+# Revize commitu do manifestu úplné zálohy (#1799); workflow Images ji předá
+# jako build-arg, lokální build (`deploy -Build`) nese `dev`. Až na konci, ať
+# nová revize nezneplatní cache vrstev se závislostmi.
+ARG GEXLENS_BUILD_SHA=dev
+ENV GEXLENS_BUILD_SHA=${GEXLENS_BUILD_SHA}
 ENTRYPOINT ["/usr/local/bin/gexlens-entrypoint"]
