@@ -16,6 +16,21 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-11-25 — `docker compose config` vypsal do konzole heslo PG (#1800).**
+  Kontrola sloučeného override (kam míří `/app/data`) šla přes `docker compose config | grep -A3`
+  s filtrem `-v -i password`. `config` ale vypisuje rozvinuté hodnoty `.env` a `environment:`
+  a heslo je i uvnitř `GEXLENS_DATABASE_URL`, které slovo „password“ neobsahuje. Filtr ho proto
+  pustil. → `docker compose config` nikdy nevypisovat celé ani s filtrem na jména. Mounty ověřit
+  přes `docker compose config --format json` a `jq` jen na `.services.<s>.volumes`, služby přes
+  `config --services`. Totéž platí pro `docker inspect … .Config.Env`. Po úniku navrhnout rotaci
+  (ADMIN-MANUAL kap. 14 „Tajemství“).
+- **2026-11-25 — klient PostgreSQL 17 shodí obnovu do serveru 16 (`transaction_timeout`, #1800).**
+  Lokální test obnovy z Windows (PostgreSQL 17 v `C:\Program Files`) skončil chybou `unrecognized
+  configuration parameter "transaction_timeout"`. Dump i obnovu tam dělal klient 17, který pošle
+  serveru 16 `SET transaction_timeout = 0`, a `pg_restore --single-transaction` skončí. → Dump a obnovu dělat klientem verze
+  serveru: v image `gex-python` (klient 16), v CI krok s klientem 16 na PATH. Integrační test
+  s PG na PC pouštět v kontejneru z image, ne z venv ve Windows.
+
 - **2026-11-20 — `bootstrap.sh` zapsal konfiguraci zram a hlásil úspěch, swap ale běžel s výchozími lz4 / 256 MiB (#1802).**
   Konfigurace šla do `/etc/default/zram-tools` podle jména balíku, `zramswap` z zram-tools 0.3
   čte `/etc/default/zramswap` a chybějící soubor tiše nahradí výchozími hodnotami; kontrola
