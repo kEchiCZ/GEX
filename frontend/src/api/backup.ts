@@ -7,7 +7,8 @@ Dialog se musí otevřít ještě v aktivaci kliku (Chrome ji drží ~5 s), prot
 až po čekání na data: dump PG má hlavičky hned, úplná záloha si předem vyžádá
 lístek a dialog otevře před minutou přípravy balíčku.
 
-Jinde (mobil) spadne dump PG na stažení přes blob a úplná záloha na nativní
+Jinde (Firefox, Chrome pro Android před verzí 132) spadne dump PG na stažení
+přes blob a úplná záloha na nativní
 stažení prohlížečem. To hlavičku s tokenem poslat neumí a token do URL nesmí
 (historie prohlížeče, access log), proto jde přes jednorázový lístek
 `POST /backup/full/ticket` (platí 5 min a jednou). Která cesta se použila, se

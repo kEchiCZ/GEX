@@ -1522,14 +1522,14 @@ Light téma:
   s hodnotami, ale **bez tajemství**. Jména tajemství jsou v `RESTORE.md` uvnitř
   balíčku, hodnoty doplníš ze správce hesel. Ukládej mimo disk s aplikací
   (externí disk), ne do repozitáře.
-  - **Chrome a Edge:** hned po kliknutí se otevře dialog „Uložit jako“ se jménem
+  - **Chrome a Edge** (i Chrome na Androidu od verze 132): hned po kliknutí se otevře dialog „Uložit jako“ se jménem
     `gexlens-zaloha-<datum>_<čas>-<revize>.tar`. Pak server balíček připraví
     (dump databáze a kopie dnešních partic, pod tlačítkem „Připravuji balíček…“)
     a záloha teče rovnou do souboru. Pod tlačítkem běží **stažené MB / celkem**
     s pruhem a **odhad zbývajícího času**, na konci „Dokončuji zápis souboru na
     disk…“: Chrome soubor do té doby píše vedle jako `.crswap` a teprve teď ho
     přesune na místo. Data tečou rovnou do souboru a v paměti tabu se nehromadí.
-  - **Jiný prohlížeč** (Safari na iPhonu, Firefox): stažení převezme prohlížeč
+  - **Prohlížeč bez výběru místa** (Firefox, starší Chrome): stažení převezme prohlížeč
     a průběh ukazuje jeho seznam stažených souborů. API token se do adresy
     nedává: aplikace si vyžádá jednorázový lístek, který platí 5 minut
     a jen jednou.

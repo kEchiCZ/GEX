@@ -1239,7 +1239,7 @@ jsou v kap. 14 „Formát balíčku úplné zálohy“.
   (`secrets/ibkr_password`) leží mimo `data/` a do balíčku se nedostane.
 - **Spuštění:** tlačítko Settings → Záloha → „Úplná záloha“ (F4 #1801, uživatelský manuál
   kap. 13), `GET /backup/full` s hlavičkou `X-GEXLens-Token`, nebo CLI v kontejneru API.
-  Nativní stažení prohlížečem (mobil, prohlížeč bez File System Access API) hlavičku poslat
+  Nativní stažení prohlížečem (prohlížeč bez File System Access API, např. Firefox) hlavičku poslat
   neumí a token do URL nesmí: UI si vyžádá jednorázový lístek `POST /backup/full/ticket`
   (za tokenem) a stáhne `GET /backup/full?ticket=…`. Lístek platí 5 min, spotřebuje se prvním
   použitím (i neúspěšným) a drží se v paměti procesu API (jeden proces uvicornu); restart API

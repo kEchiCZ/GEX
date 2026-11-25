@@ -4,7 +4,7 @@ Obě cesty ukládání se skutečnými streamy prohlížeče, které jsdom jen n
 
 - Chrome/Edge: `showSaveFilePicker` (nahrazený zapisovačem, který bajty jen
   počítá — nativní dialog headless neotevře) a stream odpovědi do souboru;
-- jiný prohlížeč (mobil): nativní stažení s jednorázovým lístkem v URL.
+- prohlížeč bez File System Access API (Firefox): nativní stažení s jednorázovým lístkem v URL.
 
 REST je mockovaný; API token z localStorage nesmí skončit v žádné URL.
 */

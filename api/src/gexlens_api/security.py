@@ -6,7 +6,7 @@ Model hrozby: API nemá uživatele ani role — chrání se dvě různé věci.
    respektive přihlášený uživatel z UI. Sdílené tajemství z `GEXLENS_API_TOKEN`
    stačí a nevyžaduje session vrstvu. Bez nastaveného tokenu se endpointy
    odmítají (503) — otevřený režim by se na serveru tiše přenesl do provozu.
-   Nativní stažení prohlížečem (úplná záloha na mobilu, #1801) hlavičku poslat
+   Nativní stažení prohlížečem bez File System Access API (úplná záloha, #1801) hlavičku poslat
    neumí; dostane proto jednorázový lístek do URL. Token sám do URL nejde
    nikdy — zůstal by v historii prohlížeče a v access logu.
 2. **Odposlech WS** (`/ws/live`). Tady token nepomůže: útok vede přes prohlížeč

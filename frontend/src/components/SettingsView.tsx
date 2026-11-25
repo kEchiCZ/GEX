@@ -645,8 +645,8 @@ Sběr dat se na ~1–2 minuty přeruší.`)
               jobů; bez ticků a logů) a <strong>nastavení</strong> — klíče <code>.env</code> s
               hodnotami, ale <strong>bez tajemství</strong>. Jejich jména jsou v{' '}
               <code>RESTORE.md</code> v balíčku, hodnoty doplníš ze správce hesel. V Chrome a Edge
-              vybereš místo a záloha teče rovnou na disk s průběhem; jinde (mobil) ji stáhne
-              prohlížeč do svých stažených souborů. Ukládej mimo disk s aplikací.{' '}
+              (i na Androidu) vybereš místo a záloha teče rovnou na disk s průběhem; jinde (Firefox)
+              ji stáhne prohlížeč do svých stažených souborů. Ukládej mimo disk s aplikací.{' '}
               <strong>Obnova</strong> je příkaz na hostiteli, ne tlačítko: na PC{' '}
               <code>.\scripts\restore.ps1 -Source &lt;balíček&gt;</code>, na serveru{' '}
               <code>scripts/restore.sh &lt;balíček&gt;</code> (admin manuál, kap. 14).
@@ -705,7 +705,7 @@ Sběr dat se na ~1–2 minuty přeruší.`)
               Sdílené tajemství <code>GEXLENS_API_TOKEN</code> z lokálního <code>.env</code> (#542).
               Bez něj API obě zálohy odmítne — nesou celý archiv, takže nesmí být ke stažení bez
               ověření. Zůstává jen v tomhle prohlížeči, na server se neukládá; do adresy stažení
-              nejde nikdy (mobil dostane jednorázový lístek na 5 min).
+              nejde nikdy (prohlížeč bez výběru místa dostane jednorázový lístek na 5 min).
             </>
           }
         >
