@@ -90,7 +90,11 @@ PROGRESS_BYTES = 1 << 30
 
 
 class RestoreError(RuntimeError):
-    """Obnova skončila; text říká proč a co se v cíli změnilo."""
+    """Obnova skončila a cíl zůstal beze změny (kromě pojistného dumpu)."""
+
+
+class PartialRestoreError(RestoreError):
+    """PG je obnovená, `data/` jen zčásti: obnovu je potřeba zopakovat (CLI kód 2)."""
 
 
 # ── Manifest a cesty ──────────────────────────────────────────────────
@@ -804,11 +808,19 @@ def run_restore(
             swap_db=swap_db,
             report=report,
         )
-        if is_tar:
-            _apply_tar(source, verification, apply)
-        else:
-            _apply_dir(source, verification, apply)
-        apply.finish()
+        try:
+            if is_tar:
+                _apply_tar(source, verification, apply)
+            else:
+                _apply_dir(source, verification, apply)
+            apply.finish()
+        except Exception as exc:
+            if not apply.pg_done:
+                raise
+            raise PartialRestoreError(
+                f"{exc} — PG už je obnovená, data/ jen zčásti: spusť obnovu znovu "
+                "s --overwrite (shodné soubory se přeskočí)"
+            ) from exc
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -905,8 +917,11 @@ def main(argv: list[str] | None = None) -> int:
             swap_db=args.swap_db,
             on_verified=_print_warnings,
         )
+    except PartialRestoreError as exc:
+        print(f"Obnova nedokončena: {exc}", file=sys.stderr)
+        return 2
     except (RuntimeError, ValueError, OSError, SQLAlchemyError) as exc:
-        print(f"Obnova selhala: {exc}", file=sys.stderr)
+        print(f"Obnova selhala, cíl zůstal beze změny: {exc}", file=sys.stderr)
         return 1
     print(render_report(report))
     return 0

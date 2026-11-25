@@ -541,9 +541,9 @@ def _restore_text(
             else "pin image nejde (lokální build), poběží `latest`"
         ),
         "data_step": (
-            "Přesuň `<rozbalený>/data` do kořene repozitáře"
+            "Balíček se nerozbaluje, obnova ho čte přímo."
             if mode == "full"
-            else "Obnov `data/` z repa restic (`restic restore`) do kořene repozitáře"
+            else "Obnov `data/` z repa restic (`restic restore`) do adresáře s tímto souborem."
         ),
         "pg_version": info.pg_version,
         "mode": mode,

@@ -350,6 +350,38 @@ def test_zdroj_v_zalohovanych_datech_cile_se_odmitne(tmp_path: Path, fake_pg: Fa
         _restore(inside, target)
 
 
+def test_selhani_po_obnove_pg_je_rozpracovany_cil(
+    tmp_path: Path, fake_pg: FakePg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _package(tmp_path, _source_data(tmp_path / "zdroj"))
+
+    def full_disk(*args: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(restore._Apply, "write_data", full_disk)
+    with pytest.raises(restore.PartialRestoreError, match="PG už je obnovená"):
+        _restore(package, tmp_path / "cil")
+    assert len(fake_pg.restores) == 1
+
+
+def test_cli_rozpracovany_cil_vraci_2(
+    tmp_path: Path,
+    fake_pg: FakePg,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    package = _package(tmp_path, _source_data(tmp_path / "zdroj"))
+    monkeypatch.chdir(tmp_path)  # bez .env
+    monkeypatch.setenv("GEXLENS_DATA_DIR", str(tmp_path / "cil"))
+
+    def full_disk(*args: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(restore._Apply, "write_data", full_disk)
+    assert restore.main([str(package)]) == 2
+    assert "Obnova nedokončena" in capsys.readouterr().err
+
+
 # ── Výměna DB (podvržená) ─────────────────────────────────────────────
 
 
