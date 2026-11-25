@@ -45,13 +45,59 @@ class HistoricalClientLike(Protocol):
 
 MinuteBarCallback = Callable[[Bar], None]
 
+#: 5s bary jedné minuty (:00, :05 … :55) — minuta je úplná, jen když přišly všechny (#1876)
+SLOTS_PER_MINUTE = 12
+SLOT_SECONDS = 5
+
+
+@dataclass(frozen=True)
+class IncompleteMinute:
+    """Minuta, kterou 5s bary IBKR nepokryly celou (#1876).
+
+    Vzniká po reconnectu nebo `restart_bars` (stream začne uprostřed minuty),
+    před výpadkem (useknutý konec) i dírou uvnitř minuty. Takový bar nese jen
+    část objemu a open/high/low ze zbytku minuty, proto ho konzumenti nedostanou.
+    `missing` = sekundy začátků chybějících 5s barů.
+    """
+
+    bar: Bar
+    missing: tuple[int, ...]
+
+    def describe(self) -> str:
+        """Např. „5s bary 6/12, chybí :00–:25“ — do logu, ať jde poznat start, konec i díru."""
+        present = SLOTS_PER_MINUTE - len(self.missing)
+        ranges: list[tuple[int, int]] = []
+        for second in self.missing:
+            if ranges and second == ranges[-1][1] + SLOT_SECONDS:
+                ranges[-1] = (ranges[-1][0], second)
+            else:
+                ranges.append((second, second))
+        text = ", ".join(
+            f":{first:02d}" if first == last else f":{first:02d}–:{last:02d}"
+            for first, last in ranges
+        )
+        return f"5s bary {present}/{SLOTS_PER_MINUTE}, chybí {text}"
+
+
+IncompleteMinuteCallback = Callable[[IncompleteMinute], None]
+
 
 class RealTimeBarAggregator:
-    """Agreguje 5s bary z reqRealTimeBars do 1min barů (SPEC 3.6)."""
+    """Agreguje 5s bary z reqRealTimeBars do 1min barů (SPEC 3.6).
 
-    def __init__(self, on_minute_bar: MinuteBarCallback) -> None:
+    Uzavřená minuta jde do `on_minute_bar`, jen když ji 5s bary pokryly celou
+    (:00 až :55 bez díry, #1876). Jinak jde do `on_incomplete_minute`: bar
+    první minuty po reconnectu (24. 11. 05:27 UTC ES objem 17) by jinak
+    přebil úplný bar z tasty a v partici zůstal jako změřený.
+    """
+
+    def __init__(
+        self, on_minute_bar: MinuteBarCallback, on_incomplete_minute: IncompleteMinuteCallback
+    ) -> None:
         self._on_minute_bar = on_minute_bar
+        self._on_incomplete_minute = on_incomplete_minute
         self._current: Bar | None = None
+        self._slots: set[int] = set()
 
     @property
     def current(self) -> Bar | None:
@@ -60,8 +106,11 @@ class RealTimeBarAggregator:
 
     def add_5s_bar(self, bar: Bar) -> None:
         minute_start = bar.ts.replace(second=0, microsecond=0)
+        slot = bar.ts.second // SLOT_SECONDS
         current = self._current
-        if current is None:
+        if current is None or minute_start != current.ts:
+            if current is not None:
+                self._close(current)
             self._current = Bar(
                 ts=minute_start,
                 open=bar.open,
@@ -70,18 +119,9 @@ class RealTimeBarAggregator:
                 close=bar.close,
                 volume=bar.volume,
             )
+            self._slots = {slot}
             return
-        if minute_start != current.ts:
-            self._on_minute_bar(current)
-            self._current = Bar(
-                ts=minute_start,
-                open=bar.open,
-                high=bar.high,
-                low=bar.low,
-                close=bar.close,
-                volume=bar.volume,
-            )
-            return
+        self._slots.add(slot)
         self._current = Bar(
             ts=current.ts,
             open=current.open,
@@ -91,12 +131,25 @@ class RealTimeBarAggregator:
             volume=current.volume + bar.volume,
         )
 
+    def _close(self, bar: Bar) -> None:
+        missing = tuple(
+            slot * SLOT_SECONDS for slot in range(SLOTS_PER_MINUTE) if slot not in self._slots
+        )
+        if missing:
+            self._on_incomplete_minute(IncompleteMinute(bar=bar, missing=missing))
+        else:
+            self._on_minute_bar(bar)
+
     def flush(self) -> Bar | None:
-        """Uzavře a emituje rozpracovanou minutu (konec seance / odpojení)."""
+        """Uzavře rozpracovanou minutu (konec seance / odpojení) a vrátí ji.
+
+        Úplná jde do `on_minute_bar`, neúplná do `on_incomplete_minute`.
+        """
         current = self._current
         self._current = None
         if current is not None:
-            self._on_minute_bar(current)
+            self._close(current)
+        self._slots = set()
         return current
 
 

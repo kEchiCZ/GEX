@@ -30,7 +30,7 @@ from gexlens_engine.ibkr.discovery import (
 )
 from gexlens_engine.ibkr.mock import MockIB, MockOIFetcher, MockQuoteStreamer
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
-from gexlens_engine.ibkr.underlying import Bar
+from gexlens_engine.ibkr.underlying import Bar, IncompleteMinute
 from gexlens_engine.instruments import (
     CYCLE_PHASE_S,
     OI_ARCHIVE_RESERVE_S,
@@ -63,6 +63,7 @@ from gexlens_engine.storage.oi_archive import (
     OIRecord,
 )
 from gexlens_engine.storage.parquet_store import (
+    BAR_SOURCE_HISTORICAL,
     BAR_SOURCE_TASTY_TRADES,
     LevelsRow,
     NetFlowRow,
@@ -1004,7 +1005,12 @@ async def test_prvni_archiv_po_davkach_bez_soubehu_se_sweepem_ani_symbolem(
     po_okne = settings.oi_publication_utc(TS.date()) + dt.timedelta(hours=1)
 
     async def sweep(
-        ts_min: dt.datetime, spot: float, bars: object, forming_bar: object = None
+        ts_min: dt.datetime,
+        spot: float,
+        bars: object,
+        forming_bar: object = None,
+        *,
+        gaps: object = (),
     ) -> SweepMetrics:
         sweeping[0] = True
         for _ in range(5):  # pustí ke slovu úlohy na pozadí
@@ -1878,7 +1884,12 @@ def stub_sweep(pipeline: InstrumentPipeline, monkeypatch: pytest.MonkeyPatch) ->
     """
 
     async def cycle(
-        ts_min: dt.datetime, spot: float, bars: object, forming_bar: object = None
+        ts_min: dt.datetime,
+        spot: float,
+        bars: object,
+        forming_bar: object = None,
+        *,
+        gaps: object = (),
     ) -> SweepMetrics:
         return SweepMetrics(
             total=6, greeks_complete=6, repair_count=0, stale_count=0, sweep_duration_s=0.0
@@ -2375,7 +2386,12 @@ async def test_obnova_oi_po_davkach_neblokuje_cyklus_ani_sweep(
     sweeps: list[float] = []
 
     async def sweep(
-        ts_min: dt.datetime, spot: float, bars: object, forming_bar: object = None
+        ts_min: dt.datetime,
+        spot: float,
+        bars: object,
+        forming_bar: object = None,
+        *,
+        gaps: object = (),
     ) -> SweepMetrics:
         sweeping[0] = True
         sweeps.append(clock.t)
@@ -3552,3 +3568,113 @@ async def test_straz_kontraktu_tasty_bar_nepouzije(
     await pipeline.run_minute(TS + dt.timedelta(minutes=6))  # IBKR mlčí
 
     assert [len(batch) for batch in seen["setups"]] == [1, 1, 1, 1, 1, 1, 0]
+
+
+# ── Neúplný bar IBKR (#1876) ───────────────────────────────────────
+
+
+def _incomplete(ts: dt.datetime, first_second: int, volume: float) -> IncompleteMinute:
+    """Minuta, jejíž 5s bary přišly až od `first_second` (start po reconnectu)."""
+    bar = Bar(ts=ts, open=7600.0, high=7600.5, low=7599.5, close=7600.25, volume=volume)
+    return IncompleteMinute(bar=bar, missing=tuple(range(0, first_second, 5)))
+
+
+async def test_neuplny_bar_ibkr_po_reconnectu_ustoupi_baru_z_tasty(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#1876 (24. 11. 05:27 UTC, Error 1100): 5s bary minuty TS přišly až od :30 (ES
+    objem 17). Cyklus TS zapsal provizorní bar, v TS+1 ho agregátor ohlásil jako
+    neúplný — konzumenti i partice mají úplný bar z tasty a log řekne proč."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    closes = {TS: 7650.0}
+    pipeline.tasty_bar = _tasty_bar_source(closes)
+    seen = _recording_consumers(pipeline)
+    partial = Bar(ts=TS, open=7600.0, high=7600.5, low=7599.5, close=7600.0, volume=9.0)
+    pipeline.forming_bar = lambda: partial
+    caplog.set_level(logging.INFO, logger="gexlens_engine.instruments")
+
+    await pipeline.run_minute(TS)  # provizorní bar minuty TS (ADR-0005)
+    pipeline.forming_bar = lambda: None
+    pipeline.incomplete_minutes.append(_incomplete(TS, 30, 17.0))
+    await pipeline.run_minute(TS + dt.timedelta(minutes=1))
+
+    tasty = _tasty_bar_source(closes)(TS)
+    assert tasty is not None
+    assert seen["setups"] == [[], [tasty.bar]]
+    assert seen["paper"] == seen["setups"]
+    stored = read_bars(
+        settings.derived_dir, "ES", TS - dt.timedelta(minutes=2), TS + dt.timedelta(minutes=2)
+    )
+    assert [(bar.ts, bar.close, bar.volume, bar.source) for bar in stored] == [
+        (TS, 7650.0, 100.0, BAR_SOURCE_TASTY_TRADES)
+    ]
+    assert (
+        "Neúplný bar IBKR ES 15:00 nepoužit (5s bary 6/12, chybí :00–:25, objem 17) "
+        "— minutu dodala tasty"
+    ) in caplog.text
+    assert pipeline.incomplete_minutes == []
+
+
+async def test_neuplny_bar_ibkr_bez_baru_z_tasty_je_mezera_i_v_partici(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#1876: minuta, kterou tasty nedodala, zůstane mezerou — konzumenti nedostanou nic
+    a provizorní bar zmizí i z partice, ať ji doplní backfill z IBKR historical.
+    Doplněný řádek (`ibkr_hist`) zůstává a pozdní neúplný bar minuty, kterou už
+    dodala tasty, nic nesmaže."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    before = TS - dt.timedelta(minutes=1)
+    hist_minute = TS - dt.timedelta(minutes=2)
+    closes = {before: 7640.0}  # TS−1 dodá tasty, TS ne
+    pipeline.tasty_bar = _tasty_bar_source(closes)
+    seen = _recording_consumers(pipeline)
+    hist = Bar(
+        ts=hist_minute,
+        open=7630.0,
+        high=7631.0,
+        low=7629.0,
+        close=7630.0,
+        volume=40.0,
+        source=BAR_SOURCE_HISTORICAL,
+    )
+    writer.write_bars_by_day("ES", [hist])
+    partial = Bar(ts=TS, open=7600.0, high=7600.5, low=7599.5, close=7600.0, volume=9.0)
+    pipeline.forming_bar = lambda: partial
+    caplog.set_level(logging.INFO, logger="gexlens_engine.instruments")
+
+    await pipeline.run_minute(TS)  # bar TS−1 z tasty, provizorní bar TS
+    pipeline.forming_bar = lambda: None
+    pipeline.incomplete_minutes.extend(
+        [
+            _incomplete(hist_minute, 50, 3.0),
+            _incomplete(before, 10, 30.0),
+            _incomplete(TS, 30, 17.0),
+        ]
+    )
+    await pipeline.run_minute(TS + dt.timedelta(minutes=1))
+
+    tasty = _tasty_bar_source(closes)(before)
+    assert tasty is not None
+    assert seen["setups"] == [[tasty.bar], []]
+    stored = read_bars(
+        settings.derived_dir, "ES", TS - dt.timedelta(minutes=3), TS + dt.timedelta(minutes=2)
+    )
+    assert [(bar.ts, bar.close, bar.source) for bar in stored] == [
+        (hist_minute, 7630.0, BAR_SOURCE_HISTORICAL),
+        (before, 7640.0, BAR_SOURCE_TASTY_TRADES),
+    ]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert [m for m in warnings if m.startswith("Neúplný bar IBKR")] == [
+        "Neúplný bar IBKR ES 14:58 nepoužit (5s bary 2/12, chybí :00–:45, objem 3) "
+        "— bar z tasty není, minuta zůstává mezerou",
+        "Neúplný bar IBKR ES 15:00 nepoužit (5s bary 6/12, chybí :00–:25, objem 17) "
+        "— bar z tasty není, minuta zůstává mezerou",
+    ]
+    assert (
+        "Neúplný bar IBKR ES 14:59 nepoužit (5s bary 10/12, chybí :00–:05, objem 30) "
+        "— minutu dodala tasty"
+    ) in caplog.text

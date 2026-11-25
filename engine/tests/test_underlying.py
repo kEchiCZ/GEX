@@ -12,6 +12,7 @@ from gexlens_engine.ibkr.underlying import (
     BACKFILL_CONTRACT_TOLERANCE,
     Bar,
     BarsStallDetector,
+    IncompleteMinute,
     RealTimeBarAggregator,
     UnderlyingBackfiller,
     contract_mismatch,
@@ -56,13 +57,15 @@ def test_jiny_kontrakt_v_backfillu_se_pozna_podle_merenych_minut() -> None:
 
 def test_aggregates_twelve_5s_bars_into_one_minute() -> None:
     minutes: list[Bar] = []
-    aggregator = RealTimeBarAggregator(minutes.append)
+    incomplete: list[IncompleteMinute] = []
+    aggregator = RealTimeBarAggregator(minutes.append, incomplete.append)
 
     for second in range(0, 60, 5):
         aggregator.add_5s_bar(bar_5s(0, second, close=100.0 + second))
     aggregator.add_5s_bar(bar_5s(1, 0, close=200.0))  # překročení hranice minuty
 
     assert len(minutes) == 1
+    assert incomplete == []
     minute = minutes[0]
     assert minute.ts == dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
     assert minute.open == 100.0 - 0.25  # open prvního 5s baru
@@ -72,18 +75,68 @@ def test_aggregates_twelve_5s_bars_into_one_minute() -> None:
     assert minute.volume == 12.0
 
 
-def test_flush_emits_partial_minute() -> None:
+def _aggregate(
+    seconds_by_minute: dict[int, Sequence[int]],
+) -> tuple[list[Bar], list[IncompleteMinute]]:
     minutes: list[Bar] = []
-    aggregator = RealTimeBarAggregator(minutes.append)
+    incomplete: list[IncompleteMinute] = []
+    aggregator = RealTimeBarAggregator(minutes.append, incomplete.append)
+    for minute, seconds in seconds_by_minute.items():
+        for second in seconds:
+            aggregator.add_5s_bar(bar_5s(minute, second, close=100.0 + minute))
+    return minutes, incomplete
+
+
+def test_minuta_po_reconnectu_s_useknutym_koncem_i_s_dirou_neni_uplna() -> None:
+    """#1876 (24. 11. Error 1100): minuta před výpadkem končí 5s barem :45, první minuta
+    po reconnectu začíná :30 (ES objem 17 místo ~60). Konzumenti dostanou jen úplné
+    minuty; neúplné jdou zvlášť i s popisem chybějících 5s barů."""
+    full = range(0, 60, 5)
+    minutes, incomplete = _aggregate(
+        {
+            0: full,
+            1: range(0, 50, 5),  # useknutý konec (stream umřel v :50)
+            2: range(30, 60, 5),  # start po reconnectu
+            3: [s for s in full if s not in (20, 25)],  # díra uvnitř minuty
+            4: full,
+            5: [0],  # rozdělaná minuta, neuzavřená
+        }
+    )
+    t0 = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
+    assert [bar.ts for bar in minutes] == [t0, t0 + dt.timedelta(minutes=4)]
+    assert [(item.bar.ts, item.describe()) for item in incomplete] == [
+        (t0 + dt.timedelta(minutes=1), "5s bary 10/12, chybí :50–:55"),
+        (t0 + dt.timedelta(minutes=2), "5s bary 6/12, chybí :00–:25"),
+        (t0 + dt.timedelta(minutes=3), "5s bary 10/12, chybí :20–:25"),
+    ]
+    assert incomplete[1].bar.volume == 6.0  # agregát jen z toho, co přišlo
+
+
+def test_minuta_s_jedinym_5s_barem_a_neprilehle_diry_v_popisu() -> None:
+    _, incomplete = _aggregate({0: [0, 15, 55], 1: [0]})
+    assert [item.describe() for item in incomplete] == ["5s bary 3/12, chybí :05–:10, :20–:50"]
+    _, incomplete = _aggregate({0: [30], 1: [0]})
+    assert incomplete[0].missing == (0, 5, 10, 15, 20, 25, 35, 40, 45, 50, 55)
+
+
+def test_flush_emits_partial_minute_as_incomplete() -> None:
+    minutes: list[Bar] = []
+    incomplete: list[IncompleteMinute] = []
+    aggregator = RealTimeBarAggregator(minutes.append, incomplete.append)
     aggregator.add_5s_bar(bar_5s(0, 0, close=100.0))
     aggregator.add_5s_bar(bar_5s(0, 5, close=101.0))
 
     flushed = aggregator.flush()
 
-    assert len(minutes) == 1
+    assert minutes == []
+    assert [item.bar for item in incomplete] == [flushed]
     assert flushed is not None
     assert flushed.close == 101.0
     assert aggregator.flush() is None  # druhý flush nemá co emitovat
+    for second in range(0, 60, 5):
+        aggregator.add_5s_bar(bar_5s(1, second, close=102.0))
+    assert aggregator.flush() is not None
+    assert len(minutes) == 1  # úplná minuta po flushi nenese sloty předchozí
 
 
 # ── BarsStallDetector (#221) ───────────────────────────────────────

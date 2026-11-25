@@ -455,11 +455,15 @@ class EngineRuntime:
         spot: float,
         bars: Sequence[Bar],
         forming_bar: Bar | None = None,
+        *,
+        gaps: Sequence[dt.datetime] = (),
     ) -> SweepMetrics:
         """Jeden kompletní minutový cyklus (volaný smyčkou nebo testem); vrací metriky sweepu.
 
         `forming_bar` je rozdělaná agregace minuty `ts_min` (ADR-0005) — publikuje se
         i zapisuje jako provizorní, aby nejnovější sloupec mřížky měl svíčku hned.
+        `gaps` = minuty bez baru pro konzumenty (neúplný bar IBKR a žádný z tasty,
+        #1876): jejich provizorní bar se z partice smaže, minuta zůstane mezerou.
         """
         day = ts_min.date()
         metrics = await self.scheduler.sweep(self.contracts, spot)
@@ -1237,6 +1241,8 @@ class EngineRuntime:
             await asyncio.to_thread(
                 self.writer.write_bars_by_day, self.symbol, from_tasty, overwrite=True
             )
+        if gaps:
+            await asyncio.to_thread(self.writer.drop_live_bars, self.symbol, gaps)
         # Provizorní bar rozdělané minuty (ADR-0005) — zapisuje se až po finálních,
         # aby ho jejich upsert nepřepsal; patří-li jiné minutě, ignoruje se.
         provisional = forming_bar if forming_bar is not None and forming_bar.ts == ts_min else None

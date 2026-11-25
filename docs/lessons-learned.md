@@ -403,6 +403,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-11-25 — bar IBKR první minuty po reconnectu nesl jen půl minuty a přebil úplný bar z tasty (#1876).**
+  `RealTimeBarAggregator` skládal minutu z 5s barů, které právě přišly, a úplnost nesledoval. Po
+  Error 1100 začal stream v :30 a bar ES 24. 11. 05:27 UTC měl objem 17 místo ~60. Protože přišel
+  včas, vyhrál nad úplným barem z tasty. Pro tasty pravidlo úplnosti bylo (#1772), pro IBKR ne:
+  IBKR se bral jako měřený z definice.
+  → Každý zdroj baru dokládá úplnost minuty sám, i ten primární. Bar IBKR platí, jen když 5s bary
+  pokryly :00–:55 bez díry, jinak tasty nebo mezera. Mezera znamená smazat i provizorní zápis
+  (ADR-0005), jinak v partici zůstane zlomek minuty jako změřený.
 - **2026-11-24 — čerstvá kotace bez ceny: stáří neříká, že cena platí (#1869, #1871).** Odběr plánu
   QQQ i snímek řetězu cenu zahodí, když neplatí `0 ≤ bid ≤ ask` a `ask > 0`. K řádku ale uloží jen
   čerstvé stáří, důvod ne. 20. 11. tak měly puty plánu v RTH 21 a 8 minut s NULL bid/ask při stáří
