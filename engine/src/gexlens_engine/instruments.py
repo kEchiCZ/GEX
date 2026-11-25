@@ -57,7 +57,12 @@ from gexlens_engine.ibkr.scheduler import (
     RepairStallDetector,
     SweepMetrics,
 )
-from gexlens_engine.ibkr.underlying import BACKFILL_CONTRACT_TOLERANCE, Bar, BarsStallDetector
+from gexlens_engine.ibkr.underlying import (
+    BACKFILL_CONTRACT_TOLERANCE,
+    Bar,
+    BarsStallDetector,
+    IncompleteMinute,
+)
 from gexlens_engine.ivrank import IvRankCollector
 from gexlens_engine.mapstate import MapStateCollector
 from gexlens_engine.option_plan_eval import OptionPlanCollector
@@ -366,6 +371,8 @@ class InstrumentPipeline:
     oi_repository: OIEodRepository
     ticker: TickerLike
     minute_bars: list[Bar]
+    # Minuty, které 5s bary IBKR nepokryly celé (#1876) — konzumenti je nedostanou
+    incomplete_minutes: list[IncompleteMinute] = field(default_factory=list)
     # Rozdělaná minuta z agregátoru 5s barů (ADR-0005); None = zdroj ji neposkytuje
     forming_bar: Callable[[], Bar | None] = lambda: None
     on_stop: Callable[[], None] = lambda: None
@@ -1577,15 +1584,18 @@ class InstrumentPipeline:
 
         ibkr_bars = list(self.minute_bars)
         self.minute_bars.clear()
+        incomplete = list(self.incomplete_minutes)
+        self.incomplete_minutes.clear()
         forming = self.forming_bar()
         # Bar minuty se rozhodne jednou a stejný dostanou všichni konzumenti níž
         # (#1772): IBKR, za jeho výpadku bar z tisků tasty
         bars, from_tasty = self._minute_bars(now, ibkr_bars)
+        gaps = self._incomplete_gaps(incomplete)
         # Hlídání barů PŘED cyklem — alert musí odejít, i kdyby sweep selhal (#221).
         # Hlídá se stream IBKR: bar z tasty jeho výpadek nezakrývá
         await self._collect_news_ticks(now)
         await self._watch_bars(now, spot, ibkr_bars, forming, from_tasty=from_tasty)
-        metrics = await self.runtime.run_cycle(now, spot, bars, forming)
+        metrics = await self.runtime.run_cycle(now, spot, bars, forming, gaps=gaps)
         await self._watch_greeks(now, metrics)
         await self._watch_repair(now, metrics)
         try:
@@ -1907,6 +1917,37 @@ class InstrumentPipeline:
         self._tasty_minutes.append(minute)
         self._tasty_live += 1
         return sorted([*ibkr_bars, tasty.bar], key=lambda bar: bar.ts), True
+
+    def _incomplete_gaps(self, incomplete: Sequence[IncompleteMinute]) -> list[dt.datetime]:
+        """Neúplné bary IBKR (#1876): bar z tasty, jinak mezera.
+
+        Minutu, kterou 5s bary nepokryly celou, agregátor konzumentům nepředá,
+        takže `_minute_bars` ji vezme z tasty jako výpadek. Když ji tasty
+        nedodala, zůstane mezerou: vrací se minuty, jejichž provizorní bar
+        (ADR-0005) se smaže z partice. Díru pak doplní backfill z IBKR historical.
+        """
+        gaps: list[dt.datetime] = []
+        for item in incomplete:
+            minute = item.bar.ts
+            if minute in self._tasty_minutes:
+                logger.info(
+                    "Neúplný bar IBKR %s %s nepoužit (%s, objem %g) — minutu dodala tasty",
+                    self.symbol,
+                    minute.strftime("%H:%M"),
+                    item.describe(),
+                    item.bar.volume,
+                )
+                continue
+            logger.warning(
+                "Neúplný bar IBKR %s %s nepoužit (%s, objem %g) — bar z tasty není, "
+                "minuta zůstává mezerou",
+                self.symbol,
+                minute.strftime("%H:%M"),
+                item.describe(),
+                item.bar.volume,
+            )
+            gaps.append(minute)
+        return gaps
 
     async def _watch_bars(
         self,

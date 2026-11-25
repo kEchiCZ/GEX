@@ -439,6 +439,11 @@ zůstane mezerou — neúplná svíčka by lhala. Měření 23. 11. 2026: high a
 shodné s IBKR vždy, open a close nejvýš o tik u ES a o 2 body u NQ (tisk na
 hranici minut), objem ±0,2 %.
 
+Totéž platí pro IBKR (#1876): minutu, kterou real-time bary nepokryjí celou
+(první minuta po obnovení spojení, poslední před výpadkem), graf od IBKR
+nedostane. Svíčku pak dodá tastytrade, a když ani ta minutu nemá celou, zůstane
+mezerou. Dřív taková minuta nesla jen část objemu (24. 11. 05:27 UTC ES 17 místo ~60).
+
 Upozornění „Real-time bary … nechodí“ v tu chvíli řekne, že **bar minuty dodává
 tastytrade**, a nad grafem se ukáže banner *„Z tastytrade N min (od–do) …“*.
 Zavírá se křížkem stejně jako banner rekonstrukce. CumΔ a opční vrstva z IBKR

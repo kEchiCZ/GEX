@@ -1018,6 +1018,29 @@ class _PartitionBuffer:
         self._keys = (key, keys)
         return keys
 
+    def remove_and_write(
+        self, key: str, values: Sequence[object], *, drop: Callable[[dict[str, object]], bool]
+    ) -> int:
+        """Odebere řádky s klíčem z `values`, pro které platí `drop(row)` (#1876).
+
+        Do Pythonu jdou jen řádky vyjmenovaných klíčů. Vrací počet odebraných
+        řádků; bez shody se soubor nepřepisuje.
+        """
+        with self._write_lock:
+            self._ensure_loaded(key)
+            if not self._table.num_rows or not values:
+                return 0
+            column = self._table.column(key)
+            candidates = pc.is_in(column, value_set=pa.array(list(values), type=column.type))
+            doomed = [row[key] for row in self._table.filter(candidates).to_pylist() if drop(row)]
+            if not doomed:
+                return 0
+            keep = pc.invert(pc.is_in(column, value_set=pa.array(doomed, type=column.type)))
+            self._table = self._table.filter(keep)
+            self._keys = None
+            self._write()
+            return len(doomed)
+
     def replace_and_write(self, rows: Sequence[dict[str, object]]) -> Path:
         """Nahradí CELÝ obsah partice — řady typu „jen poslední stav" (gexfield).
 
@@ -1423,6 +1446,28 @@ class SnapshotWriter:
             self.write_bars(symbol, day, group, overwrite=overwrite)
             for day, group in sorted(by_day.items())
         ]
+
+    def drop_live_bars(self, symbol: str, minutes: Sequence[dt.datetime]) -> int:
+        """Smaže z partic bary živé cesty vyjmenovaných minut (#1876), vrací jejich počet.
+
+        Je to provizorní bar (ADR-0005) minuty, kterou 5s bary IBKR nepokryly
+        celou a tasty ji nedodala: konzumenti dostali mezeru, partice ji má mít
+        taky. Díru pak doplní backfill z IBKR historical, který změřenou minutu
+        nepřepíše. Řádky doplněného původu (`ibkr_hist`, tasty) zůstávají.
+        """
+        live = bar_source_rank(None)
+        removed = 0
+        by_day: dict[dt.date, list[dt.datetime]] = {}
+        for ts in minutes:
+            by_day.setdefault(bar_partition_day(ts), []).append(ts)
+        for day, group in sorted(by_day.items()):
+            path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
+            if not path.exists():
+                continue
+            removed += self._buffer(path, BARS_SCHEMA).remove_and_write(
+                "ts_min", group, drop=lambda row: bar_source_rank(row.get("source")) == live
+            )
+        return removed
 
     def measured_bar_closes(self, symbol: str, day: dt.date) -> dict[dt.datetime, float]:
         """Close měřených minut partice (živá cesta, i NULL ze starých partic) — #1232.

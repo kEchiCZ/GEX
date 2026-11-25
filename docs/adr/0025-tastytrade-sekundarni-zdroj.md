@@ -300,7 +300,7 @@ rozhoduje se jednou v `InstrumentPipeline._minute_bars`):
 | Minuta M−1 v cyklu M | Bar pro zápis, push, detektor, T9, paper | `source` v partici |
 |---|---|---|
 | Bar IBKR v dávce | IBKR | `ibkr` |
-| Bez baru IBKR, úplný bar z tisků tasty, stráž kontraktu OK | tasty | `tasty_trades` |
+| Bez baru IBKR (i neúplný bar IBKR, #1876), úplný bar z tisků tasty, stráž kontraktu OK | tasty | `tasty_trades` |
 | Bez baru IBKR, tasty neúplná nebo jiný kontrakt | mezera (jako dosud) | — (později `ibkr_hist` / `tasty_candle`) |
 | Pozdní bar IBKR minuty, kterou už konzumenti dostali z tasty | nedoručí se | `tasty_trades` zůstává |
 
@@ -314,6 +314,22 @@ rozhoduje se jednou v `InstrumentPipeline._minute_bars`):
   (`DxLinkStream.subscribed_at` ≤ M), první tisk streameru dorazil nejpozději v M (symbol přidaný
   do běžící subskripce, roll) a dorazil tisk s časem ≥ M + 1 min (stream neutichl). Jinak mezera.
   Nohy spreadů (`spreadLeg`) se nepočítají.
+- **Úplnost baru IBKR (#1876, vlastník 25. 11.: pravidlo A):** bar IBKR minuty M platí, jen když
+  ho 5s bary `reqRealTimeBars` pokryly celý, tedy :00 až :55 bez díry (12 barů,
+  `RealTimeBarAggregator`). Neúplný bar konzumenti nedostanou a minuta jde jako výpadek: bar
+  z tasty, jinak mezera. Při mezeře se provizorní bar minuty (ADR-0005) smaže z partice
+  (`SnapshotWriter.drop_live_bars`), takže ji doplní backfill z IBKR historical. Řádky `ibkr_hist`
+  a z tasty se nemažou. Každé vyřazení jde do logu `Neúplný bar IBKR {sym} HH:MM nepoužit
+  (5s bary N/12, chybí :SS–:SS, objem V)` s koncem „minutu dodala tasty“ (INFO), nebo „bar z
+  tasty není, minuta zůstává mezerou“ (WARNING). Pravidlo pokrývá všechny tři tvary chyby
+  z 24. 11.:
+  - start po reconnectu nebo `restart_bars` (05:27 UTC, 5s bary až od :30, ES objem 17 místo ~60);
+  - useknutý konec před výpadkem (05:26 UTC);
+  - díru uvnitř minuty bez resubskripce.
+
+  Otevřená mez: dokumentace IBKR neříká, zda 5s bar přijde i v okně bez obchodu. Kdyby nepřišel,
+  vyřadí pravidlo i úplnou klidnou minutu a ta dostane bar z tasty. Log to první noci ukáže
+  (díra uvnitř minuty bez reconnectu) a pravidlo se pak zúží na okraje minuty.
 - **Kontrakt (#1232):** `contract_mismatch` nad posledními 30 páry IBKR × tasty téže minuty;
   nad `BACKFILL_CONTRACT_TOLERANCE` se bar z tasty nepoužije. Málo párů = nelze rozhodnout →
   použije se (shodně s `_fill_bar_gaps`).

@@ -87,6 +87,7 @@ from gexlens_engine.ibkr.subscription import (
 from gexlens_engine.ibkr.underlying import (
     BACKFILL_CONTRACT_TOLERANCE,
     Bar,
+    IncompleteMinute,
     RealTimeBarAggregator,
     UnderlyingBackfiller,
     contract_mismatch,
@@ -1027,7 +1028,9 @@ async def create_pipeline(
 
     # Bary podkladu: 5s realtime bary → 1min agregace
     minute_bars: list[Bar] = []
-    aggregator = RealTimeBarAggregator(minute_bars.append)
+    # Minuty, které 5s bary nepokryly celé (#1876) — rozhodne o nich cyklus
+    incomplete_minutes: list[IncompleteMinute] = []
+    aggregator = RealTimeBarAggregator(minute_bars.append, incomplete_minutes.append)
     # Zdroje spotu se stářím pro minutový cyklus pod v6 (#1600, `compute/spot`):
     # poslední cena IBKR tickeru, close posledního 5s baru (čas = konec baru)
     # a poslední čerstvá kotace tasty — vždy s okamžikem, ke kterému platí
@@ -1511,6 +1514,7 @@ async def create_pipeline(
         oi_repository=oi_repository,
         ticker=fut_ticker,
         minute_bars=minute_bars,
+        incomplete_minutes=incomplete_minutes,
         forming_bar=lambda: aggregator.current,
         on_stop=on_stop,
         spot=spot,
