@@ -51,13 +51,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 from starlette.types import Receive, Scope, Send
 
 from gexlens_api.backup import dump_command, dump_env
+from gexlens_api.security import TOKEN_HEADER, OneTimeTickets
 from gexlens_engine.compute.marketclock import is_market_closed
 
 logger = logging.getLogger(__name__)
@@ -882,11 +883,35 @@ def build_full_backup_router(
     data_dir: Path,
     require_token: Callable[..., None] | None = None,
     environ: Mapping[str, str] | None = None,
+    tickets: OneTimeTickets | None = None,
 ) -> APIRouter:
-    guards = [Depends(require_token)] if require_token is not None else []
-    router = APIRouter(prefix="/backup", tags=["backup"], dependencies=guards)
+    router = APIRouter(prefix="/backup", tags=["backup"])
+    token_guard = [Depends(require_token)] if require_token is not None else []
+    issued = OneTimeTickets() if tickets is None else tickets
 
-    @router.get("/full")
+    def token_or_ticket(
+        ticket: str | None = Query(default=None),
+        supplied: str | None = Header(default=None, alias=TOKEN_HEADER),
+    ) -> None:
+        """Hlavička s tokenem (fetch z UI, curl), nebo jednorázový lístek (nativní stažení)."""
+        if ticket is not None:
+            if not issued.redeem(ticket):
+                raise HTTPException(
+                    401, "Lístek ke stažení neplatí — je použitý, prošlý (5 min) nebo neznámý"
+                )
+            return
+        if require_token is not None:
+            require_token(supplied)
+
+    @router.post("/full/ticket", dependencies=token_guard)
+    async def full_backup_ticket() -> dict[str, str]:
+        """Jednorázový lístek pro `GET /backup/full?ticket=…` (#1801) a navržené jméno souboru."""
+        env = os.environ if environ is None else environ
+        # Jméno jen pro dialog „Uložit jako“ před požadavkem; verze PG v něm není
+        info = source_info(env, dt.datetime.now(dt.UTC), pg_version="")
+        return {"ticket": issued.issue(), "filename": package_filename(info)}
+
+    @router.get("/full", dependencies=[Depends(token_or_ticket)])
     async def full_backup(request: Request) -> Response:
         """Úplná záloha (celá PG + data/ + konfigurace bez tajemství) jako tar."""
         if shutil.which("pg_dump") is None:
