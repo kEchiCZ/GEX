@@ -2332,11 +2332,14 @@ zastaví služby a připojí zdroj do kontejneru:
 | PC (Docker Desktop) | `.\scripts\restore.ps1 -Source <balíček.tar nebo adresář> [-Overwrite]` |
 | Server (Linux) | `scripts/restore.sh <balíček.tar nebo adresář> [--overwrite]` (`COMPOSE_FILE`, výchozí `compose.yml:compose.server.yml`) |
 | Dev stack na PC | `.\scripts\restore.ps1 -Source … -ComposeFile compose.dev.yml` (`data-dev/`, API :8011) |
-| Přímo | `docker compose run --rm --no-deps -T -v <zdroj>:/restore/x:ro api python -m gexlens_api.restore /restore/x [--overwrite] [--swap-db]` |
+| Přímo | `docker compose run --rm --no-deps -T -v <zdroj>:/restore/x:ro api python -m gexlens_api.restore /restore/x [--overwrite] [--swap-db]`; bez `--swap-db` musí engine, news-engine a api stát |
 
 Obal zastaví běžící zapisující služby (engine, news-engine, api; postgres a IB Gateway běží
 dál), spustí obnovu přes `docker compose run --rm` se zdrojem jen pro čtení, po úspěchu
-nastartuje stack (`up -d`) a ověří `/status`. Návratový kód obnovy: **0** hotovo, **1** cíl beze
+nastartuje stack (`up -d`) a ověří `/status`. Služby stojí po celou dobu obnovy včetně
+ověření zdroje a zastaví se i tehdy, když obnova hned skončí kvůli chybějícímu
+`--overwrite`. Na stroji, který sbírá data, proto obnovu spouštěj jen při zavřeném trhu nebo
+v pauze Globexu; synchronizace bez zastavení API je režim `--swap-db`. Návratový kód obnovy: **0** hotovo, **1** cíl beze
 změny (obal vrátí služby do stavu před obnovou), **2** PG je obnovená a `data/` jen zčásti
 (obal nechá služby zastavené, obnovu je potřeba spustit znovu s `--overwrite`; shodné soubory
 se přeskočí).
@@ -2358,13 +2361,23 @@ Kroky obnovy, každý až po úspěchu předchozího:
    `pg_restore`). Patří stroji, nezálohuje se ani nesynchronizuje a nic ho nemaže.
 5. **PG:** `pg_restore --clean --if-exists --single-transaction --no-owner --no-privileges`
    celé DB. Selhání = rollback, DB zůstane, jak byla. U balíčku jde dump nejdřív do
-   `data/backup/tmp/restore-*/` (kontrola sha256), po obnově se pracovní adresář smaže.
+   `data/backup/tmp/restore-*/` (kontrola sha256), po obnově se pracovní adresář smaže;
+   adresáře zabitých obnov starší 24 h uklidí další běh.
 6. **`data/`:** soubor po souboru přes `*.restore.tmp` a `os.replace` s kontrolou sha256 proti
    manifestu a s mtime ze zálohy. Bez zachovaného mtime by příští úplná záloha brala celý
    archiv jako živé soubory a kopírovala ho do `backup/tmp`. Shodný soubor (velikost
-   i sha256) se přeskočí. Soubory navíc v cíli zůstávají (data se nemažou) a `data/local/`
-   se nikdy nepřepisuje.
-7. **Výpis:** doby kroků, chybějící tajemství cíle jen jmény (`config/secret-keys.txt`
+   i sha256) se přeskočí. Změněný soubor se přepíše bez kopie (pojistku má jen PG),
+   `data/local/` se nikdy nepřepisuje. Člen `data/` před dumpem v taru = konec při ověření
+   (PG se obnovuje dřív, než se začne psát `data/`).
+7. **Karanténa** (Rozhodnuto 19. 11. v #1800, ADR-0063 bod 4, varianta A): soubor cíle, který
+   ve zdroji chybí (zdroj ho třeba přesunul do `quarantine/` jako podezřelý), se nemaže ani
+   nenechá na místě, ale přesune do `data/quarantine/sync-<RRRR-MM-DD>/` se stejnou cestou
+   (druhá obnova téhož dne přidá k jménu čas). Výpis přesunuté soubory jmenuje. Už přesunuté
+   soubory v `quarantine/` a části, které záloha nebere (`local/`, `logs/`, `ticks/`,
+   `backup/tmp/`, `*.tmp`), se nepočítají. Obnova staršího balíčku na stroji s novějšími
+   daty tak přesune novější partice do karantény, nesmaže je. Synchronizace (#1851) volá
+   týž krok (`restore.quarantine_missing`) po `restic restore`.
+8. **Výpis:** doby kroků, chybějící tajemství cíle jen jmény (`config/secret-keys.txt`
    proti prostředí kontejneru, tedy `.env` cíle) a připomínka, když chybí
    `data/local/instance_settings.json`. Do F15/F16 (#1847, #1848) berou host a port IBKR
    z obnovené DB zdroje (past #446/#992), proto je po obnově zkontroluj v Settings.
@@ -2385,8 +2398,11 @@ PG 16): fixtura → balíček CLI F2 → obnova do prázdné DB a prázdného `d
 řádků všech tabulek a sha256. Testuje se i druhá obnova bez `--overwrite` (konec)
 a s ním (pojistný dump, nic se nepřepíše), výměna DB (3× za sebou, všechny pojistné DB
 zůstanou) a výměna přerušená před přejmenováním (cíl beze změny). `restore.ps1` na PC proti
-dev stacku (balíček 326 MB / 2 208 souborů, DB 87 MB): ověření 13 s, pojistný dump 5 s,
-`pg_restore` 3 s, `data/` 32 s (vše shodné, přeskočeno), celkem 78 s.
+dev stacku (balíček 326 MB / 2 208 souborů, DB 87 MB): bez `-Overwrite` kód 1 a služby
+v původním stavu. Do prázdného `data/`: ověření 16 s, pojistný dump 5 s, `pg_restore` 4 s,
+zápis `data/` 110 s (~50 ms na soubor přes bind mount), celkem 163 s. Všech 2 208 souborů
+mělo shodné sha256 i mtime se zdrojem. Do shodného `data-dev/` trvala obnova 78 s, protože
+se vše přeskočilo.
 
 **Klient PG musí být verze 16.** `pg_restore` 17 (třeba instalace PostgreSQL ve Windows)
 pošle serveru 16 `SET transaction_timeout` a obnova v jedné transakci skončí chybou. Image
@@ -2394,7 +2410,7 @@ pošle serveru 16 `SET transaction_timeout` a obnova v jedné transakci skončí
 
 **Postup bez skriptu** (např. rozbitý Docker Compose na cíli): rozbal balíček
 (`tar -xf <balíček>.tar -C rozbaleny`), přesuň `rozbaleny/data` do kořene repozitáře
-(soubory navíc v cíli nech), spusť `docker compose up -d postgres`, pak
+(soubory cíle, které balíček nemá, přesuň do `quarantine/sync-<datum>/`), spusť `docker compose up -d postgres`, pak
 `docker compose cp rozbaleny/postgres/gexlens.dump postgres:/tmp/gexlens.dump` a
 `docker compose exec postgres pg_restore --clean --if-exists --single-transaction --no-owner
 -U gexlens -d gexlens /tmp/gexlens.dump`, nakonec `docker compose up -d`. Ruční postup

@@ -21,8 +21,9 @@ Kroky jdou po sobě a každý začne až po úspěchu předchozího:
    zůstává jako pojistná `<db>_pred_<čas>` a nic ji neodstraní; úklid přijde
    až s dumpem v repu restic (F7a #1804);
 4. **data/**: soubor po souboru přes `*.tmp` a `os.replace` s kontrolou sha256.
-   Shodné soubory se přeskočí, soubory navíc v cíli zůstávají a `data/local/`
-   (stav a nastavení stroje, #1847/#1848) se nikdy nepřepisuje;
+   Shodné soubory se přeskočí a `data/local/` (stav a nastavení stroje,
+   #1847/#1848) se nikdy nepřepisuje. Soubor cíle, který zdroj nemá, se nemaže,
+   ale přesune do `data/quarantine/sync-<den>/` (Rozhodnuto 19. 11. v #1800);
 5. **výpis**: chybějící tajemství jen jmény, připomínka nastavení IBKR.
 """
 
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -62,9 +64,11 @@ from gexlens_api.full_backup import (
     FORMAT_VERSION,
     MANIFEST_NAME,
     RESTORE_NAME,
+    RUN_STAMP,
     SECRET_KEYS_NAME,
     TMP_SUFFIX,
     WORK_DIR,
+    cleanup_stale_runs,
     dump_to_file,
     ensure_outside_backup,
     scan_data,
@@ -76,6 +80,7 @@ META_NAMES = (RESTORE_NAME, ENV_TEMPLATE_NAME, SECRET_KEYS_NAME)
 MODES = frozenset({"full", "meta"})
 SAFETY_DIR = "local/pred-obnovou"
 INSTANCE_SETTINGS = "local/instance_settings.json"
+QUARANTINE_DIR = "quarantine"
 RUN_PREFIX = "restore-"
 STAMP = "%Y%m%d_%H%M%S"
 # Manifest PC 25. 11. 2026 (~15 tisíc souborů) má ~3 MB; strop jen proti nesmyslu
@@ -290,16 +295,26 @@ def _finish_verification(
 
 
 def _tar_members(path: Path) -> Iterator[tuple[tarfile.TarInfo, IO[bytes]]]:
-    """Členy taru v pořadí streamu (balíček ~14 GB se čte jen sekvenčně)."""
+    """Členy taru v pořadí streamu (balíček ~14 GB se čte jen sekvenčně).
+
+    Data členu čte až volající, proto chyby taru převádí `_tar_errors` kolem
+    celé smyčky, ne tady.
+    """
+    with tarfile.open(path, mode="r|") as archive:
+        for info in archive:
+            if not info.isreg():
+                raise RestoreError(f"{info.name!r} v balíčku není obyčejný soubor")
+            handle = archive.extractfile(info)
+            if handle is None:
+                raise RestoreError(f"{info.name!r} v balíčku nejde přečíst")
+            yield info, handle
+
+
+@contextlib.contextmanager
+def _tar_errors(path: Path) -> Iterator[None]:
+    """Useknutý nebo poškozený tar (hlavička i data členu) = `RestoreError`."""
     try:
-        with tarfile.open(path, mode="r|") as archive:
-            for info in archive:
-                if not info.isreg():
-                    raise RestoreError(f"{info.name!r} v balíčku není obyčejný soubor")
-                handle = archive.extractfile(info)
-                if handle is None:
-                    raise RestoreError(f"{info.name!r} v balíčku nejde přečíst")
-                yield info, handle
+        yield
     except (tarfile.TarError, EOFError) as exc:
         raise RestoreError(
             f"Balíček {path.name} je poškozený nebo neúplný (přerušené stahování?): {exc}"
@@ -317,28 +332,44 @@ def verify_tar(path: Path) -> Verification:
     texts: dict[str, bytes] = {}
     manifest_body: bytes | None = None
     progress = _Progress("Ověřeno")
-    for info, handle in _tar_members(path):
-        name = info.name
-        if manifest_body is not None:
-            raise RestoreError(f"{name!r} leží za {MANIFEST_NAME}, ten musí být poslední člen")
-        if name in found:
-            raise RestoreError(f"{name!r} je v balíčku dvakrát")
-        if name == MANIFEST_NAME:
-            manifest_body = _read_small(handle, info.size, name)
-            continue
-        check_member_name(name)
-        if name in META_NAMES:
-            body = _read_small(handle, info.size, name)
-            texts[name] = body
-            found[name] = (len(body), hashlib.sha256(body).hexdigest())
-            continue
-        found[name] = _digest(_chunks(handle))
-        progress.add(info.size)
+    with _tar_errors(path):
+        for info, handle in _tar_members(path):
+            if manifest_body is not None:
+                raise RestoreError(
+                    f"{info.name!r} leží za {MANIFEST_NAME}, ten musí být poslední člen"
+                )
+            if info.name == MANIFEST_NAME:
+                manifest_body = _read_small(handle, info.size, MANIFEST_NAME)
+                continue
+            _verify_member(info, handle, found, texts, progress)
     if manifest_body is None:
         raise RestoreError(
             f"Balíčku chybí {MANIFEST_NAME} (poslední člen) — je neúplný, stáhni ho znovu"
         )
     return _finish_verification(parse_manifest(manifest_body), found, texts)
+
+
+def _verify_member(
+    info: tarfile.TarInfo,
+    handle: IO[bytes],
+    found: dict[str, tuple[int, str]],
+    texts: dict[str, bytes],
+    progress: _Progress,
+) -> None:
+    name = info.name
+    if name.startswith(DATA_PREFIX) and DUMP_NAME not in found:
+        # Obnova jde streamem: PG se musí obnovit dřív, než se začne psát data/
+        raise RestoreError(f"{name!r} leží v balíčku před {DUMP_NAME}")
+    if name in found:
+        raise RestoreError(f"{name!r} je v balíčku dvakrát")
+    check_member_name(name)
+    if name in META_NAMES:
+        body = _read_small(handle, info.size, name)
+        texts[name] = body
+        found[name] = (len(body), hashlib.sha256(body).hexdigest())
+        return
+    found[name] = _digest(_chunks(handle))
+    progress.add(info.size)
 
 
 def verify_dir(root: Path) -> Verification:
@@ -621,9 +652,37 @@ class Report:
     swap: SwapResult | None = None
     written: int = 0
     skipped: int = 0
+    quarantined: list[str] = field(default_factory=list)  # relativně k data/
+    quarantine_dir: str = ""
     missing_secrets: list[str] = field(default_factory=list)
     instance_settings_missing: bool = False
     seconds: dict[str, float] = field(default_factory=dict)
+
+
+def quarantine_missing(
+    data_dir: Path, source_files: set[str], now: dt.datetime
+) -> tuple[str, list[str]]:
+    """Soubory cíle, které ve snímku zdroje chybí, přesune do `quarantine/sync-<den>/`.
+
+    Rozhodnuto 19. 11. v #1800 (ADR-0063 bod 4, varianta A): nemazat (data se
+    nemažou) ani nenechat na místě (podezřelá partice, kterou zdroj přesunul
+    do karantény, by se vrátila do UI). Už přesunuté soubory (`quarantine/`)
+    a části, které záloha nebere, se nepočítají. Synchronizace (#1851) to volá
+    po `restic restore`. Vrací adresář karantény a přesunuté cesty k `data/`.
+    """
+    utc = now.astimezone(dt.UTC)
+    folder = f"{QUARANTINE_DIR}/sync-{utc:%Y-%m-%d}"
+    moved: list[str] = []
+    for item in scan_data(data_dir, utc, live_dir=None):
+        if item.rel.startswith(f"{QUARANTINE_DIR}/") or item.rel in source_files:
+            continue
+        destination = data_dir / folder / item.rel
+        if destination.exists():  # druhá obnova téhož dne
+            destination = destination.with_name(f"{destination.name}.{utc:%H%M%S}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(item.source, destination)
+        moved.append(item.rel)
+    return folder, moved
 
 
 def missing_secrets(secret_keys_text: bytes, environ: Mapping[str, str]) -> list[str]:
@@ -669,6 +728,7 @@ class _Apply:
         self.swap_db = swap_db
         self.report = report
         self.pg_done = False
+        self.restored: set[str] = set()  # cesty zdroje relativně k data/ (i přeskočené)
         self._data_started: float | None = None
 
     def restore_pg(self, dump: Path) -> None:
@@ -692,6 +752,7 @@ class _Apply:
         if _excluded(rel):  # pojistka i pro adresář: data/local/ se nikdy nepřepíše
             raise RestoreError(f"{DATA_PREFIX}{rel} do obnovy nepatří")
         target = self.data_dir / rel
+        self.restored.add(rel)
         if expected is not None and _same_content(target, expected):
             self.report.skipped += 1
             return
@@ -707,20 +768,21 @@ class _Apply:
 
 def _apply_tar(path: Path, verification: Verification, apply: _Apply) -> None:
     manifest = verification.manifest
-    for info, handle in _tar_members(path):
-        name = info.name
-        if name == MANIFEST_NAME or name in META_NAMES:
-            continue
-        if name not in manifest.entries:
-            raise RestoreError(f"{name!r} v balíčku přibyl po ověření")
-        mtime_ns = int(info.mtime) * 1_000_000_000
-        if name == DUMP_NAME:
-            dump = apply.work_dir / Path(DUMP_NAME).name
-            _write_verified(dump, _chunks(handle), mtime_ns, manifest.entries[name])
-            apply.restore_pg(dump)
-            continue
-        rel = name[len(DATA_PREFIX) :]
-        apply.write_data(rel, _chunks(handle), mtime_ns, manifest.expected(name))
+    with _tar_errors(path):
+        for info, handle in _tar_members(path):
+            name = info.name
+            if name == MANIFEST_NAME or name in META_NAMES:
+                continue
+            if name not in manifest.entries:
+                raise RestoreError(f"{name!r} v balíčku přibyl po ověření")
+            mtime_ns = int(info.mtime) * 1_000_000_000
+            if name == DUMP_NAME:
+                dump = apply.work_dir / Path(DUMP_NAME).name
+                _write_verified(dump, _chunks(handle), mtime_ns, manifest.entries[name])
+                apply.restore_pg(dump)
+                continue
+            rel = name[len(DATA_PREFIX) :]
+            apply.write_data(rel, _chunks(handle), mtime_ns, manifest.expected(name))
 
 
 def _apply_dir(root: Path, verification: Verification, apply: _Apply) -> None:
@@ -765,7 +827,8 @@ def run_restore(
         _require_tool(tool)
     is_tar = source.is_file()
     report = Report("balíček" if is_tar else "adresář")
-    stamp = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC).strftime(STAMP)
+    started_at = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
+    stamp = started_at.strftime(STAMP)
 
     # Pojistka cíle je jen čtení — chybějící --overwrite se ozve před ověřením ~14 GB
     has_tables = pg_has_tables(database_url)
@@ -777,8 +840,11 @@ def run_restore(
             if present
         )
         raise RestoreError(
-            f"Cíl už má data ({what}) a obnova by je přepsala. Spusť ji s --overwrite: "
-            f"před obnovou PG vznikne pojistný dump v data/{SAFETY_DIR}/."
+            f"Cíl už má data ({what}) a obnova by je přepsala: PG celou, v data/ změněné "
+            "soubory bez kopie a soubory, které zdroj nemá, přesune do "
+            "data/quarantine/sync-<den>/. Spusť ji s --overwrite (v restore.ps1 -Overwrite): "
+            "před obnovou PG vznikne "
+            f"pojistný dump v data/{SAFETY_DIR}/."
         )
 
     started = time.monotonic()
@@ -797,7 +863,9 @@ def run_restore(
         started = time.monotonic()
         report.safety_dump = safety_dump(database_url, data_dir, stamp)
         report.seconds["pojistný dump"] = time.monotonic() - started
-    work_dir = data_dir / WORK_DIR / f"{RUN_PREFIX}{stamp}-{os.getpid()}"
+    # Pracovní adresáře zabitých obnov (dump ~230 MB) uklidí další běh
+    cleanup_stale_runs(data_dir, started_at, prefix=RUN_PREFIX)
+    work_dir = data_dir / WORK_DIR / f"{RUN_PREFIX}{started_at:{RUN_STAMP}}-{os.getpid()}"
     work_dir.mkdir(parents=True)
     try:
         apply = _Apply(
@@ -814,6 +882,15 @@ def run_restore(
             else:
                 _apply_dir(source, verification, apply)
             apply.finish()
+            if has_files:  # do prázdného cíle nemůže přebývat nic
+                source_files = apply.restored | {
+                    name[len(DATA_PREFIX) :]
+                    for name in verification.manifest.entries
+                    if name.startswith(DATA_PREFIX)
+                }
+                report.quarantine_dir, report.quarantined = quarantine_missing(
+                    data_dir, source_files, started_at
+                )
         except Exception as exc:
             if not apply.pg_done:
                 raise
@@ -858,8 +935,13 @@ def render_report(report: Report) -> str:
         lines.append(f"- PG: obnovena celá DB{safety}")
     lines.append(
         f"- data/: zapsáno {report.written} souborů, {report.skipped} shodných přeskočeno, "
-        "soubory navíc v cíli zůstaly, data/local/ beze změny"
+        "data/local/ beze změny"
     )
+    if report.quarantined:
+        lines.append(
+            f"- karanténa: {len(report.quarantined)} souborů cíle, které zdroj nemá, přesunuto "
+            f"do data/{report.quarantine_dir}/ (nic se nesmazalo):\n" + _listing(report.quarantined)
+        )
     if report.missing_secrets:
         lines.append(
             "Tajemství k doplnění do .env ze správce hesel: " + ", ".join(report.missing_secrets)
@@ -883,7 +965,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m gexlens_api.restore",
         description=(
             "Obnova GEXLens ze zálohy (#1800): ověření manifestu, PG a data/ "
-            "bez mazání souborů navíc; data/local/ se nepřepisuje."
+            "bez mazání; soubory, které zdroj nemá, jdou do data/quarantine/sync-<den>/; "
+            "data/local/ se nepřepisuje."
         ),
     )
     parser.add_argument(

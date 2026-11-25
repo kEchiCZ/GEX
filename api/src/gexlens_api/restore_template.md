@@ -33,11 +33,13 @@ Rozsah dní v `data/`:
 3. `.env` z `config/env.template`; doplň tajemství výše; {{image_pin}}.
 4. {{data_step}}
 5. Obnova jedním příkazem z kořene repozitáře: na PC `.\scripts\restore.ps1 -Source <zdroj>`,
-   na serveru `scripts/restore.sh <zdroj>`. Nejdřív ověří celý zdroj proti `manifest.json`
-   (změněný bajt = konec, nic se nezapíše), pak zastaví engine, news-engine a api, obnoví PG
-   i `data/` (soubory navíc v cíli zůstanou, `data/local/` se nepřepisuje), nastartuje stack
-   a ověří `/status`. Cíl, který už má data, chce `-Overwrite` / `--overwrite`; předtím vznikne
-   pojistný dump v `data/local/pred-obnovou/`.
+   na serveru `scripts/restore.sh <zdroj>`. Obal zastaví engine, news-engine a api; obnova pak
+   ověří celý zdroj proti `manifest.json` (změněný bajt = konec, nic se nezapíše), obnoví PG
+   i `data/` a obal nastartuje stack a ověří `/status`. Na stroji, který sbírá data, ji spouštěj
+   jen při zavřeném trhu nebo v pauze Globexu: engine stojí po celou dobu obnovy.
+   Cíl, který už má data, chce `-Overwrite` / `--overwrite`: předtím vznikne pojistný dump
+   v `data/local/pred-obnovou/`, změněné soubory v `data/` se přepíšou bez kopie a soubory,
+   které zdroj nemá, se přesunou do `data/quarantine/sync-<den>/`. `data/local/` se nepřepisuje.
 6. Výpis na konci jmenuje tajemství, která cíli chybí, a připomene nastavení IBKR v Settings.
 
 Podrobnosti a postup bez skriptu: ADMIN-MANUAL kap. 14 „Obnova ze zálohy“.

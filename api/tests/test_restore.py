@@ -201,10 +201,19 @@ def test_zmeneny_bajt_dumpu_skonci_pred_obnovou_pg(tmp_path: Path, fake_pg: Fake
     assert fake_pg.restores == []
 
 
-def test_useknuty_balicek_je_chyba(tmp_path: Path, fake_pg: FakePg) -> None:
+@pytest.mark.parametrize("cut", ["0.1", "0.5", "0.9", "manifest"])
+def test_useknuty_balicek_je_chyba(tmp_path: Path, fake_pg: FakePg, cut: str) -> None:
+    """Useknutí v hlavičce, uprostřed dat členu i v manifestu (přerušené stahování).
+
+    Chybějící koncové nulové bloky taru chybou nejsou: obsah je celý a ověřený.
+    """
     package = _package(tmp_path, _source_data(tmp_path / "zdroj"))
     blob = package.read_bytes()
-    package.write_bytes(blob[: len(blob) // 2])
+    if cut == "manifest":
+        end = blob.rfind(b'"format": "gexlens-zaloha"') + 10
+    else:
+        end = int(len(blob) * float(cut))
+    package.write_bytes(blob[:end])
 
     with pytest.raises(restore.RestoreError, match="neúplný"):
         _restore(package, tmp_path / "cil")
@@ -290,15 +299,20 @@ def test_cil_s_daty_bez_overwrite_skonci_jeste_pred_overenim(
     assert fake_pg.restores == []
 
 
-def test_overwrite_udela_pojistny_dump_a_soubory_navic_necha(
+def test_overwrite_udela_pojistny_dump_a_soubory_navic_da_do_karanteny(
     tmp_path: Path, fake_pg: FakePg
 ) -> None:
     source = _source_data(tmp_path / "zdroj")
     package = _package(tmp_path, source)
     target = tmp_path / "cil"
-    extra = target / "snapshots/ES/20261218/2026-11-26.parquet"
-    _write(extra, b"novejsi data cile", NOW)
+    extra = "snapshots/ES/20261218/2026-11-26.parquet"
+    _write(target / extra, b"novejsi data cile", NOW)
     _write(target / COLD, b"jina verze", NOW)
+    # Už v karanténě a části, které záloha nebere: zůstávají, jak jsou
+    kept = ("quarantine/sync-2026-11-01/stara.parquet", "logs/engine.log", "ticks/ES/x.parquet")
+    for rel in kept:
+        _write(target / rel, b"cil", NOW)
+    _write(target / restore.INSTANCE_SETTINGS, b'{"ibkr_host": "cil"}', NOW)
     fake_pg.has_tables = True
 
     report = _restore(package, target, overwrite=True)
@@ -306,8 +320,73 @@ def test_overwrite_udela_pojistny_dump_a_soubory_navic_necha(
     assert report.safety_dump == target / restore.SAFETY_DIR / "20261125_143000.dump"
     assert report.safety_dump.is_file()
     assert fake_pg.restores == [("gexlens", DUMP_BYTES, True)]
-    assert extra.read_bytes() == b"novejsi data cile"
     assert (target / COLD).read_bytes() == (source / COLD).read_bytes()
+    # Rozhodnuto 19. 11. v #1800: soubor, který zdroj nemá, se nemaže ani nezůstává na místě
+    assert report.quarantined == [extra]
+    assert report.quarantine_dir == "quarantine/sync-2026-11-25"
+    assert not (target / extra).exists()
+    moved = target / "quarantine/sync-2026-11-25" / extra
+    assert moved.read_bytes() == b"novejsi data cile"
+    assert all((target / rel).read_bytes() == b"cil" for rel in kept)
+    assert (target / restore.INSTANCE_SETTINGS).read_bytes() == b'{"ibkr_host": "cil"}'
+    assert "karanténa: 1 souborů" in restore.render_report(report)
+
+
+def test_karantena_druhy_beh_tehoz_dne_neprepise_presunuty_soubor(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    rel = "derived/ES/2026-11-26.parquet"
+    _write(data / "quarantine/sync-2026-11-25" / rel, b"prvni", NOW)
+    _write(data / rel, b"druhy", NOW)
+
+    folder, moved = restore.quarantine_missing(data, set(), NOW)
+
+    assert (folder, moved) == ("quarantine/sync-2026-11-25", [rel])
+    assert (data / "quarantine/sync-2026-11-25" / rel).read_bytes() == b"prvni"
+    second = data / "quarantine/sync-2026-11-25/derived/ES/2026-11-26.parquet.143000"
+    assert second.read_bytes() == b"druhy"
+
+
+def test_dump_za_daty_v_taru_se_odmitne_pred_zapisem(tmp_path: Path, fake_pg: FakePg) -> None:
+    body = b"x"
+    out = tmp_path / "poradi.tar"
+    files = {
+        fb.SECRET_KEYS_NAME: b"# t\n",
+        "data/snapshots/ES/x.parquet": body,
+        fb.DUMP_NAME: DUMP_BYTES,
+    }
+    document = {
+        "format": fb.FORMAT_NAME,
+        "format_version": fb.FORMAT_VERSION,
+        "mode": "full",
+        "image_sha": SHA,
+        "files": [
+            {"path": name, "size": len(data), "sha256": _sha(data), "live": False}
+            for name, data in files.items()
+        ],
+    }
+    with tarfile.open(out, "w", format=tarfile.PAX_FORMAT) as archive:
+        for name, data in [*files.items(), (fb.MANIFEST_NAME, json.dumps(document).encode())]:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+
+    with pytest.raises(restore.RestoreError, match="před postgres/gexlens.dump"):
+        _restore(out, tmp_path / "cil")
+    assert _all_files(tmp_path / "cil") == []
+
+
+def test_stary_pracovni_adresar_zabite_obnovy_se_uklidi(tmp_path: Path, fake_pg: FakePg) -> None:
+    package = _package(tmp_path, _source_data(tmp_path / "zdroj"))
+    target = tmp_path / "cil"
+    stale = target / fb.WORK_DIR / "restore-20261123T100000Z-999"
+    _write(stale / "gexlens.dump", DUMP_BYTES, NOW)
+    foreign = target / fb.WORK_DIR / "cizi-adresar"
+    foreign.mkdir(parents=True)
+
+    _restore(package, target)
+
+    assert not stale.exists()
+    assert foreign.is_dir()  # cizí adresář se nemaže
 
 
 def test_shodne_soubory_se_preskoci(tmp_path: Path, fake_pg: FakePg) -> None:

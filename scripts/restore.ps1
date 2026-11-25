@@ -49,15 +49,18 @@ if ($running.Count) {
 & docker compose @files run --rm --no-deps -T -v "$($item.FullName):${inside}:ro" api @restoreArgs
 $code = $LASTEXITCODE
 
+# Kód obnovy jde ven beze změny (throw by z každé chyby udělal 1)
 if ($code -eq 2) {
-    throw 'Obnova nedokončena: PG je obnovená, data/ jen zčásti. Služby zůstávají zastavené — spusť obnovu znovu s -Overwrite.'
+    Write-Host 'Obnova nedokončena: PG je obnovená, data/ jen zčásti. Služby zůstávají zastavené — spusť obnovu znovu s -Overwrite.' -ForegroundColor Red
+    exit 2
 }
 if ($code -ne 0) {
     if ($running.Count) {
         Write-Host "Cíl zůstal beze změny, startuji $($running -join ', ')…" -ForegroundColor Yellow
         Invoke-Compose start @running
     }
-    throw "Obnova selhala (kód $code) — důvod je ve výpisu výše."
+    Write-Host "Obnova selhala (kód $code) — důvod je ve výpisu výše." -ForegroundColor Red
+    exit $code
 }
 
 Write-Host 'Startuji stack…' -ForegroundColor Cyan
