@@ -12,7 +12,8 @@ rozepsaná hodnota; uloží se hned a při odmítnutí serverem ukážou chybu.
 */
 import { useEffect, useState } from 'react'
 import { loadApiToken, saveApiToken } from '../api/apiToken'
-import { downloadBackup } from '../api/backup'
+import type { BackupProgress, BackupResult } from '../api/backup'
+import { downloadBackup, downloadFullBackup, progressText } from '../api/backup'
 import { requestReconnect, useServerSettings } from '../api/settings'
 import { PushSettings } from './PushSettings'
 import { ScenarioSettings } from './ScenarioSettings'
@@ -98,6 +99,20 @@ const DEFAULT_SESSIONS = [
   { label: 'New York', minuteIdx: 210 },
 ]
 
+/** Hláška po záloze podle druhu a cesty, kterou se soubor uložil (#439, #1801). */
+const BACKUP_DONE: Record<'postgres' | 'full', Record<BackupResult, string>> = {
+  postgres: {
+    saved: 'Hotovo — záloha uložena na zvolené místo.',
+    downloaded: 'Hotovo — záloha stažena do složky Stažené soubory (prohlížeč neumí výběr složky).',
+  },
+  full: {
+    saved: 'Hotovo — úplná záloha uložena na zvolené místo.',
+    // Nativní stažení běží v prohlížeči; průběh ani výsledek stránka nevidí
+    downloaded:
+      'Stahování úplné zálohy převzal prohlížeč — průběh a výsledek ukazují jeho stažené soubory.',
+  },
+}
+
 /** Parametr vlevo, nápověda vpravo (#445). */
 /** Tlačítko přepojení zdroje (#950). Samostatná komponenta, ne továrna
  * volaná při renderu — handler s Date.now by jinak platil za nečistý render. */
@@ -158,7 +173,9 @@ export function SettingsView() {
   const { values, put, saveAll } = useServerSettings()
   // Rozepsané změny; prázdný objekt = nic k uložení
   const [draft, setDraft] = useState<Record<string, unknown>>({})
-  const [backup, setBackup] = useState<'idle' | 'running'>('idle')
+  // Běží nejvýš jedna záloha naráz — obě čtou celou PG
+  const [backup, setBackup] = useState<'postgres' | 'full' | null>(null)
+  const [backupProgress, setBackupProgress] = useState<BackupProgress | null>(null)
   const [backupNote, setBackupNote] = useState<string | null>(null)
   // Token se neukládá na server (je to sdílené tajemství z .env), jen do prohlížeče
   const [apiToken, setApiToken] = useState(() => loadApiToken())
@@ -283,16 +300,14 @@ Sběr dat se na ~1–2 minuty přeruší.`)
     return () => clearTimeout(timer)
   }, [saveState])
 
-  const runBackup = async () => {
-    setBackup('running')
+  const runBackup = async (kind: 'postgres' | 'full') => {
+    setBackup(kind)
     setBackupNote(null)
+    setBackupProgress(null)
     try {
-      const where = await downloadBackup()
-      setBackupNote(
-        where === 'saved'
-          ? 'Hotovo — záloha uložena na zvolené místo.'
-          : 'Hotovo — záloha stažena do složky Stažené soubory (prohlížeč neumí výběr složky).',
-      )
+      const where =
+        kind === 'full' ? await downloadFullBackup(setBackupProgress) : await downloadBackup()
+      setBackupNote(BACKUP_DONE[kind][where])
     } catch (error) {
       // DOMException nemusí být instanceof Error — AbortError se pozná podle name
       const isAbort =
@@ -306,7 +321,8 @@ Sběr dat se na ~1–2 minuty přeruší.`)
         setBackupNote(error instanceof Error ? error.message : 'Záloha selhala.')
       }
     } finally {
-      setBackup('idle')
+      setBackup(null)
+      setBackupProgress(null)
     }
   }
 
@@ -658,29 +674,76 @@ Sběr dat se na ~1–2 minuty přeruší.`)
       </section>
 
       <section aria-label="Záloha">
-        <h2>Záloha databáze</h2>
+        <h2>Záloha</h2>
         <SettingRow
           help={
             <>
-              Zálohuje <strong>PostgreSQL</strong> — věčný OI archiv, setupy s výsledky, signály,
-              tendence a statistiky modelu. Ta data se nedají znovu pořídit a na rozdíl od parquetů
-              neleží ve složce projektu, ale v Docker volume, který se smazáním kontejnerů dá
-              ztratit. <strong>Kam ukládat:</strong> složku <em>mimo adresář projektu</em>, ideálně
-              na jiný disk nebo do cloudu — záloha v repozitáři neleží nikde jinde než originál a do
-              gitu nepatří.
+              Jeden balíček (<code>.tar</code>, přes 10 GB) se vším, co není v gitu: celá{' '}
+              <strong>PostgreSQL</strong>, složka <strong>data/</strong> (parquety, reporty, stav
+              jobů; bez ticků a logů) a <strong>nastavení</strong> — klíče <code>.env</code> s
+              hodnotami, ale <strong>bez tajemství</strong>. Jejich jména jsou v{' '}
+              <code>RESTORE.md</code> v balíčku, hodnoty doplníš ze správce hesel. V Chrome a Edge
+              vybereš místo a záloha teče rovnou na disk s průběhem; jinde (mobil) ji stáhne
+              prohlížeč do svých stažených souborů. Ukládej mimo disk s aplikací.{' '}
+              <strong>Obnova</strong> je příkaz na hostiteli, ne tlačítko: na PC{' '}
+              <code>.\scripts\restore.ps1 -Source &lt;balíček&gt;</code>, na serveru{' '}
+              <code>scripts/restore.sh &lt;balíček&gt;</code> (admin manuál, kap. 14).
             </>
           }
         >
-          <button className="chip" onClick={runBackup} disabled={backup === 'running'}>
-            {backup === 'running' ? 'Zálohuji…' : 'Zálohovat PostgreSQL'}
+          {/* Jedna buňka gridu: průběh pod tlačítkem, nápověda zůstane vpravo */}
+          <div>
+            <button
+              className="chip"
+              onClick={() => void runBackup('full')}
+              disabled={backup !== null}
+            >
+              {backup === 'full' ? 'Zálohuji…' : 'Úplná záloha (data + databáze + nastavení)'}
+            </button>
+            {backup === 'full' && backupProgress && (
+              <p className="muted" role="status">
+                {progressText(backupProgress)}
+                {backupProgress.phase === 'streaming' && backupProgress.totalBytes !== null && (
+                  <>
+                    <br />
+                    <progress
+                      aria-label="Průběh úplné zálohy"
+                      value={backupProgress.receivedBytes}
+                      max={backupProgress.totalBytes}
+                    />
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+        </SettingRow>
+        <SettingRow
+          help={
+            <>
+              Rychlá záloha jen <strong>PostgreSQL</strong> — věčný OI archiv, setupy s výsledky,
+              signály, tendence a statistiky modelu. Ta data se nedají znovu pořídit a na rozdíl od
+              parquetů neleží ve složce projektu, ale v Docker volume, který se smazáním kontejnerů
+              dá ztratit. <strong>Kam ukládat:</strong> složku <em>mimo adresář projektu</em>,
+              ideálně na jiný disk nebo do cloudu — záloha v repozitáři neleží nikde jinde než
+              originál a do gitu nepatří.
+            </>
+          }
+        >
+          <button
+            className="chip"
+            onClick={() => void runBackup('postgres')}
+            disabled={backup !== null}
+          >
+            {backup === 'postgres' ? 'Zálohuji…' : 'Zálohovat PostgreSQL'}
           </button>
         </SettingRow>
         <SettingRow
           help={
             <>
               Sdílené tajemství <code>GEXLENS_API_TOKEN</code> z lokálního <code>.env</code> (#542).
-              Bez něj API zálohu odmítne — dump nese celý archiv, takže nesmí být ke stažení bez
-              ověření. Zůstává jen v tomhle prohlížeči, na server se neukládá.
+              Bez něj API obě zálohy odmítne — nesou celý archiv, takže nesmí být ke stažení bez
+              ověření. Zůstává jen v tomhle prohlížeči, na server se neukládá; do adresy stažení
+              nejde nikdy (mobil dostane jednorázový lístek na 5 min).
             </>
           }
         >
