@@ -362,22 +362,38 @@ def scan_data(
                 continue
             try:
                 stat = entry.stat(follow_symlinks=False)
-                live = stat.st_mtime_ns >= cutoff_ns
-                source = Path(entry.path)
-                size = stat.st_size
-                if live and live_dir is not None:
-                    source = live_dir / rel
-                    source.parent.mkdir(parents=True, exist_ok=True)
-                    # Čtení otevřeného souboru drží starý inode, takže kopie je
-                    # celá i při souběžném `os.replace` enginu
-                    shutil.copyfile(entry.path, source)
-                    size = source.stat().st_size
             except FileNotFoundError:
                 logger.info("Soubor %s zmizel během přípravy zálohy — vynechán", rel)
                 continue
+            live = stat.st_mtime_ns >= cutoff_ns
+            source = Path(entry.path)
+            size = stat.st_size
+            if live and live_dir is not None:
+                source = live_dir / rel
+                if not _copy_live(Path(entry.path), source):
+                    logger.info("Soubor %s zmizel během přípravy zálohy — vynechán", rel)
+                    continue
+                size = source.stat().st_size
             found.append(DataFile(rel, source, size, stat.st_mtime_ns, live))
     found.sort(key=lambda item: item.rel)
     return found
+
+
+def _copy_live(source: Path, target: Path) -> bool:
+    """Kopie živého souboru; False = zdroj mezitím zmizel.
+
+    Čtení otevřeného souboru drží starý inode, takže kopie je celá i při
+    souběžném `os.replace` enginu. Chyba zápisu kopie (plný disk, délka cesty)
+    je výjimka, ne tiše vynechaný soubor.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copyfile(source, target)
+    except FileNotFoundError:
+        if source.exists():
+            raise
+        return False
+    return True
 
 
 def day_ranges(files: list[DataFile]) -> dict[str, dict[str, str]]:
@@ -474,7 +490,9 @@ class Package:
             if member.arcname in hashes
         ]
         document = {**self.head, "files": files}
-        return (json.dumps(document, ensure_ascii=False, indent=1) + "\n").encode()
+        # Jen ASCII: jméno souboru s ne-UTF-8 bajty (surrogateescape) se zapíše
+        # jako JSON escape a encode nespadne; délka zůstává daná předem
+        return (json.dumps(document, indent=1) + "\n").encode("ascii")
 
     def manifest_size(self) -> int:
         return len(self.manifest_bytes(dict.fromkeys(self._arcnames(), SHA_PLACEHOLDER)))
@@ -512,7 +530,21 @@ def _restore_text(
         "source_host": info.host,
         "image_sha": info.image_sha,
         "image_tag": info.image_tag,
-        "image_pin": f"sha-{info.sha7}" if info.sha7 != "dev" else "(lokální build, bez tagu)",
+        "checkout": (
+            f"`git checkout {info.image_sha}`"
+            if info.sha7 != "dev"
+            else "zůstaň na `main` (záloha z lokálního buildu bez revize)"
+        ),
+        "image_pin": (
+            f"`GEXLENS_IMAGE_TAG=sha-{info.sha7}` vrátí stejnou revizi image"
+            if info.sha7 != "dev"
+            else "pin image nejde (lokální build), poběží `latest`"
+        ),
+        "data_step": (
+            "Přesuň `<rozbalený>/data` do kořene repozitáře"
+            if mode == "full"
+            else "Obnov `data/` z repa restic (`restic restore`) do kořene repozitáře"
+        ),
         "pg_version": info.pg_version,
         "mode": mode,
         "market_note": (
@@ -881,6 +913,9 @@ def build_full_backup_router(
             package = await anyio.to_thread.run_sync(
                 prepare_full, data_dir, run_dir, info, env, cancel
             )
+            # Desítky tisíc hlaviček a manifest (~1 s na PC) — mimo event loop
+            length = await anyio.to_thread.run_sync(package.content_length)
+            filename = package_filename(info)
         except BackupCancelled:
             await cleanup()
             return Response(status_code=499)
@@ -902,8 +937,8 @@ def build_full_backup_router(
             cleanup,
             media_type=TAR_MEDIA_TYPE,
             headers={
-                "Content-Disposition": f'attachment; filename="{package_filename(info)}"',
-                "Content-Length": str(package.content_length()),
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(length),
                 # GZipMiddleware by komprimoval už komprimovaná data a zahodil
                 # Content-Length (průběh v UI, F4 #1801)
                 "Content-Encoding": "identity",
@@ -927,6 +962,7 @@ async def _run_cli(args: argparse.Namespace) -> Path:
     if args.meta_dir is not None:
         meta_dir = Path(args.meta_dir)
         ensure_outside_backup(meta_dir, data_dir)
+        meta_dir.mkdir(parents=True, exist_ok=True)
         dump = meta_dir / DUMP_NAME
         dump.parent.mkdir(parents=True, exist_ok=True)
         part = dump.with_name(dump.name + TMP_SUFFIX)
@@ -940,6 +976,7 @@ async def _run_cli(args: argparse.Namespace) -> Path:
         return meta_dir / MANIFEST_NAME
     out = Path(args.out)
     ensure_outside_backup(out, data_dir)
+    out.parent.mkdir(parents=True, exist_ok=True)
     cleanup_stale_runs(data_dir, now)
     run_dir = new_run_dir(data_dir, now)
     part = out.with_name(out.name + TMP_SUFFIX)

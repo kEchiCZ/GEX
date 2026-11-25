@@ -1240,7 +1240,9 @@ jsou v kap. 14 „Formát balíčku úplné zálohy“.
 - **Spuštění:** `GET /backup/full` s hlavičkou `X-GEXLens-Token` (tlačítko v Settings přijde
   s F4 #1801), nebo CLI v kontejneru API:
   `docker compose exec -u gexlens api python -m gexlens_api.full_backup --out /app/data/local/zaloha.tar`
-  (`-u gexlens`, ať výstup nepatří rootu; API běží jako uid 10001, #542).
+  (`-u gexlens`, ať výstup nepatří rootu; API běží jako uid 10001, #542). Kontejner zapisuje
+  jen do `/app/data`, takže balíček vzniká v `data/local/` (CLI adresář založí). Tam se počítá
+  do `disk_limit_gb` a ubírá místo na disku dat: hned po vzniku ho přesuň mimo `data/`.
   `--meta-dir <adresář>` zapíše jen dump, konfiguraci, manifest a `RESTORE.md` (noční záloha
   F7a #1804 a snímek synchronizace #1851; `data/` zálohuje restic přímo, bez kopie ~13 GB).
   Cíl uvnitř zálohovaných částí `data/` CLI odmítne, protože by se další záloha zabalila
@@ -1249,8 +1251,8 @@ jsou v kap. 14 „Formát balíčku úplné zálohy“.
   posledních 24 h (dnešní partice, průběžně doplňované JSONL) se zkopírují tamtéž a teprve
   potom začne stream. Velikosti jsou tak známé předem a `Content-Length` přesně sedí.
   Engine dnešní partice dál přepisuje (`os.replace`), ale do taru jdou z kopie. Do prvního
-  bajtu proběhne dump, výpis `data/` a kopie živých souborů (na PC jednotky minut, nginx má
-  `proxy_read_timeout` 3600 s). Stream běží po 1 MiB, paměť API nezávisí na velikosti dat.
+  bajtu proběhne dump, výpis `data/` a kopie živých souborů (nginx má `proxy_read_timeout`
+  3600 s; doba na PC se změří při ostré záloze, #1799). Stream běží po 1 MiB, paměť API nezávisí na velikosti dat.
 - **Za otevřeného trhu** záloha nic neblokuje (čte jen soubory a PG, minutový cyklus enginu
   na ni nečeká). Manifest nese `market_open` a u souborů z kopie `live: true`: dnešní partice
   mohou být neúplné. Změní-li se během streamu starší soubor mimo kopii, stream skončí chybou
@@ -2310,7 +2312,7 @@ u nich nesoulad brát jako upozornění, ne jako chybu.
   Jako tajemství se kromě hesel a tokenů vedou i osobní údaje (`IBKR_DATA_USERID`,
   `GEXLENS_NEWS_UA_CONTACT`, `GEXLENS_PUSH_TELEGRAM_CHAT_ID`).
 - **Jméno stroje** (`source_host`) je hostname kontejneru API: na PC `${COMPUTERNAME}`
-  (`compose.yml`), na serveru `gex-server` (`compose.server.yml`). Jiná služba, která bude
+  (`compose.yml`), na serveru `${GEX_HOSTNAME:-gex-server}` (`compose.server.yml`, táž proměnná jako v `bootstrap.sh`). Jiná služba, která bude
   CLI spouštět (`ops`, F7a), potřebuje vlastní `hostname`.
 - **Revize image** (`image_sha`) jde z build-argu `GEXLENS_BUILD_SHA` workflow Images
   (`docker/python.Dockerfile`, smoke test ji vyžaduje), lokální build nese `dev`.

@@ -220,6 +220,33 @@ def test_restore_md_nese_hodnoty_z_manifestu(data_dir: Path) -> None:
     assert "`data/snapshots/`: 2026-11-20 až 2026-11-25" in restore
 
 
+def test_zavreny_trh_a_lokalni_build_v_manifestu_i_navodu(data_dir: Path) -> None:
+    saturday = dt.datetime(2026, 11, 28, 12, 0, tzinfo=dt.UTC)
+    env = {key: value for key, value in _environ().items() if key != "GEXLENS_BUILD_SHA"}
+    run_dir = fb.new_run_dir(data_dir, saturday)
+    (run_dir / "gexlens.dump").write_bytes(DUMP_BYTES)
+    package = fb.prepare_full(data_dir, run_dir, fb.source_info(env, saturday, "16.4"), env)
+    members = _members(b"".join(fb.iter_package(package)))
+    manifest = json.loads(members[fb.MANIFEST_NAME])
+    assert manifest["market_open"] is False
+    assert manifest["image_sha"] == "dev"
+    restore = members[fb.RESTORE_NAME].decode()
+    assert "zavřeném trhu" in restore
+    assert "git checkout dev" not in restore
+    assert "pin image nejde" in restore
+
+
+def test_meta_navod_odkazuje_na_restic(data_dir: Path, tmp_path: Path) -> None:
+    dump = tmp_path / "gexlens.dump"
+    dump.write_bytes(DUMP_BYTES)
+    env = _environ()
+    info = fb.source_info(env, NOW, "16.4")
+    package = fb.build_package(data_files=[], dump=dump, info=info, environ=env, mode="meta")
+    restore = next(m for m in package.members if m.arcname == fb.RESTORE_NAME)
+    assert restore.data is not None
+    assert "restic restore" in restore.data.decode()
+
+
 def test_jmeno_balicku_ma_cas_a_sha7() -> None:
     info = fb.source_info(_environ(), NOW, "16.4")
     assert fb.package_filename(info) == "gexlens-zaloha-2026-11-25_0900-0123456.tar"
@@ -228,13 +255,23 @@ def test_jmeno_balicku_ma_cas_a_sha7() -> None:
     assert fb.package_filename(local).endswith("-dev.tar")
 
 
-@pytest.mark.skipif(shutil.which("tar") is None, reason="systémový tar chybí")
-def test_tar_tf_systemoveho_taru_balicek_precte(data_dir: Path, tmp_path: Path) -> None:
-    """Windows `tar.exe` (bsdtar) i GNU tar v CI musí balíček vypsat."""
+WINDOWS_TAR = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "tar.exe"
+TAR_TOOLS = [
+    pytest.param("tar", marks=pytest.mark.skipif(shutil.which("tar") is None, reason="tar chybí")),
+    pytest.param(
+        str(WINDOWS_TAR),
+        marks=pytest.mark.skipif(not WINDOWS_TAR.exists(), reason="jen Windows (bsdtar)"),
+    ),
+]
+
+
+@pytest.mark.parametrize("tool", TAR_TOOLS)
+def test_tar_tf_balicek_precte(data_dir: Path, tmp_path: Path, tool: str) -> None:
+    """GNU tar (CI, Git Bash) i Windows `tar.exe` (bsdtar) musí balíček vypsat."""
     target = tmp_path / "balicek.tar"
     target.write_bytes(b"".join(fb.iter_package(_prepare(data_dir))))
     listing = subprocess.run(
-        ["tar", "-tf", target.name], cwd=tmp_path, capture_output=True, text=True, check=True
+        [tool, "-tf", target.name], cwd=tmp_path, capture_output=True, text=True, check=True
     )
     names = listing.stdout.split()
     assert names[-1] == fb.MANIFEST_NAME
@@ -267,6 +304,36 @@ def test_stary_soubor_zmeneny_behem_streamu_je_chyba(data_dir: Path) -> None:
     _write(data_dir / COLD_FILE, b"prepsano jinak", NOW)
     with pytest.raises(fb.PackageChangedError, match="změnil"):
         b"".join(fb.iter_package(package))
+
+
+def test_chyba_zapisu_kopie_je_vyjimka_ne_vynechany_soubor(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zdroj existuje, selže zápis kopie (dlouhá cesta, plný disk) → chyba, ne tichá díra."""
+
+    def failing(source: object, target: object) -> None:
+        raise FileNotFoundError("cíl kopie nejde založit")
+
+    monkeypatch.setattr(fb.shutil, "copyfile", failing)  # type: ignore[attr-defined]
+    with pytest.raises(FileNotFoundError, match="cíl kopie"):
+        _prepare(data_dir)
+
+
+def test_zivy_soubor_ktery_zmizel_se_vynecha(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = shutil.copyfile
+
+    def vanishing(source: Path, target: Path) -> object:
+        if Path(source).name == Path(LIVE_FILE).name:
+            Path(source).unlink()
+            raise FileNotFoundError(str(source))
+        return real(source, target)
+
+    monkeypatch.setattr(fb.shutil, "copyfile", vanishing)  # type: ignore[attr-defined]
+    names = {member.arcname for member in _prepare(data_dir).members}
+    assert fb.DATA_PREFIX + LIVE_FILE not in names
+    assert fb.DATA_PREFIX + COLD_FILE in names
 
 
 def test_zive_soubory_jdou_z_kopie_v_pracovnim_adresari(data_dir: Path) -> None:
@@ -544,6 +611,15 @@ def test_cli_out_zapise_balicek(data_dir: Path, capsys: pytest.CaptureFixture[st
     assert MARKER.encode() not in out.read_bytes()
     assert not any(fb.work_root(data_dir).glob(f"{fb.RUN_PREFIX}*"))
     assert not out.with_name(out.name + fb.TMP_SUFFIX).exists()
+
+
+@pytest.mark.usefixtures("fake_sources", "cli_settings")
+def test_cli_out_zalozi_chybejici_adresar(data_dir: Path) -> None:
+    """Na PC `data/local/` zatím neexistuje — CLI ho založí, ne až po celém dumpu spadne."""
+    shutil.rmtree(data_dir / "local")
+    out = data_dir / "local" / "zaloha.tar"
+    assert fb.main(["--out", str(out)]) == 0
+    assert fb.MANIFEST_NAME in _members(out.read_bytes())
 
 
 @pytest.mark.usefixtures("fake_sources", "cli_settings")
