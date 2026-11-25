@@ -2402,7 +2402,11 @@ dev stacku (balíček 326 MB / 2 208 souborů, DB 87 MB): bez `-Overwrite` kód 
 v původním stavu. Do prázdného `data/`: ověření 16 s, pojistný dump 5 s, `pg_restore` 4 s,
 zápis `data/` 110 s (~50 ms na soubor přes bind mount), celkem 163 s. Všech 2 208 souborů
 mělo shodné sha256 i mtime se zdrojem. Do shodného `data-dev/` trvala obnova 78 s, protože
-se vše přeskočilo.
+se vše přeskočilo. Produkční dump z ostré zálohy 25. 11. (243 MB, produkční DB 1 622 MB,
+obnovená 1 385 MB, 55 tabulek) se klientem 16.16 v kontejneru obnovil do nové prázdné DB
+dev postgresu na PC (`pg_restore --single-transaction --exit-on-error`, cena obnovy DB
+v režimu `--swap-db`) za **62 s**. Dvě měření dala 62 s a 62,3 s, obě včetně ~1,3 s startu
+kontejneru. Je to vstup pro mezeru ≤ 4 min v #1808.
 
 **Klient PG musí být verze 16.** `pg_restore` 17 (třeba instalace PostgreSQL ve Windows)
 pošle serveru 16 `SET transaction_timeout` a obnova v jedné transakci skončí chybou. Image
