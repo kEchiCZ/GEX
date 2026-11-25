@@ -542,9 +542,9 @@ def _restore_text(
             else "pin image nejde (lokální build), poběží `latest`"
         ),
         "data_step": (
-            "Přesuň `<rozbalený>/data` do kořene repozitáře"
+            "Balíček se nerozbaluje, obnova ho čte přímo."
             if mode == "full"
-            else "Obnov `data/` z repa restic (`restic restore`) do kořene repozitáře"
+            else "Obnov `data/` z repa restic (`restic restore`) do adresáře s tímto souborem."
         ),
         "pg_version": info.pg_version,
         "mode": mode,
@@ -733,13 +733,13 @@ def new_run_dir(data_dir: Path, now: dt.datetime) -> Path:
     return run_dir
 
 
-def cleanup_stale_runs(data_dir: Path, now: dt.datetime) -> None:
-    """Uklidí pracovní adresáře přerušených běhů (pád API uprostřed streamu)."""
+def cleanup_stale_runs(data_dir: Path, now: dt.datetime, prefix: str = RUN_PREFIX) -> None:
+    """Uklidí pracovní adresáře přerušených běhů (pád API uprostřed streamu, obnova #1800)."""
     root = work_root(data_dir)
     if not root.is_dir():
         return
-    for path in root.glob(f"{RUN_PREFIX}*"):
-        stamp = path.name[len(RUN_PREFIX) :].split("-", 1)[0]
+    for path in root.glob(f"{prefix}*"):
+        stamp = path.name[len(prefix) :].split("-", 1)[0]
         try:
             started = dt.datetime.strptime(stamp, RUN_STAMP).replace(tzinfo=dt.UTC)
         except ValueError:

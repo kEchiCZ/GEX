@@ -1266,6 +1266,8 @@ jsou v kap. 14 „Formát balíčku úplné zálohy“.
 - **Souběh a úklid:** naráz běží jen jedna úplná záloha (jinak 409). Přerušené stahování
   i odpojení během přípravy ukončí `pg_dump` a smaže pracovní adresář. Adresáře
   `full-*` starší 24 h (pád API uprostřed streamu) uklidí další běh.
+- **Obnova:** jedním příkazem `scripts/restore.ps1` (PC) nebo `scripts/restore.sh` (server),
+  kap. 14 „Obnova ze zálohy“ (#1800).
 - **Gzip:** odpověď nese `Content-Encoding: identity`, `GZipMiddleware` ji tak nebalí. Parquety
   i dump jsou komprimované a komprese by zahodila `Content-Length`. Totéž platí od #1799 pro
   `GET /backup/postgres`.
@@ -1384,7 +1386,7 @@ Pravidla:
 
 - **Python** (~160): jednotkové + golden (GEX, levels, heatmap módy, walls, CumΔ, profil), mock-based integrační (scheduler, hot zóna, runtime), PG integrační (v CI přes service kontejner), **e2e smoke** — deterministický referenční den přes celou pipeline engine→storage→API proti golden hodnotám.
 - **Frontend** (~58): jednotkové (geometrie, barvy, contours, slice), komponentové (jsdom + testing-library, PointerEvent polyfill), Arrow round-trip loaderu, **e2e render smoke** (App nad /replay balíkem), vizuální regresní snapshoty renderu.
-- **CI** (GitHub Actions, na každý PR): python job (ruff, mypy strict, pytest + PostgreSQL service), python-arm64 job (celá sada pytest na `ubuntu-24.04-arm` pro server Oracle A1, #1798 — golden testy výpočtů a nativní wheely na aarch64), frontend job (eslint, prettier, vitest, build). Povinné checky ruleset `main` jsou `python`, `python-arm64` (od 19. 11. 2026, vlastník v #1094), `frontend`, `security`; `scripts/merge-when-green.sh` navíc čeká na zelené **všechny** checky commitu. Výkonnostní testy s tvrdým limitem běží jen lokálně (`CI` env skip).
+- **CI** (GitHub Actions, na každý PR): python job (ruff, mypy strict, pytest + PostgreSQL service; klient PG 16 pro test obnovy ze zálohy, #1800), python-arm64 job (celá sada pytest na `ubuntu-24.04-arm` pro server Oracle A1, #1798 — golden testy výpočtů a nativní wheely na aarch64), frontend job (eslint, prettier, vitest, build). Povinné checky ruleset `main` jsou `python`, `python-arm64` (od 19. 11. 2026, vlastník v #1094), `frontend`, `security`; `scripts/merge-when-green.sh` navíc čeká na zelené **všechny** checky commitu. Výkonnostní testy s tvrdým limitem běží jen lokálně (`CI` env skip).
 
 ### Bezpečnostní kontroly v CI
 
@@ -2308,8 +2310,8 @@ buildu `dev`): nekomprimovaný tar ve formátu PAX, který přečte `tar.exe` ve
 `live_window_hours` (24), `live_note`, `day_ranges` (rozsah dní podle data v názvu souboru
 po adresářích první úrovně `data/`), `files` (`path`, `size`, `sha256`, `live`). V režimu
 `meta` manifest vyjmenovává i soubory `data/` s hashem v okamžiku zálohy. Restic je ale
-zálohuje až potom, takže soubor s `live: true` se mezitím může změnit; obnova (#1800) má
-u nich nesoulad brát jako upozornění, ne jako chybu.
+zálohuje až potom, takže soubor s `live: true` se mezitím může změnit; obnova (#1800) bere
+nesoulad u nich jako upozornění, ne jako chybu.
 
 - **Klasifikace klíčů:** jediná konstanta `full_backup.ENV_KEY_KINDS` zařazuje každý klíč
   `.env.example`, i zakomentovaný, jako tajemství, konfiguraci, nebo klíč nastavovaný compose.
@@ -2323,6 +2325,111 @@ u nich nesoulad brát jako upozornění, ne jako chybu.
 - **Revize image** (`image_sha`) jde z build-argu `GEXLENS_BUILD_SHA` workflow Images
   (`docker/python.Dockerfile`, smoke test ji vyžaduje), lokální build nese `dev`.
   `image_tag` je pin z `GEXLENS_API_TAG` / `GEXLENS_IMAGE_TAG`, jinak `latest`.
+
+### Obnova ze zálohy (#1800)
+
+Obnova jedním příkazem z balíčku úplné zálohy (výše), nebo z adresáře se stejným rozložením
+(rozbalený balíček, `--meta-dir` s `data/` po `restic restore`, F7a #1804). Kód
+`api/src/gexlens_api/restore.py` běží v image `gex-python` na serveru i na PC; obaly jen
+zastaví služby a připojí zdroj do kontejneru:
+
+| Stroj | Příkaz (z kořene repozitáře) |
+|---|---|
+| PC (Docker Desktop) | `.\scripts\restore.ps1 -Source <balíček.tar nebo adresář> [-Overwrite]` |
+| Server (Linux) | `scripts/restore.sh <balíček.tar nebo adresář> [--overwrite]` (`COMPOSE_FILE`, výchozí `compose.yml:compose.server.yml`) |
+| Dev stack na PC | `.\scripts\restore.ps1 -Source … -ComposeFile compose.dev.yml` (`data-dev/`, API :8011) |
+| Přímo | `docker compose run --rm --no-deps -T -v <zdroj>:/restore/x:ro api python -m gexlens_api.restore /restore/x [--overwrite] [--swap-db]`; bez `--swap-db` musí engine, news-engine a api stát |
+
+Obal zastaví běžící zapisující služby (engine, news-engine, api; postgres a IB Gateway běží
+dál), spustí obnovu přes `docker compose run --rm` se zdrojem jen pro čtení, po úspěchu
+nastartuje stack (`up -d`) a ověří `/status`. Služby stojí po celou dobu obnovy včetně
+ověření zdroje a zastaví se i tehdy, když obnova hned skončí kvůli chybějícímu
+`--overwrite`. Na stroji, který sbírá data, proto obnovu spouštěj jen při zavřeném trhu nebo
+v pauze Globexu; synchronizace bez zastavení API je režim `--swap-db`. Návratový kód obnovy: **0** hotovo, **1** cíl beze
+změny (obal vrátí služby do stavu před obnovou), **2** PG je obnovená a `data/` jen zčásti
+(obal nechá služby zastavené, obnovu je potřeba spustit znovu s `--overwrite`; shodné soubory
+se přeskočí).
+
+Kroky obnovy, každý až po úspěchu předchozího:
+1. **Pojistka cíle (jen čtení):** PG s tabulkami nebo soubor v `data/` mimo `local/`, `logs/`,
+   `ticks/`, `backup/tmp/` = cíl s daty. Bez `--overwrite` obnova skončí hned, ještě před
+   čtením zdroje.
+2. **Ověření celého zdroje** proti `manifest.json`: formát a verze, jména členů (jen ta, která
+   záloha vytváří; `..`, absolutní cesta, `data/local/` nebo `*.tmp` = konec), velikost
+   a sha256 každého souboru, u taru i `manifest.json` jako poslední člen (useknuté stažení
+   = konec). Změněný bajt kdekoli = konec s výpisem, nic se nezapíše. V režimu `meta` je
+   nesoulad u souboru s `live: true` a soubor v `data/` navíc (vznikl po manifestu)
+   upozornění; takový soubor se obnoví bez kontroly sha256.
+3. **Revize image:** jiná revize image než zálohy = upozornění s návrhem
+   `GEXLENS_IMAGE_TAG=sha-<revize zálohy>`. Starší kód nemusí znát novější schéma DB.
+4. **Pojistný dump:** s `--overwrite` a PG s tabulkami nejdřív `pg_dump` cíle do
+   `data/local/pred-obnovou/<RRRRMMDD_HHMMSS>.dump` (čas UTC, ověřený celým čtením
+   `pg_restore`). Patří stroji, nezálohuje se ani nesynchronizuje a nic ho nemaže.
+5. **PG:** `pg_restore --clean --if-exists --single-transaction --no-owner --no-privileges`
+   celé DB. Selhání = rollback, DB zůstane, jak byla. U balíčku jde dump nejdřív do
+   `data/backup/tmp/restore-*/` (kontrola sha256), po obnově se pracovní adresář smaže;
+   adresáře zabitých obnov starší 24 h uklidí další běh.
+6. **`data/`:** soubor po souboru přes `*.restore.tmp` a `os.replace` s kontrolou sha256 proti
+   manifestu a s mtime ze zálohy. Bez zachovaného mtime by příští úplná záloha brala celý
+   archiv jako živé soubory a kopírovala ho do `backup/tmp`. Shodný soubor (velikost
+   i sha256) se přeskočí. Změněný soubor se přepíše bez kopie (pojistku má jen PG),
+   `data/local/` se nikdy nepřepisuje. Člen `data/` před dumpem v taru = konec při ověření
+   (PG se obnovuje dřív, než se začne psát `data/`).
+7. **Karanténa** (Rozhodnuto 19. 11. v #1800, ADR-0063 bod 4, varianta A): soubor cíle, který
+   ve zdroji chybí (zdroj ho třeba přesunul do `quarantine/` jako podezřelý), se nemaže ani
+   nenechá na místě, ale přesune do `data/quarantine/sync-<RRRR-MM-DD>/` se stejnou cestou
+   (druhá obnova téhož dne přidá k jménu čas). Výpis přesunuté soubory jmenuje. Už přesunuté
+   soubory v `quarantine/` a části, které záloha nebere (`local/`, `logs/`, `ticks/`,
+   `backup/tmp/`, `*.tmp`), se nepočítají. Obnova staršího balíčku na stroji s novějšími
+   daty tak přesune novější partice do karantény, nesmaže je. Synchronizace (#1851) volá
+   týž krok (`restore.quarantine_missing`) po `restic restore`.
+8. **Výpis:** doby kroků, chybějící tajemství cíle jen jmény (`config/secret-keys.txt`
+   proti prostředí kontejneru, tedy `.env` cíle) a připomínka, když chybí
+   `data/local/instance_settings.json`. Do F15/F16 (#1847, #1848) berou host a port IBKR
+   z obnovené DB zdroje (past #446/#992), proto je po obnově zkontroluj v Settings.
+
+**Režim výměny DB** (`--swap-db`, jediná implementace pro synchronizaci #1851): `CREATE
+DATABASE <db>_sync_<čas>`, `pg_restore` do ní a pak v jedné transakci ukončení spojení
+klientů, `<db>` → `<db>_pred_<čas>` a nová → `<db>`. Klient, který se připojí mezi
+odpojením a přejmenováním, přejmenování shodí, transakce se vrátí a výměna se zkusí znovu
+(3×). Přerušení před přejmenováním nechá cíl beze změny a vlastní `_sync_` DB se smaže
+(nedokončené `_sync_` přerušených běhů smaže i další výměna). Naráz běží jedna výměna
+(`pg_advisory_lock`). Pojistný dump se v tomto režimu nedělá, pojistkou je přejmenovaná DB.
+**Pojistné `<db>_pred_*` se neodstraňují vůbec.** Úklid starších než 2 poslední přijde až
+s repem restic (F7a #1804): nejdřív dump s tagem `pred-obnovou` a jeho ověření, teprve pak
+`DROP DATABASE`. Výpis obnovy je jmenuje všechny, místo na disku hlídá #1567.
+
+**Ověřeno 25. 11. 2026:** test v CI (`api/tests/test_restore.py`, služba `postgres:16`, klient
+PG 16): fixtura → balíček CLI F2 → obnova do prázdné DB a prázdného `data/` dá shodné počty
+řádků všech tabulek a sha256. Testuje se i druhá obnova bez `--overwrite` (konec)
+a s ním (pojistný dump, nic se nepřepíše), výměna DB (3× za sebou, všechny pojistné DB
+zůstanou) a výměna přerušená před přejmenováním (cíl beze změny). `restore.ps1` na PC proti
+dev stacku (balíček 326 MB / 2 208 souborů, DB 87 MB): bez `-Overwrite` kód 1 a služby
+v původním stavu. Do prázdného `data/`: ověření 16 s, pojistný dump 5 s, `pg_restore` 4 s,
+zápis `data/` 110 s (~50 ms na soubor přes bind mount), celkem 163 s. Všech 2 208 souborů
+mělo shodné sha256 i mtime se zdrojem. Do shodného `data-dev/` trvala obnova 78 s, protože
+se vše přeskočilo. Produkční dump z ostré zálohy 25. 11. (243 MB, produkční DB 1 622 MB,
+obnovená 1 385 MB, 55 tabulek) se klientem 16.16 v kontejneru obnovil do nové prázdné DB
+dev postgresu na PC (`pg_restore --single-transaction --exit-on-error`, cena obnovy DB
+v režimu `--swap-db`) za **62 s**. Dvě měření dala 62 s a 62,3 s, obě včetně ~1,3 s startu
+kontejneru. Je to vstup pro mezeru ≤ 4 min v #1808.
+
+**Klient PG musí být verze 16.** `pg_restore` 17 (třeba instalace PostgreSQL ve Windows)
+pošle serveru 16 `SET transaction_timeout` a obnova v jedné transakci skončí chybou. Image
+`gex-python` i CI mají klienta 16, obnova proto vždy běží v kontejneru.
+
+**Postup bez skriptu** (např. rozbitý Docker Compose na cíli): rozbal balíček
+(`tar -xf <balíček>.tar -C rozbaleny`), přesuň `rozbaleny/data` do kořene repozitáře
+(soubory cíle, které balíček nemá, přesuň do `quarantine/sync-<datum>/`), spusť `docker compose up -d postgres`, pak
+`docker compose cp rozbaleny/postgres/gexlens.dump postgres:/tmp/gexlens.dump` a
+`docker compose exec postgres pg_restore --clean --if-exists --single-transaction --no-owner
+-U gexlens -d gexlens /tmp/gexlens.dump`, nakonec `docker compose up -d`. Ruční postup
+neověřuje manifest, sha256 zkontroluj sám (`sha256sum`, ve Windows `Get-FileHash`).
+
+**Jiný poskytovatel (plán B) nebo nový server:** `bootstrap.sh` (výše), `git clone`,
+`.env` z `config/env.template` a tajemství ze správce hesel (heslo IB Gateway do
+`secrets/ibkr_password`), pak `scripts/restore.sh <balíček>`. Server po bootstrapu má jen
+`data/local/instance.json` a prázdnou DB, takže `--overwrite` není potřeba.
 
 ### Návrat zpět (rollback)
 

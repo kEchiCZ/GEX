@@ -29,6 +29,19 @@ DUMP_MEDIA_TYPE = "application/octet-stream"
 CHUNK_BYTES = 64 * 1024
 
 
+def connection_args(database_url: str) -> list[str]:
+    """Spojení klientů PG (`pg_dump`, `pg_restore`, #1800) z SQLAlchemy DSN, bez hesla."""
+    url = make_url(database_url)
+    args: list[str] = []
+    if url.host:
+        args += ["--host", url.host]
+    if url.port:
+        args += ["--port", str(url.port)]
+    if url.username:
+        args += ["--username", url.username]
+    return args
+
+
 def dump_command(database_url: str) -> list[str]:
     """Argumenty `pg_dump` z SQLAlchemy DSN.
 
@@ -39,15 +52,14 @@ def dump_command(database_url: str) -> list[str]:
     url = make_url(database_url)
     if not url.database:
         raise ValueError("database_url neobsahuje jméno databáze")
-    command = ["pg_dump", "--format=custom", "--no-owner", "--no-privileges"]
-    if url.host:
-        command += ["--host", url.host]
-    if url.port:
-        command += ["--port", str(url.port)]
-    if url.username:
-        command += ["--username", url.username]
-    command.append(url.database)
-    return command
+    return [
+        "pg_dump",
+        "--format=custom",
+        "--no-owner",
+        "--no-privileges",
+        *connection_args(database_url),
+        url.database,
+    ]
 
 
 def dump_env(database_url: str) -> dict[str, str]:
